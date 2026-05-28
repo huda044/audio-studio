@@ -161,7 +161,7 @@ function App() {
   const [resetMode, setResetMode] = useState(false);
   const [resetStep, setResetStep] = useState('request');
   const [payments, setPayments] = useState([]);
-  const [billingForm, setBillingForm] = useState({ plan: 'seven', method: 'qris' });
+  const [billingForm, setBillingForm] = useState({ plan: 'seven', method: 'qris', step: null });
   const [syncingProfile, setSyncingProfile] = useState(false);
   const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
@@ -290,12 +290,6 @@ function App() {
     tryRender();
     return () => { cancelled = true; };
   }, [currentUser, googleClientId]);
-
-  useEffect(() => {
-    if (!authToken || !currentUser) return;
-    const timer = setTimeout(() => saveProfile(), 1200);
-    return () => clearTimeout(timer);
-  }, [history, groups, mode, userId, groupId, selectedGroupId, apiKey, authToken, currentUser]);
 
   useEffect(() => {
     if (!authToken || !currentUser) return;
@@ -742,7 +736,7 @@ function App() {
           </div>
           <div className="header-side">
             <div className="summary">{summary}</div>
-            {currentUser && <div className="account-pill"><User size={15} /> {currentUser.username} {syncingProfile ? 'menyimpan...' : 'tersimpan'}</div>}
+            {currentUser && <div className="account-pill"><User size={15} /> {currentUser.username}</div>}
             <button className="icon-wide" onClick={openAdminMode}><Crown size={15} /> Admin</button>
           </div>
         </header>
@@ -769,51 +763,125 @@ function App() {
                 <div>
                   <b>{currentUser.username}</b>
                   <p className="muted">
-                    Plan: {currentUser.subscription?.label || 'Free'} |
-                    Convert Free: {currentUser.usage?.conversions || 0}/3
-                    {currentUser.subscription?.expiresAt ? ` | Aktif sampai ${new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}` : ''}
+                    {currentUser.role === 'admin'
+                      ? 'Plan: Admin (Full Access) | Tanpa limit'
+                      : `Plan: ${currentUser.subscription?.label || 'Free'} | Convert Free: ${currentUser.usage?.conversions || 0}/3${currentUser.subscription?.expiresAt ? ` | Aktif sampai ${new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}` : ''}`
+                    }
                   </p>
                   <p className="muted">Riwayat upload, konfigurasi Roblox, group, User ID, Group ID, dan API key terenkripsi akan disimpan ke akun ini.</p>
                 </div>
                 <button className="secondary" onClick={saveProfile} disabled={syncingProfile}>Simpan Sekarang</button>
                 <button className="icon-wide" onClick={logout}>Logout</button>
               </div>
+              {currentUser?.role !== 'admin' && (
               <div className="billing-box">
-                <div>
-                  <b>Langganan Paid</b>
-                  <p className="muted">Free hanya 3 konversi dan durasi maksimal 10 menit. Paid aktif 7/30 hari dan audio panjang tetap dipotong otomatis per 3 menit saat upload.</p>
+                <div className="plan-info">
+                  <b>Plan: {currentUser.subscription?.label || 'Free'}</b>
+                  {currentUser.subscription?.plan === 'paid'
+                    ? <p className="muted">Aktif sampai {new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}</p>
+                    : <p className="muted">Free: {currentUser.usage?.conversions || 0}/3 konversi | Maks 10 menit</p>
+                  }
                 </div>
-                <div className="billing-grid">
-                  <label className="field">
-                    <span>Paket</span>
-                    <select value={billingForm.plan} onChange={(e) => setBillingForm({ ...billingForm, plan: e.target.value })}>
-                      <option value="seven">7 Hari</option>
-                      <option value="thirty">30 Hari</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Metode Bayar</span>
-                    <select value={billingForm.method} onChange={(e) => setBillingForm({ ...billingForm, method: e.target.value })}>
-                      <option value="qris">QRIS</option>
-                      <option value="dana">DANA</option>
-                      <option value="mandiri">Bank Mandiri</option>
-                    </select>
-                  </label>
-                  <button className="secondary" onClick={createPaymentRequest}>Buat Invoice</button>
-                </div>
+                <button className="primary" onClick={() => setBillingForm({ ...billingForm, step: 'pricing' })}>Upgrade Plan</button>
+
+                {billingForm.step === 'pricing' && (
+                  <div className="modal-overlay" onClick={() => setBillingForm({ ...billingForm, step: null })}>
+                    <div className="modal-content pricing-modal" onClick={(e) => e.stopPropagation()}>
+                      <button className="modal-close" onClick={() => setBillingForm({ ...billingForm, step: null })}>×</button>
+                      <h2>Pilih Paket</h2>
+                      <p className="muted">Upgrade untuk unlimited konversi dan durasi tanpa batas.</p>
+                      <div className="pricing-grid">
+                        <div className="pricing-card">
+                          <h3>Free</h3>
+                          <div className="price">Rp0</div>
+                          <p className="period">selamanya</p>
+                          <ul>
+                            <li>3 konversi</li>
+                            <li>Maks durasi 10 menit</li>
+                            <li>Auto upload Roblox</li>
+                            <li>Speed & amplify control</li>
+                          </ul>
+                          <button className="secondary" disabled>Current Plan</button>
+                        </div>
+                        <div className="pricing-card featured">
+                          <h3>7 Hari</h3>
+                          <div className="price">Rp35.000</div>
+                          <p className="period">untuk 7 hari</p>
+                          <ul>
+                            <li>Unlimited konversi</li>
+                            <li>Durasi tanpa batas</li>
+                            <li>Auto upload Roblox</li>
+                            <li>Priority support</li>
+                          </ul>
+                          <button className="primary" onClick={() => setBillingForm({ ...billingForm, plan: 'seven', step: 'method' })}>Get Started</button>
+                        </div>
+                        <div className="pricing-card featured">
+                          <h3>30 Hari</h3>
+                          <div className="price">Rp100.000</div>
+                          <p className="period">untuk 30 hari</p>
+                          <span className="save-badge">Hemat 5%</span>
+                          <ul>
+                            <li>Unlimited konversi</li>
+                            <li>Durasi tanpa batas</li>
+                            <li>Auto upload Roblox</li>
+                            <li>Priority support</li>
+                          </ul>
+                          <button className="primary" onClick={() => setBillingForm({ ...billingForm, plan: 'thirty', step: 'method' })}>Get Started</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {billingForm.step === 'method' && (
+                  <div className="modal-overlay" onClick={() => setBillingForm({ ...billingForm, step: 'pricing' })}>
+                    <div className="modal-content method-modal" onClick={(e) => e.stopPropagation()}>
+                      <button className="modal-close" onClick={() => setBillingForm({ ...billingForm, step: null })}>×</button>
+                      <h2>Pilih Metode Pembayaran</h2>
+                      <p className="muted">Paket {billingForm.plan === 'seven' ? '7 Hari (Rp35.000)' : '30 Hari (Rp100.000)'}</p>
+                      <div className="method-grid">
+                        <div className="method-card">
+                          <span className="method-badge instant">Instant Payment</span>
+                          <div className="method-icon">💳</div>
+                          <h3>QRIS Payment</h3>
+                          <p className="muted">Bayar instan dengan e-wallet atau banking app Indonesia.</p>
+                          <button className="primary" onClick={() => { setBillingForm({ ...billingForm, method: 'qris', step: null }); createPaymentRequest(); }}>Pay with QRIS</button>
+                        </div>
+                        <div className="method-card">
+                          <span className="method-badge manual">Manual</span>
+                          <div className="method-icon">💬</div>
+                          <h3>Discord / WhatsApp</h3>
+                          <p className="muted">Hubungi admin untuk instruksi pembayaran manual.</p>
+                          <div className="method-links">
+                            <a href={gatewayInfo.admin?.discord || 'https://discord.gg/'} target="_blank" rel="noopener noreferrer" className="secondary">Open Discord</a>
+                            <a href={gatewayInfo.admin?.whatsapp || 'https://wa.me/'} target="_blank" rel="noopener noreferrer" className="secondary">WhatsApp Admin</a>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="muted small">QRIS otomatis via Midtrans. Manual: admin konfirmasi setelah bukti transfer dikirim.</p>
+                    </div>
+                  </div>
+                )}
+
                 {!!payments.length && (
                   <div className="invoice-list">
+                    <b>Riwayat Invoice</b>
                     {payments.map((payment) => (
                       <div key={payment.id}>
-                        <StatusBadge status={payment.status === 'Accepted' ? 'Accepted' : 'Pending'} />
+                        <StatusBadge status={payment.status === 'Accepted' ? 'Accepted' : payment.status === 'Rejected' ? 'Failed' : 'Pending'} />
                         <span>{payment.id}</span>
                         <p>{payment.label} | {payment.method.toUpperCase()} | Rp{payment.amount?.toLocaleString('id-ID')}</p>
-                        <p>{payment.instructions}</p>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
+              )}
+              {currentUser?.role === 'admin' && (
+                <div className="billing-box">
+                  <p className="muted"><b>Admin</b> — Full access tanpa limit konversi, durasi, atau langganan.</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="auth-shell">

@@ -162,6 +162,10 @@ router.get('/billing/gateway', (_req, res) => {
     },
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID || ''
+    },
+    admin: {
+      discord: process.env.ADMIN_DISCORD || 'https://discord.com/users/lucifer404044',
+      whatsapp: process.env.ADMIN_WHATSAPP || 'https://wa.me/62895331723076'
     }
   });
 });

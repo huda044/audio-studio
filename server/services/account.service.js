@@ -457,6 +457,10 @@ export async function assertConversionAllowed(id, sourceDurationSeconds = 0) {
     error.status = 403;
     throw error;
   }
+  // Admin = full access, no limits
+  if (user.role === 'admin') {
+    return { user, plan: { plan: 'paid', label: 'Admin', expiresAt: null }, usage: user.usage || { conversions: 0 } };
+  }
   const plan = activePlan(user);
   const usage = user.usage || { conversions: 0 };
   if (plan.plan === 'free') {
@@ -499,8 +503,8 @@ export async function recordConversion(id, meta = {}) {
 
 export async function createPayment(id, { plan, method }) {
   const plans = {
-    seven: { days: 7, label: 'Paid 7 Hari', amount: 15000 },
-    thirty: { days: 30, label: 'Paid 30 Hari', amount: 45000 }
+    seven: { days: 7, label: 'Paid 7 Hari', amount: 35000 },
+    thirty: { days: 30, label: 'Paid 30 Hari', amount: 100000 }
   };
   const methods = ['qris', 'dana', 'mandiri'];
   if (!plans[plan] || !methods.includes(method)) {
