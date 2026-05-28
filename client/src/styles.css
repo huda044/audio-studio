@@ -197,6 +197,42 @@ button:disabled {
   align-items: center;
 }
 
+.account-stack,
+.auth-shell,
+.billing-box,
+.invoice-list {
+  display: grid;
+  gap: 12px;
+}
+
+.billing-box {
+  border: 1px solid #223041;
+  background: #0b1220;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.billing-grid {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(150px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.invoice-list div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 6px 10px;
+  border-top: 1px solid #1d2b3d;
+  padding-top: 10px;
+}
+
+.invoice-list p {
+  grid-column: 2;
+  color: #91a3b8;
+  margin: 0;
+}
+
 .icon-wide {
   display: inline-flex;
   align-items: center;
@@ -453,6 +489,15 @@ code {
 @media (max-width: 700px) {
   .account-row {
     grid-template-columns: 1fr;
+  }
+
+  .billing-grid,
+  .invoice-list div {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-list p {
+    grid-column: 1;
   }
 
   .auth-button {

@@ -9,6 +9,8 @@ import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js'
 import { uploadAudioParts } from '../services/roblox.service.js';
 import { downloadYoutubeAudio, getYoutubeInfo } from '../services/youtube.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { assertConversionAllowed, recordConversion, verifyToken } from '../services/account.service.js';
+import { probeAudio } from '../services/ffmpeg.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +60,16 @@ async function removeQuiet(filePath) {
   if (filePath) await fs.unlink(filePath).catch(() => {});
 }
 
+function readAuth(req) {
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    return token ? verifyToken(token) : null;
+  } catch {
+    return null;
+  }
+}
+
 router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {
     if (!req.query.url) return res.status(400).json({ error: 'URL YouTube wajib diisi.' });
@@ -72,6 +84,8 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
   let sourcePath = req.file?.path;
   let downloadedPath = '';
   try {
+    const auth = readAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Login dibutuhkan untuk konversi audio.' });
     const settings = parseSettings(req.body.settings);
     const youtubeUrl = req.body.youtubeUrl?.trim();
     const meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
@@ -86,12 +100,23 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
 
     if (!sourcePath) return res.status(400).json({ error: 'Upload file audio atau masukkan URL YouTube.' });
 
+    const sourceProbe = youtubeUrl && meta.duration ? { duration: meta.duration } : await probeAudio(sourcePath).then((probe) => ({ duration: Number(probe.format.duration || 0) }));
+    const account = await assertConversionAllowed(auth.sub, sourceProbe.duration);
+    if (account.plan.plan === 'paid') {
+      settings.maxDuration = Math.max(30, Math.ceil(sourceProbe.duration || settings.maxDuration || 400));
+      settings.maxDurationLimit = 14400;
+    } else {
+      settings.maxDuration = Math.min(settings.maxDuration, 600);
+      settings.maxDurationLimit = 600;
+    }
+
     const outputName = `processed-${nanoid(10)}.ogg`;
     const outputPath = path.join(uploadsDir, outputName);
     const result = await processAudio({ inputPath: sourcePath, outputPath, settings });
     const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
     const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
 
+    const user = await recordConversion(auth.sub);
     res.json({
       fileName: outputName,
       audioUrl: `/api/files/${outputName}`,
@@ -100,7 +125,8 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       sizeBytes: result.sizeBytes,
       title: meta.title,
       thumbnail: meta.thumbnail,
-      source: youtubeUrl ? 'youtube' : 'upload'
+      source: youtubeUrl ? 'youtube' : 'upload',
+      account: user ? { usage: user.usage, subscription: user.subscription } : null
     });
   } catch (error) {
     next(error);
@@ -120,7 +146,7 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
     const split = await splitAudioIfNeeded({
       inputPath: req.file.path,
       uploadsDir,
-      maxDuration: Number(payload.maxDuration ?? 400),
+      maxDuration: Number(payload.splitDuration ?? 180),
       maxBytes: 6 * 1024 * 1024
     });
     splitParts = split.wasSplit ? split.parts.map((part) => part.path) : [];

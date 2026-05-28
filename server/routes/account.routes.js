@@ -1,5 +1,18 @@
 import express from 'express';
-import { getUserById, loginUser, registerUser, signUser, updateUserProfile, verifyToken } from '../services/account.service.js';
+import {
+  confirmPayment,
+  createPayment,
+  getUserById,
+  listUserPayments,
+  loginUser,
+  loginWithGoogle,
+  registerUser,
+  resendVerification,
+  signUser,
+  updateUserProfile,
+  verifyEmailCode,
+  verifyToken
+} from '../services/account.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 
 const router = express.Router();
@@ -16,6 +29,8 @@ function authMiddleware(req, res, next) {
   }
 }
 
+export { authMiddleware };
+
 const authLimit = rateLimit({
   windowMs: 1000 * 60 * 15,
   max: 25,
@@ -24,8 +39,25 @@ const authLimit = rateLimit({
 
 router.post('/auth/register', authLimit, async (req, res, next) => {
   try {
-    const user = await registerUser(req.body);
+    const result = await registerUser(req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/verify-email', authLimit, async (req, res, next) => {
+  try {
+    const user = await verifyEmailCode(req.body);
     res.json({ token: signUser(user), user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/resend-code', authLimit, async (req, res, next) => {
+  try {
+    res.json(await resendVerification(req.body));
   } catch (error) {
     next(error);
   }
@@ -34,6 +66,15 @@ router.post('/auth/register', authLimit, async (req, res, next) => {
 router.post('/auth/login', authLimit, async (req, res, next) => {
   try {
     const user = await loginUser(req.body);
+    res.json({ token: signUser(user), user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/google', authLimit, async (req, res, next) => {
+  try {
+    const user = await loginWithGoogle(req.body);
     res.json({ token: signUser(user), user });
   } catch (error) {
     next(error);
@@ -54,6 +95,33 @@ router.put('/profile', authMiddleware, async (req, res, next) => {
   try {
     const user = await updateUserProfile(req.auth.sub, req.body.profile || {});
     res.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/billing/payments', authMiddleware, async (req, res, next) => {
+  try {
+    res.json({ payments: await listUserPayments(req.auth.sub) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/billing/create', authMiddleware, async (req, res, next) => {
+  try {
+    res.json({ payment: await createPayment(req.auth.sub, req.body) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/billing/admin/confirm', async (req, res, next) => {
+  try {
+    if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+      return res.status(403).json({ error: 'Admin secret tidak valid.' });
+    }
+    res.json({ payment: await confirmPayment(req.body.invoiceId) });
   } catch (error) {
     next(error);
   }

@@ -34,6 +34,14 @@ MAX_UPLOAD_MB=250
 INLINE_AUDIO_LIMIT_MB=8
 DATA_DIR=/data
 JWT_SECRET=ganti-dengan-random-secret-panjang
+ADMIN_SECRET=ganti-dengan-secret-admin
+GOOGLE_CLIENT_ID=isi-kalau-pakai-google-login
+SMTP_HOST=isi-kalau-email-verifikasi-asli
+SMTP_PORT=587
+SMTP_USER=email-smtp
+SMTP_PASS=password-smtp
+EMAIL_FROM=no-reply@example.com
+EMAIL_DEV_CODES=true
 PROCESS_RATE_LIMIT=12
 INFO_RATE_LIMIT=45
 JSON_LIMIT=512kb
@@ -49,3 +57,10 @@ Pengaturan hemat limit:
 - `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
 - `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
 - Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.
+
+Catatan akun, email, Google, dan pembayaran:
+
+- Jika `SMTP_HOST` belum diisi, kode verifikasi muncul sebagai dev code dari API agar sistem tetap bisa dites gratis.
+- Untuk email sungguhan, isi SMTP provider.
+- Untuk Google Login, isi `GOOGLE_CLIENT_ID` di backend dan `VITE_GOOGLE_CLIENT_ID` saat build frontend.
+- QRIS/DANA/Mandiri saat ini dibuat sebagai invoice manual `Pending`. Admin bisa mengaktifkan invoice dengan endpoint admin memakai `ADMIN_SECRET`, atau nanti disambungkan ke payment gateway resmi.

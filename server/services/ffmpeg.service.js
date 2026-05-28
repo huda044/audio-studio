@@ -30,7 +30,8 @@ function atempoChain(speed) {
 function buildFilters(settings) {
   const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
   const amplify = clamp(settings.amplify ?? -4, -20, 20);
-  const maxDuration = clamp(settings.maxDuration ?? 400, 30, 600);
+  const maxDurationLimit = clamp(settings.maxDurationLimit ?? 600, 30, 14400);
+  const maxDuration = clamp(settings.maxDuration ?? 400, 30, maxDurationLimit);
   const pitch = clamp(settings.pitch ?? 0, -12, 12);
   const filters = [];
 

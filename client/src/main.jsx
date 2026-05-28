@@ -16,6 +16,7 @@ import {
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const KEY_SECRET = 'audio-studio-local-key';
 const presets = [
   ['Lambat', 2.1],
@@ -153,7 +154,10 @@ function App() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('audio-studio-token') || '');
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
-  const [authForm, setAuthForm] = useState({ username: '', password: '' });
+  const [authForm, setAuthForm] = useState({ username: '', email: '', password: '', code: '' });
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [payments, setPayments] = useState([]);
+  const [billingForm, setBillingForm] = useState({ plan: 'seven', method: 'qris' });
   const [syncingProfile, setSyncingProfile] = useState(false);
   const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
@@ -190,10 +194,32 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || currentUser) return;
+    const scriptId = 'google-identity-script';
+    if (document.getElementById(scriptId)) return;
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+  }, [currentUser]);
+
+  useEffect(() => {
     if (!authToken || !currentUser) return;
     const timer = setTimeout(() => saveProfile(), 1200);
     return () => clearTimeout(timer);
   }, [history, groups, mode, userId, groupId, selectedGroupId, apiKey, authToken, currentUser]);
+
+  useEffect(() => {
+    if (!authToken || !currentUser) return;
+    fetch(`${API_BASE}/api/billing/payments`, { headers: authHeaders() })
+      .then(async (response) => {
+        const data = await response.json();
+        if (response.ok) setPayments(data.payments || []);
+      })
+      .catch(() => {});
+  }, [authToken, currentUser?.id]);
 
   useEffect(() => {
     const trimmed = youtubeUrl.trim();
@@ -284,6 +310,11 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Login gagal.');
+      if (authMode === 'register' && !data.token) {
+        setPendingEmail(authForm.email);
+        notify(data.devCode ? `Kode verifikasi dev: ${data.devCode}` : 'Kode verifikasi dikirim ke email.');
+        return;
+      }
       setAuthToken(data.token);
       applyUserProfile(data.user);
       notify(authMode === 'login' ? 'Login berhasil.' : 'Akun berhasil dibuat.');
@@ -292,6 +323,67 @@ function App() {
     } finally {
       setSyncingProfile(false);
     }
+  }
+
+  async function verifyEmail(event) {
+    event.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pendingEmail || authForm.email, code: authForm.code })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Verifikasi gagal.');
+      setAuthToken(data.token);
+      applyUserProfile(data.user);
+      setPendingEmail('');
+      notify('Email berhasil diverifikasi.');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function resendCode() {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/resend-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pendingEmail || authForm.email })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Gagal kirim ulang kode.');
+      notify(data.devCode ? `Kode verifikasi dev: ${data.devCode}` : 'Kode verifikasi dikirim ulang.');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function googleLogin() {
+    if (!GOOGLE_CLIENT_ID || !window.google?.accounts?.id) {
+      notify('Google Login belum dikonfigurasi admin website.', 'error');
+      return;
+    }
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: async (result) => {
+        try {
+          const response = await fetch(`${API_BASE}/api/auth/google`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential: result.credential })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Login Google gagal.');
+          setAuthToken(data.token);
+          applyUserProfile(data.user);
+          notify('Login Google berhasil.');
+        } catch (error) {
+          notify(error.message, 'error');
+        }
+      }
+    });
+    window.google.accounts.id.prompt();
   }
 
   async function saveProfile() {
@@ -334,6 +426,26 @@ function App() {
     notify('Logout berhasil.');
   }
 
+  async function createPaymentRequest() {
+    if (!authToken) {
+      notify('Login dulu untuk berlangganan.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/billing/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(billingForm)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Gagal membuat invoice.');
+      setPayments((items) => [data.payment, ...items].slice(0, 20));
+      notify('Invoice langganan dibuat.');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
   function setSetting(key, value) {
     setSettings((current) => ({ ...current, [key]: value }));
   }
@@ -343,9 +455,12 @@ function App() {
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('youtubeUrl', youtubeUrl);
     form.append('settings', JSON.stringify(settings));
-    const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', body: form });
+    const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', headers: authHeaders(), body: form });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Konversi audio gagal.');
+    if (data.account) {
+      setCurrentUser((user) => user ? { ...user, usage: data.account.usage, subscription: data.account.subscription } : user);
+    }
     setProcessed(data);
     notify('Konversi Audio selesai.');
     return data;
@@ -448,24 +563,80 @@ function App() {
         <section className="panel">
           <h2><User size={20} /> Akun Audio Studio</h2>
           {currentUser ? (
-            <div className="account-row">
-              <div>
-                <b>{currentUser.username}</b>
-                <p className="muted">Riwayat upload, konfigurasi Roblox, group, User ID, Group ID, dan API key terenkripsi akan disimpan ke akun ini.</p>
+            <div className="account-stack">
+              <div className="account-row">
+                <div>
+                  <b>{currentUser.username}</b>
+                  <p className="muted">
+                    Plan: {currentUser.subscription?.label || 'Free'} |
+                    Convert Free: {currentUser.usage?.conversions || 0}/3
+                    {currentUser.subscription?.expiresAt ? ` | Aktif sampai ${new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}` : ''}
+                  </p>
+                  <p className="muted">Riwayat upload, konfigurasi Roblox, group, User ID, Group ID, dan API key terenkripsi akan disimpan ke akun ini.</p>
+                </div>
+                <button className="secondary" onClick={saveProfile} disabled={syncingProfile}>Simpan Sekarang</button>
+                <button className="icon-wide" onClick={logout}>Logout</button>
               </div>
-              <button className="secondary" onClick={saveProfile} disabled={syncingProfile}>Simpan Sekarang</button>
-              <button className="icon-wide" onClick={logout}>Logout</button>
+              <div className="billing-box">
+                <div>
+                  <b>Langganan Paid</b>
+                  <p className="muted">Free hanya 3 konversi dan durasi maksimal 10 menit. Paid aktif 7/30 hari dan audio panjang tetap dipotong otomatis per 3 menit saat upload.</p>
+                </div>
+                <div className="billing-grid">
+                  <label className="field">
+                    <span>Paket</span>
+                    <select value={billingForm.plan} onChange={(e) => setBillingForm({ ...billingForm, plan: e.target.value })}>
+                      <option value="seven">7 Hari</option>
+                      <option value="thirty">30 Hari</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Metode Bayar</span>
+                    <select value={billingForm.method} onChange={(e) => setBillingForm({ ...billingForm, method: e.target.value })}>
+                      <option value="qris">QRIS</option>
+                      <option value="dana">DANA</option>
+                      <option value="mandiri">Bank Mandiri</option>
+                    </select>
+                  </label>
+                  <button className="secondary" onClick={createPaymentRequest}>Buat Invoice</button>
+                </div>
+                {!!payments.length && (
+                  <div className="invoice-list">
+                    {payments.map((payment) => (
+                      <div key={payment.id}>
+                        <StatusBadge status={payment.status === 'Accepted' ? 'Accepted' : 'Pending'} />
+                        <span>{payment.id}</span>
+                        <p>{payment.label} | {payment.method.toUpperCase()} | Rp{payment.amount?.toLocaleString('id-ID')}</p>
+                        <p>{payment.instructions}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
-            <form className="auth-form" onSubmit={handleAuth}>
-              <div className="segmented compact">
-                <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Login</button>
-                <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Daftar</button>
-              </div>
-              <label className="field"><span>Username</span><input value={authForm.username} onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })} /></label>
-              <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
-              <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
-            </form>
+            <div className="auth-shell">
+              {pendingEmail ? (
+                <form className="auth-form" onSubmit={verifyEmail}>
+                  <p className="muted">Masukkan kode verifikasi untuk {pendingEmail}.</p>
+                  <label className="field"><span>Kode Verifikasi</span><input value={authForm.code} onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })} /></label>
+                  <button className="primary auth-button">Verifikasi Email</button>
+                  <button type="button" className="secondary" onClick={resendCode}>Kirim Ulang Kode</button>
+                </form>
+              ) : (
+                <form className="auth-form" onSubmit={handleAuth}>
+                  <div className="segmented compact">
+                    <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Login</button>
+                    <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Daftar</button>
+                  </div>
+                  <label className="field"><span>Username / Email</span><input value={authForm.username} onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })} /></label>
+                  {authMode === 'register' && <label className="field"><span>Email</span><input type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} /></label>}
+                  <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
+                  <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
+                  <button type="button" className="secondary" onClick={googleLogin}>Login Google</button>
+                </form>
+              )}
+            </div>
           )}
         </section>
 
