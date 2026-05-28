@@ -7,7 +7,7 @@ import fsSync from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
-import { uploadAudioParts } from '../services/roblox.service.js';
+import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { downloadYoutubeAudio, getYoutubeInfo } from '../services/youtube.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { assertConversionAllowed, recordConversion, verifyToken } from '../services/account.service.js';
@@ -164,6 +164,18 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
   } finally {
     await removeQuiet(req.file?.path);
     await removeQuiet(downloadedPath);
+  }
+});
+
+router.post('/asset-status', async (req, res, next) => {
+  try {
+    const { operationId, apiKey } = req.body || {};
+    if (!operationId) return res.status(400).json({ error: 'operationId wajib.' });
+    if (!apiKey) return res.status(400).json({ error: 'apiKey wajib.' });
+    const result = await checkAssetStatus(operationId, apiKey);
+    res.json(result);
+  } catch (error) {
+    next(error);
   }
 });
 

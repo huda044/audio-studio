@@ -797,6 +797,45 @@ function App() {
     notify('Format CENZ disalin.');
   }
 
+  async function recheckPart(entry, part) {
+    if (!part.operationId) {
+      notify('Part ini tidak punya operationId, tidak bisa dicek.', 'error');
+      return;
+    }
+    const uploadKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
+    if (!uploadKey) {
+      notify('Isi API key Roblox dulu di halaman API Keys untuk cek ulang.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/asset-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operationId: part.operationId, apiKey: uploadKey })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Gagal cek status.');
+      setHistory((items) => items.map((item) => {
+        if (item.id !== entry.id) return item;
+        return {
+          ...item,
+          parts: item.parts.map((p) => p.part === part.part ? {
+            ...p,
+            status: data.status || p.status,
+            assetId: data.assetId || p.assetId,
+            rbxassetid: data.rbxassetid || p.rbxassetid,
+            error: data.error || null
+          } : p)
+        };
+      }));
+      if (data.status === 'Accepted') notify('Asset sudah diterima Roblox.');
+      else if (data.status === 'Failed') notify(data.error || 'Asset ditolak Roblox.', 'error');
+      else notify('Masih dalam review Roblox.', 'info');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
   function openAdminMode() {
     if (currentUser?.role === 'admin') {
       setAdminMode(true);
@@ -1318,6 +1357,12 @@ function App() {
                           <span>Part {part.part}</span>
                           <StatusBadge status={part.status} />
                           <code>{part.rbxassetid || part.error || 'Menunggu assetId'}</code>
+                          {part.status === 'Pending' && part.operationId && (
+                            <button className="icon-wide" onClick={() => recheckPart(entry, part)}>Cek Status</button>
+                          )}
+                          {part.rbxassetid && (
+                            <button className="icon-wide" onClick={() => { navigator.clipboard.writeText(part.rbxassetid); notify('rbxassetid disalin.'); }}>Copy ID</button>
+                          )}
                         </div>
                         {!!part.trace?.length && (
                           <div className="trace-list">

@@ -59,6 +59,24 @@ async function pollOperation(operationId, apiKey) {
   return { status: 'Pending', error: 'Operasi Roblox masih diproses.', trace };
 }
 
+export async function checkAssetStatus(operationId, apiKey) {
+  try {
+    const { data } = await axios.get(`${OPERATION_URL}/${operationId}`, {
+      headers: { 'x-api-key': apiKey },
+      timeout: 10000
+    });
+    if (data.done) {
+      const assetId = data.response?.assetId || data.response?.asset?.assetId || data.metadata?.assetId;
+      if (assetId) return { status: 'Accepted', assetId, rbxassetid: `rbxassetid://${assetId}` };
+      if (data.error) return { status: 'Failed', error: data.error.message || 'Roblox menolak asset.' };
+      return { status: 'Accepted' };
+    }
+    return { status: 'Pending' };
+  } catch (error) {
+    return { status: 'Pending', error: error.response?.data?.message || error.message };
+  }
+}
+
 export async function uploadAudioParts({ parts, apiKey, creator, displayName, description }) {
   const results = [];
 
