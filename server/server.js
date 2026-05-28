@@ -6,6 +6,7 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import audioRoutes from './routes/audio.routes.js';
+import accountRoutes from './routes/account.routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,7 @@ app.use('/api/files', express.static(uploadsDir, {
     res.setHeader('Cache-Control', 'no-store');
   }
 }));
+app.use('/api', accountRoutes);
 app.use('/api', audioRoutes);
 
 app.get('/health', (_req, res) => {

@@ -10,6 +10,7 @@ import {
   Trash2,
   Upload,
   Youtube,
+  User,
   Link as LinkIcon
 } from 'lucide-react';
 import './styles.css';
@@ -55,6 +56,14 @@ function useStoredState(key, fallback) {
   });
   useEffect(() => localStorage.setItem(key, JSON.stringify(value)), [key, value]);
   return [value, setValue];
+}
+
+function safeParse(raw, fallback) {
+  try {
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function Toast({ toast }) {
@@ -104,6 +113,11 @@ function App() {
   const [history, setHistory] = useStoredState('audio-studio-history', []);
   const [groups, setGroups] = useStoredState('audio-studio-groups', []);
   const [groupForm, setGroupForm] = useState({ groupId: '', creatorUserId: '', apiKey: '' });
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('audio-studio-token') || '');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authMode, setAuthMode] = useState('login');
+  const [authForm, setAuthForm] = useState({ username: '', password: '' });
+  const [syncingProfile, setSyncingProfile] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const waveRef = useRef(null);
@@ -115,6 +129,33 @@ function App() {
   useEffect(() => {
     localStorage.setItem('audio-studio-api-key', encrypt(apiKey));
   }, [apiKey]);
+
+  useEffect(() => {
+    if (authToken) localStorage.setItem('audio-studio-token', authToken);
+    else localStorage.removeItem('audio-studio-token');
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Sesi login gagal dimuat.');
+        applyUserProfile(data.user);
+      })
+      .catch((error) => {
+        setAuthToken('');
+        notify(error.message, 'error');
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!authToken || !currentUser) return;
+    const timer = setTimeout(() => saveProfile(), 700);
+    return () => clearTimeout(timer);
+  }, [history, groups, mode, userId, groupId, selectedGroupId, apiKey, authToken, currentUser]);
 
   useEffect(() => {
     const trimmed = youtubeUrl.trim();
@@ -174,6 +215,81 @@ function App() {
   function notify(message, type = 'success') {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3200);
+  }
+
+  function authHeaders() {
+    return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  }
+
+  function applyUserProfile(user) {
+    setCurrentUser(user);
+    const profile = user.profile || {};
+    const config = profile.robloxConfig || {};
+    setMode(config.mode || 'personal');
+    setUserId(config.userId || '');
+    setGroupId(config.groupId || '');
+    setSelectedGroupId(config.selectedGroupId || '');
+    setApiKey(config.encryptedApiKey ? decrypt(config.encryptedApiKey) : '');
+    setGroups(Array.isArray(profile.groups) ? profile.groups : []);
+    setHistory(Array.isArray(profile.history) ? profile.history : []);
+  }
+
+  async function handleAuth(event) {
+    event.preventDefault();
+    try {
+      setSyncingProfile(true);
+      const response = await fetch(`${API_BASE}/api/auth/${authMode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authForm)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Login gagal.');
+      setAuthToken(data.token);
+      applyUserProfile(data.user);
+      notify(authMode === 'login' ? 'Login berhasil.' : 'Akun berhasil dibuat.');
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setSyncingProfile(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (!authToken || !currentUser) return;
+    try {
+      setSyncingProfile(true);
+      const response = await fetch(`${API_BASE}/api/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          profile: {
+            robloxConfig: {
+              mode,
+              userId,
+              groupId,
+              selectedGroupId,
+              encryptedApiKey: encrypt(apiKey)
+            },
+            groups,
+            history
+          }
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Gagal menyimpan profile.');
+      setCurrentUser(data.user);
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setSyncingProfile(false);
+    }
+  }
+
+  function logout() {
+    setAuthToken('');
+    setCurrentUser(null);
+    notify('Logout berhasil.');
   }
 
   function setSetting(key, value) {
@@ -281,8 +397,35 @@ function App() {
             <p className="text-sm font-semibold uppercase tracking-[0.22em] text-cyan-300">Roblox Audio Pipeline</p>
             <h1 className="mt-2 text-4xl font-black text-white">Audio Studio</h1>
           </div>
-          <div className="summary">{summary}</div>
+          <div className="header-side">
+            <div className="summary">{summary}</div>
+            {currentUser && <div className="account-pill"><User size={15} /> {currentUser.username} {syncingProfile ? 'menyimpan...' : 'tersimpan'}</div>}
+          </div>
         </header>
+
+        <section className="panel">
+          <h2><User size={20} /> Akun Audio Studio</h2>
+          {currentUser ? (
+            <div className="account-row">
+              <div>
+                <b>{currentUser.username}</b>
+                <p className="muted">Riwayat upload, konfigurasi Roblox, group, User ID, Group ID, dan API key terenkripsi akan disimpan ke akun ini.</p>
+              </div>
+              <button className="secondary" onClick={saveProfile} disabled={syncingProfile}>Simpan Sekarang</button>
+              <button className="icon-wide" onClick={logout}>Logout</button>
+            </div>
+          ) : (
+            <form className="auth-form" onSubmit={handleAuth}>
+              <div className="segmented compact">
+                <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Login</button>
+                <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Daftar</button>
+              </div>
+              <label className="field"><span>Username</span><input value={authForm.username} onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })} /></label>
+              <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
+              <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
+            </form>
+          )}
+        </section>
 
         <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
           <section className="panel">

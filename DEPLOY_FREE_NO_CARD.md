@@ -32,6 +32,10 @@ Batasan:
 ```env
 MAX_UPLOAD_MB=250
 INLINE_AUDIO_LIMIT_MB=8
+DATA_DIR=/data
+JWT_SECRET=ganti-dengan-random-secret-panjang
 ```
 
 Naikkan `MAX_UPLOAD_MB` hanya kalau platform hosting mengizinkan upload sebesar itu.
+
+Fitur akun menyimpan data profile ke `DATA_DIR`. Di hosting gratis tanpa storage persistent, data bisa hilang saat container dibuat ulang. Untuk akun yang benar-benar tahan lama, aktifkan persistent storage/bucket atau pindah backend ke layanan database gratis.
