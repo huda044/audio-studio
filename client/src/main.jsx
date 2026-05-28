@@ -51,10 +51,15 @@ function decrypt(value) {
 
 function useStoredState(key, fallback) {
   const [value, setValue] = useState(() => {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
+    return safeParse(localStorage.getItem(key), fallback);
   });
-  useEffect(() => localStorage.setItem(key, JSON.stringify(value)), [key, value]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Storage can be full on public/mobile browsers; app should keep running.
+    }
+  }, [key, value]);
   return [value, setValue];
 }
 
@@ -98,6 +103,38 @@ function robloxPlaybackSpeed(speed) {
   return (1 / Number(speed)).toFixed(2);
 }
 
+function compactGroups(items) {
+  return (Array.isArray(items) ? items : []).slice(0, 30).map((group) => ({
+    id: group.id,
+    name: group.name,
+    groupId: group.groupId,
+    creatorUserId: group.creatorUserId,
+    encryptedApiKey: group.encryptedApiKey
+  }));
+}
+
+function compactHistory(items) {
+  return (Array.isArray(items) ? items : []).slice(0, 75).map((entry) => ({
+    id: entry.id,
+    createdAt: entry.createdAt,
+    title: entry.title,
+    thumbnail: entry.thumbnail,
+    youtubeUrl: entry.youtubeUrl,
+    settings: entry.settings,
+    speedNormal: entry.speedNormal,
+    parts: (entry.parts || []).slice(0, 30).map((part) => ({
+      part: part.part,
+      status: part.status,
+      assetId: part.assetId,
+      rbxassetid: part.rbxassetid,
+      operationId: part.operationId,
+      error: part.error,
+      trace: (part.trace || []).slice(0, 12)
+    })),
+    expired: Boolean(entry.expired)
+  }));
+}
+
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [youtubeInfo, setYoutubeInfo] = useState(null);
@@ -118,6 +155,7 @@ function App() {
   const [authMode, setAuthMode] = useState('login');
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
   const [syncingProfile, setSyncingProfile] = useState(false);
+  const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const waveRef = useRef(null);
@@ -153,7 +191,7 @@ function App() {
 
   useEffect(() => {
     if (!authToken || !currentUser) return;
-    const timer = setTimeout(() => saveProfile(), 700);
+    const timer = setTimeout(() => saveProfile(), 1200);
     return () => clearTimeout(timer);
   }, [history, groups, mode, userId, groupId, selectedGroupId, apiKey, authToken, currentUser]);
 
@@ -230,8 +268,9 @@ function App() {
     setGroupId(config.groupId || '');
     setSelectedGroupId(config.selectedGroupId || '');
     setApiKey(config.encryptedApiKey ? decrypt(config.encryptedApiKey) : '');
-    setGroups(Array.isArray(profile.groups) ? profile.groups : []);
-    setHistory(Array.isArray(profile.history) ? profile.history : []);
+    setGroups(compactGroups(profile.groups));
+    setHistory(compactHistory(profile.history));
+    lastProfileSyncRef.current = JSON.stringify(profile || {});
   }
 
   async function handleAuth(event) {
@@ -257,28 +296,31 @@ function App() {
 
   async function saveProfile() {
     if (!authToken || !currentUser) return;
+    const profile = {
+      robloxConfig: {
+        mode,
+        userId,
+        groupId,
+        selectedGroupId,
+        encryptedApiKey: encrypt(apiKey)
+      },
+      groups: compactGroups(groups),
+      history: compactHistory(history)
+    };
+    const profileJson = JSON.stringify(profile);
+    if (profileJson === lastProfileSyncRef.current) return;
+
     try {
       setSyncingProfile(true);
       const response = await fetch(`${API_BASE}/api/profile`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          profile: {
-            robloxConfig: {
-              mode,
-              userId,
-              groupId,
-              selectedGroupId,
-              encryptedApiKey: encrypt(apiKey)
-            },
-            groups,
-            history
-          }
-        })
+        body: JSON.stringify({ profile })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal menyimpan profile.');
       setCurrentUser(data.user);
+      lastProfileSyncRef.current = profileJson;
     } catch (error) {
       notify(error.message, 'error');
     } finally {
@@ -344,7 +386,7 @@ function App() {
         parts: data.parts,
         expired: false
       };
-      setHistory((items) => [entry, ...items]);
+      setHistory((items) => compactHistory([entry, ...items]));
       notify('Terunggah ke Roblox.');
     } catch (error) {
       notify(error.message, 'error');

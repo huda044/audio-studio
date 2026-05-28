@@ -8,6 +8,7 @@ import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
 import { uploadAudioParts } from '../services/roblox.service.js';
 import { downloadYoutubeAudio, getYoutubeInfo } from '../services/youtube.service.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +19,16 @@ const uploadsDir = process.env.VERCEL
 const router = express.Router();
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);
 const inlineAudioLimitBytes = Number(process.env.INLINE_AUDIO_LIMIT_MB || 8) * 1024 * 1024;
+const processLimit = rateLimit({
+  windowMs: 1000 * 60 * 30,
+  max: Number(process.env.PROCESS_RATE_LIMIT || 12),
+  message: 'Limit konversi sementara tercapai. Coba lagi beberapa menit.'
+});
+const infoLimit = rateLimit({
+  windowMs: 1000 * 60,
+  max: Number(process.env.INFO_RATE_LIMIT || 45),
+  message: 'Preview YouTube terlalu sering. Tunggu sebentar.'
+});
 
 const upload = multer({
   dest: uploadsDir,
@@ -43,7 +54,11 @@ function parseSettings(raw = '{}') {
   };
 }
 
-router.get('/youtube-info', async (req, res, next) => {
+async function removeQuiet(filePath) {
+  if (filePath) await fs.unlink(filePath).catch(() => {});
+}
+
+router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {
     if (!req.query.url) return res.status(400).json({ error: 'URL YouTube wajib diisi.' });
     const info = await getYoutubeInfo(String(req.query.url));
@@ -53,8 +68,9 @@ router.get('/youtube-info', async (req, res, next) => {
   }
 });
 
-router.post('/process', upload.single('audio'), async (req, res, next) => {
+router.post('/process', processLimit, upload.single('audio'), async (req, res, next) => {
   let sourcePath = req.file?.path;
+  let downloadedPath = '';
   try {
     const settings = parseSettings(req.body.settings);
     const youtubeUrl = req.body.youtubeUrl?.trim();
@@ -65,6 +81,7 @@ router.post('/process', upload.single('audio'), async (req, res, next) => {
 
     if (!sourcePath && youtubeUrl) {
       sourcePath = await downloadYoutubeAudio(youtubeUrl, uploadsDir);
+      downloadedPath = sourcePath;
     }
 
     if (!sourcePath) return res.status(400).json({ error: 'Upload file audio atau masukkan URL YouTube.' });
@@ -88,11 +105,13 @@ router.post('/process', upload.single('audio'), async (req, res, next) => {
   } catch (error) {
     next(error);
   } finally {
-    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+    await removeQuiet(req.file?.path);
+    await removeQuiet(downloadedPath);
   }
 });
 
-router.post('/upload-roblox', upload.single('audio'), async (req, res, next) => {
+router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, res, next) => {
+  let splitParts = [];
   try {
     if (!req.file?.path) return res.status(400).json({ error: 'File audio hasil proses wajib dikirim.' });
     const payload = JSON.parse(req.body.payload || '{}');
@@ -104,6 +123,7 @@ router.post('/upload-roblox', upload.single('audio'), async (req, res, next) => 
       maxDuration: Number(payload.maxDuration ?? 400),
       maxBytes: 6 * 1024 * 1024
     });
+    splitParts = split.wasSplit ? split.parts.map((part) => part.path) : [];
 
     const parts = await uploadAudioParts({
       parts: split.parts,
@@ -117,7 +137,8 @@ router.post('/upload-roblox', upload.single('audio'), async (req, res, next) => 
   } catch (error) {
     next(error);
   } finally {
-    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+    await removeQuiet(req.file?.path);
+    await Promise.all(splitParts.map(removeQuiet));
   }
 });
 

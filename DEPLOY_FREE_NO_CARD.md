@@ -34,8 +34,18 @@ MAX_UPLOAD_MB=250
 INLINE_AUDIO_LIMIT_MB=8
 DATA_DIR=/data
 JWT_SECRET=ganti-dengan-random-secret-panjang
+PROCESS_RATE_LIMIT=12
+INFO_RATE_LIMIT=45
+JSON_LIMIT=512kb
 ```
 
 Naikkan `MAX_UPLOAD_MB` hanya kalau platform hosting mengizinkan upload sebesar itu.
 
 Fitur akun menyimpan data profile ke `DATA_DIR`. Di hosting gratis tanpa storage persistent, data bisa hilang saat container dibuat ulang. Untuk akun yang benar-benar tahan lama, aktifkan persistent storage/bucket atau pindah backend ke layanan database gratis.
+
+Pengaturan hemat limit:
+
+- `PROCESS_RATE_LIMIT` membatasi konversi/upload berat per window 30 menit.
+- `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
+- `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
+- Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.

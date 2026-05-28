@@ -5,9 +5,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { nanoid } from 'nanoid';
 
-const dataDir = process.env.DATA_DIR || (process.env.VERCEL ? path.join(os.tmpdir(), 'audio-studio-data') : path.resolve('..', 'uploads', 'data'));
+const dataDir = process.env.DATA_DIR || (process.env.VERCEL ? path.join(os.tmpdir(), 'audio-studio-data') : path.resolve('data'));
 const usersPath = path.join(dataDir, 'users.json');
 const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
+let writeQueue = Promise.resolve();
 
 async function ensureStore() {
   await fs.mkdir(dataDir, { recursive: true });
@@ -26,7 +27,8 @@ async function readStore() {
 
 async function writeStore(store) {
   await ensureStore();
-  await fs.writeFile(usersPath, JSON.stringify(store, null, 2));
+  writeQueue = writeQueue.then(() => fs.writeFile(usersPath, JSON.stringify(store)));
+  await writeQueue;
 }
 
 function publicUser(user) {
@@ -108,10 +110,45 @@ export async function updateUserProfile(id, profile) {
     error.status = 404;
     throw error;
   }
+  const cleanGroups = Array.isArray(profile.groups)
+    ? profile.groups.slice(0, 30).map((group) => ({
+      id: String(group.id || '').slice(0, 80),
+      name: String(group.name || '').slice(0, 80),
+      groupId: String(group.groupId || '').slice(0, 32),
+      creatorUserId: String(group.creatorUserId || '').slice(0, 32),
+      encryptedApiKey: String(group.encryptedApiKey || '').slice(0, 4096)
+    }))
+    : [];
+  const cleanHistory = Array.isArray(profile.history)
+    ? profile.history.slice(0, 75).map((entry) => ({
+      id: String(entry.id || '').slice(0, 80),
+      createdAt: entry.createdAt,
+      title: String(entry.title || 'Audio Studio').slice(0, 160),
+      thumbnail: String(entry.thumbnail || '').slice(0, 500),
+      youtubeUrl: String(entry.youtubeUrl || '').slice(0, 500),
+      settings: entry.settings || {},
+      speedNormal: String(entry.speedNormal || '').slice(0, 16),
+      expired: Boolean(entry.expired),
+      parts: Array.isArray(entry.parts) ? entry.parts.slice(0, 30).map((part) => ({
+        part: part.part,
+        status: part.status,
+        assetId: part.assetId,
+        rbxassetid: part.rbxassetid,
+        operationId: part.operationId,
+        error: part.error ? String(part.error).slice(0, 500) : null,
+        trace: Array.isArray(part.trace) ? part.trace.slice(0, 12).map((item) => ({
+          step: String(item.step || '').slice(0, 80),
+          status: item.status,
+          message: String(item.message || '').slice(0, 500)
+        })) : []
+      })) : []
+    }))
+    : [];
+
   user.profile = {
     robloxConfig: profile.robloxConfig || {},
-    groups: Array.isArray(profile.groups) ? profile.groups.slice(0, 50) : [],
-    history: Array.isArray(profile.history) ? profile.history.slice(0, 200) : []
+    groups: cleanGroups,
+    history: cleanHistory
   };
   user.updatedAt = new Date().toISOString();
   await writeStore(store);

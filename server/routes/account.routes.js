@@ -1,5 +1,6 @@
 import express from 'express';
 import { getUserById, loginUser, registerUser, signUser, updateUserProfile, verifyToken } from '../services/account.service.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 const router = express.Router();
 
@@ -15,7 +16,13 @@ function authMiddleware(req, res, next) {
   }
 }
 
-router.post('/auth/register', async (req, res, next) => {
+const authLimit = rateLimit({
+  windowMs: 1000 * 60 * 15,
+  max: 25,
+  message: 'Terlalu banyak percobaan login/daftar. Coba lagi nanti.'
+});
+
+router.post('/auth/register', authLimit, async (req, res, next) => {
   try {
     const user = await registerUser(req.body);
     res.json({ token: signUser(user), user });
@@ -24,7 +31,7 @@ router.post('/auth/register', async (req, res, next) => {
   }
 });
 
-router.post('/auth/login', async (req, res, next) => {
+router.post('/auth/login', authLimit, async (req, res, next) => {
   try {
     const user = await loginUser(req.body);
     res.json({ token: signUser(user), user });

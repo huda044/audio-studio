@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
@@ -16,19 +17,23 @@ const port = process.env.PORT || 4000;
 
 await fs.mkdir(uploadsDir, { recursive: true });
 
-const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173')
+const configuredOrigins = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
+const allowedOrigins = configuredOrigins
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
 const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(compression());
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Origin tidak diizinkan oleh CORS.'));
   }
 }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: process.env.JSON_LIMIT || '512kb' }));
 app.use('/api/files', express.static(uploadsDir, {
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-store');
@@ -55,7 +60,9 @@ if (clientDist) {
 
 app.use((err, _req, res, _next) => {
   const status = err.status || 500;
-  const message = status === 500 ? 'Terjadi kesalahan server.' : err.message;
+  const message = err.code === 'LIMIT_FILE_SIZE'
+    ? 'File terlalu besar untuk limit server saat ini.'
+    : status === 500 ? 'Terjadi kesalahan server.' : err.message;
   if (status >= 500) console.error('[server-error]', err.message);
   res.status(status).json({ error: message });
 });
