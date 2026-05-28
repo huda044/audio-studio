@@ -205,6 +205,8 @@ function App() {
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
   const [adminPromptOpen, setAdminPromptOpen] = useState(false);
   const [activePage, setActivePage] = useState('pipeline');
+  const [historyFilter, setHistoryFilter] = useState('all');
+  const [historySearch, setHistorySearch] = useState('');
   const [gatewayInfo, setGatewayInfo] = useState({ midtrans: { enabled: false } });
   const [googleClientId, setGoogleClientId] = useState(VITE_GOOGLE_CLIENT_ID);
   const googleButtonRef = useRef(null);
@@ -406,6 +408,27 @@ function App() {
   const linkedGroupOptions = useMemo(() => groups.map((group) => (
     <option key={group.groupId} value={group.groupId}>{group.name} ({group.groupId})</option>
   )), [groups]);
+
+  const filteredHistory = useMemo(() => {
+    return history.filter((entry) => {
+      // Filter by status
+      if (historyFilter !== 'all') {
+        const allAccepted = entry.parts?.every((p) => p.status === 'Accepted');
+        const anyFailed = entry.parts?.some((p) => p.status === 'Failed');
+        const anyPending = entry.parts?.some((p) => p.status === 'Pending' || !p.status);
+        if (historyFilter === 'success' && !allAccepted) return false;
+        if (historyFilter === 'pending' && !anyPending) return false;
+        if (historyFilter === 'failed' && !anyFailed) return false;
+      }
+      // Search
+      if (historySearch.trim()) {
+        const term = historySearch.trim().toLowerCase();
+        return String(entry.title || '').toLowerCase().includes(term)
+          || String(entry.youtubeUrl || '').toLowerCase().includes(term);
+      }
+      return true;
+    });
+  }, [history, historyFilter, historySearch]);
 
   function notify(message, type = 'success') {
     setToast({ message, type });
@@ -1196,8 +1219,7 @@ function App() {
         </>
         )}
 
-        {(activePage === 'pipeline' || activePage === 'keys' || activePage === 'groups') && (
-        <div className="grid gap-5 lg:grid-cols-2">
+        {(activePage === 'pipeline' || activePage === 'keys') && (
           <section className="panel">
             <h2><Upload size={20} /> Konfigurasi Upload Roblox</h2>
             <div className="segmented">
@@ -1222,11 +1244,18 @@ function App() {
               <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
               <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
             </label>
-            <button className="primary" onClick={convertAndUpload} disabled={loading || (!audioFile && !youtubeUrl && !processed)}>
-              {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />} Convert & Upload
-            </button>
+            {activePage === 'pipeline' && (
+              <button className="primary" onClick={convertAndUpload} disabled={loading || (!audioFile && !youtubeUrl && !processed)}>
+                {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />} Convert & Upload
+              </button>
+            )}
+            {activePage === 'keys' && (
+              <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
+            )}
           </section>
+        )}
 
+        {(activePage === 'pipeline' || activePage === 'groups') && (
           <section className="panel">
             <h2><LinkIcon size={20} /> Manajemen Grup</h2>
             <div className="grid gap-3 md:grid-cols-3">
@@ -1242,16 +1271,35 @@ function App() {
                   <button className="icon" onClick={() => setGroups((items) => items.filter((item) => item.id !== group.id))}><Trash2 size={17} /></button>
                 </div>
               ))}
+              {!groups.length && <p className="muted">Belum ada grup tertaut.</p>}
             </div>
           </section>
-        </div>
         )}
 
         {activePage === 'history' && (
         <section className="panel">
-          <h2>Dashboard Riwayat Upload</h2>
+          <div className="history-toolbar">
+            <h2>Dashboard Riwayat Upload</h2>
+            <div className="actions tight">
+              <input
+                placeholder="Cari judul atau URL"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                style={{ minWidth: 220 }}
+              />
+              {history.length > 0 && (
+                <button className="icon-wide bad" onClick={() => { if (confirm('Hapus semua riwayat?')) setHistory([]); }}>Hapus Semua</button>
+              )}
+            </div>
+          </div>
+          <div className="segmented compact" style={{ marginBottom: 12 }}>
+            <button className={historyFilter === 'all' ? 'active' : ''} onClick={() => setHistoryFilter('all')}>Semua ({history.length})</button>
+            <button className={historyFilter === 'success' ? 'active' : ''} onClick={() => setHistoryFilter('success')}>Sukses</button>
+            <button className={historyFilter === 'pending' ? 'active' : ''} onClick={() => setHistoryFilter('pending')}>Pending</button>
+            <button className={historyFilter === 'failed' ? 'active' : ''} onClick={() => setHistoryFilter('failed')}>Gagal</button>
+          </div>
           <div className="history-grid">
-            {history.map((entry) => (
+            {filteredHistory.map((entry) => (
               <article className="history-card" key={entry.id}>
                 {entry.thumbnail ? <img src={entry.thumbnail} alt="" /> : <div className="thumb-fallback"><Music2 /></div>}
                 <div className="history-body">
@@ -1292,6 +1340,7 @@ function App() {
                 </div>
               </article>
             ))}
+            {!filteredHistory.length && history.length > 0 && <p className="muted">Tidak ada riwayat yang cocok dengan filter.</p>}
             {!history.length && <p className="muted">Belum ada riwayat upload.</p>}
           </div>
         </section>
