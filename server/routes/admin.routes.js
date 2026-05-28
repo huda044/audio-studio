@@ -77,6 +77,24 @@ router.post('/users/:id/extend', async (req, res, next) => {
   }
 });
 
+router.post('/users/promote', async (req, res, next) => {
+  try {
+    const target = String(req.body?.target || '').trim();
+    if (!target) return res.status(400).json({ error: 'target (id/username/email) wajib.' });
+    const list = await adminListUsers({ search: target, limit: 5 });
+    const user = (list.users || []).find((item) =>
+      item.id === target
+      || item.username?.toLowerCase() === target.toLowerCase()
+      || item.email?.toLowerCase() === target.toLowerCase()
+    );
+    if (!user) return res.status(404).json({ error: 'User tidak ditemukan.' });
+    const data = await adminUpdateUser(user.id, { role: 'admin', status: 'active', emailVerified: true }, req.admin.actor);
+    res.json({ user: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/users/:id/reset-usage', async (req, res, next) => {
   try {
     res.json({ user: await adminResetUsage(req.params.id, req.admin.actor) });

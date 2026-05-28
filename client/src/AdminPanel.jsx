@@ -170,6 +170,17 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
     }
   }
 
+  async function promoteToAdmin(target) {
+    try {
+      const data = await call('/users/promote', { method: 'POST', body: JSON.stringify({ target }) });
+      notify?.(`User ${data.user?.username || target} dijadikan admin.`);
+      refresh();
+      if (activeUser?.id === data.user?.id) setActiveUser(data.user);
+    } catch (error) {
+      notify?.(error.message, 'error');
+    }
+  }
+
   async function confirmInvoice(id) {
     try {
       await call(`/payments/${id}/confirm`, { method: 'POST' });
@@ -223,6 +234,15 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
             <div className="search-box">
               <Search size={15} />
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari username, email, atau ID" />
+            </div>
+            <div className="actions tight">
+              <input
+                placeholder="Promote: username / email / id"
+                value={editing?.promoteTarget || ''}
+                onChange={(e) => setEditing({ ...(editing || {}), promoteTarget: e.target.value })}
+                style={{ background: '#020617', border: '1px solid #1f2937', color: '#e2e8f0', padding: '8px 10px', borderRadius: 10, minWidth: 240 }}
+              />
+              <button className="secondary" onClick={() => editing?.promoteTarget && promoteToAdmin(editing.promoteTarget)}><Crown size={14} /> Promote ke Admin</button>
             </div>
             <span className="muted">{usersTotal} total user</span>
           </div>
