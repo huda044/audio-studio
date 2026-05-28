@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: audio-studio-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: CLIENT_ORIGIN
+        value: https://client-daax4042s-projects.vercel.app
+      - key: MAX_UPLOAD_MB
+        value: 250
+      - key: INLINE_AUDIO_LIMIT_MB
+        value: 8
