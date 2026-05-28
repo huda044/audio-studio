@@ -1,3 +1,14 @@
+---
+title: Audio Studio
+emoji: 🎧
+colorFrom: cyan
+colorTo: teal
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 # Audio Studio
 
 Audio Studio adalah aplikasi full-stack untuk mengambil audio dari YouTube atau upload file lokal, memprosesnya dengan FFmpeg, menampilkan preview waveform, lalu mengunggah hasilnya ke Roblox Open Cloud Audio API.
