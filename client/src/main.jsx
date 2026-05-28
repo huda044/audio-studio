@@ -88,6 +88,7 @@ function StatusBadge({ status }) {
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [youtubeInfo, setYoutubeInfo] = useState(null);
+  const [youtubePreviewError, setYoutubePreviewError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [processed, setProcessed] = useState(null);
@@ -112,17 +113,33 @@ function App() {
   }, [apiKey]);
 
   useEffect(() => {
-    if (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be')) {
+    const trimmed = youtubeUrl.trim();
+    const isYoutube = (() => {
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.replace(/^www\./, '');
+        if (host === 'youtu.be') return parsed.pathname.length > 1;
+        if (!host.endsWith('youtube.com')) return false;
+        return parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/');
+      } catch {
+        return false;
+      }
+    })();
+
+    if (!isYoutube) {
       setYoutubeInfo(null);
+      setYoutubePreviewError('');
       return;
     }
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(youtubeUrl)}`);
+        setYoutubePreviewError('');
+        const response = await fetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(trimmed)}`);
         if (!response.ok) throw new Error('Preview YouTube gagal dimuat.');
         setYoutubeInfo(await response.json());
       } catch (error) {
-        notify(error.message, 'error');
+        setYoutubeInfo(null);
+        setYoutubePreviewError('Preview belum bisa dimuat untuk link ini. Konversi masih bisa dicoba jika videonya publik.');
       }
     }, 550);
     return () => clearTimeout(timer);
@@ -281,10 +298,11 @@ function App() {
                 <img src={youtubeInfo.thumbnail} alt="" />
                 <div>
                   <b>{youtubeInfo.title}</b>
-                  <p>{Math.round(youtubeInfo.duration || 0)} detik</p>
+                  <p>{youtubeInfo.duration ? `${Math.round(youtubeInfo.duration)} detik` : 'Durasi tidak tersedia'}</p>
                 </div>
               </div>
             )}
+            {youtubePreviewError && <p className="muted mt-3">{youtubePreviewError}</p>}
           </section>
 
           <section className="panel">
