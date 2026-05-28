@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   confirmPayment,
+  confirmPasswordReset,
   createPayment,
   getUserById,
   handleMidtransWebhook,
@@ -8,6 +9,7 @@ import {
   loginUser,
   loginWithGoogle,
   registerUser,
+  requestPasswordReset,
   resendVerification,
   signUser,
   updateUserProfile,
@@ -73,6 +75,23 @@ router.post('/auth/resend-code', authLimit, async (req, res, next) => {
 router.post('/auth/login', authLimit, async (req, res, next) => {
   try {
     const user = await loginUser(req.body, ctx(req));
+    res.json({ token: signUser(user), user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/forgot-password', authLimit, async (req, res, next) => {
+  try {
+    res.json(await requestPasswordReset(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/reset-password', authLimit, async (req, res, next) => {
+  try {
+    const user = await confirmPasswordReset(req.body, ctx(req));
     res.json({ token: signUser(user), user });
   } catch (error) {
     next(error);

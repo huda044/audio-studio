@@ -18,7 +18,7 @@ const router = express.Router();
 
 const adminLimit = rateLimit({
   windowMs: 1000 * 60,
-  max: 120,
+  max: 600,
   message: 'Terlalu banyak request admin. Tunggu sebentar.'
 });
 

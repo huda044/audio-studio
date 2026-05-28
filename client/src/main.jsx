@@ -156,8 +156,10 @@ function App() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('audio-studio-token') || '');
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
-  const [authForm, setAuthForm] = useState({ username: '', email: '', password: '', code: '' });
+  const [authForm, setAuthForm] = useState({ username: '', email: '', password: '', code: '', newPassword: '' });
   const [pendingEmail, setPendingEmail] = useState('');
+  const [resetMode, setResetMode] = useState(false);
+  const [resetStep, setResetStep] = useState('request');
   const [payments, setPayments] = useState([]);
   const [billingForm, setBillingForm] = useState({ plan: 'seven', method: 'qris' });
   const [syncingProfile, setSyncingProfile] = useState(false);
@@ -439,6 +441,54 @@ function App() {
       return;
     }
     window.google.accounts.id.prompt();
+  }
+
+  async function handleForgotPassword(event) {
+    event.preventDefault();
+    const email = authForm.email || authForm.username;
+    if (!email) {
+      notify('Masukkan email akunmu.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Gagal mengirim kode reset.');
+      setPendingEmail(email);
+      setResetStep('confirm');
+      notify(data.devCode ? `Kode reset dev: ${data.devCode}` : 'Kode reset dikirim ke email.');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function handleResetPassword(event) {
+    event.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: pendingEmail || authForm.email || authForm.username,
+          code: authForm.code,
+          password: authForm.newPassword
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Reset password gagal.');
+      setAuthToken(data.token);
+      applyUserProfile(data.user);
+      setResetMode(false);
+      setResetStep('request');
+      setPendingEmail('');
+      notify('Password berhasil direset. Kamu sudah login.');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
   }
 
   async function saveProfile() {
@@ -748,7 +798,24 @@ function App() {
             </div>
           ) : (
             <div className="auth-shell">
-              {pendingEmail ? (
+              {resetMode ? (
+                resetStep === 'request' ? (
+                  <form className="auth-form" onSubmit={handleForgotPassword}>
+                    <p className="muted">Masukkan email akun yang ingin direset passwordnya.</p>
+                    <label className="field"><span>Email</span><input type="email" value={authForm.email || authForm.username} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value, username: e.target.value })} /></label>
+                    <button className="primary auth-button">Kirim Kode Reset</button>
+                    <button type="button" className="secondary" onClick={() => { setResetMode(false); setResetStep('request'); }}>Kembali ke Login</button>
+                  </form>
+                ) : (
+                  <form className="auth-form" onSubmit={handleResetPassword}>
+                    <p className="muted">Masukkan kode reset yang dikirim ke {pendingEmail}.</p>
+                    <label className="field"><span>Kode Reset</span><input value={authForm.code} onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })} /></label>
+                    <label className="field"><span>Password Baru (min 6 karakter)</span><input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })} /></label>
+                    <button className="primary auth-button">Reset Password</button>
+                    <button type="button" className="secondary" onClick={() => { setResetMode(false); setResetStep('request'); setPendingEmail(''); }}>Kembali ke Login</button>
+                  </form>
+                )
+              ) : pendingEmail ? (
                 <form className="auth-form" onSubmit={verifyEmail}>
                   <p className="muted">Masukkan kode verifikasi untuk {pendingEmail}.</p>
                   <label className="field"><span>Kode Verifikasi</span><input value={authForm.code} onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })} /></label>
@@ -765,6 +832,7 @@ function App() {
                   {authMode === 'register' && <label className="field"><span>Email</span><input type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} /></label>}
                   <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
                   <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
+                  {authMode === 'login' && <button type="button" className="secondary" onClick={() => setResetMode(true)}>Lupa Password?</button>}
                   {GOOGLE_CLIENT_ID
                     ? <div ref={googleButtonRef} className="google-btn-slot" />
                     : <button type="button" className="secondary" onClick={googleLogin}>Login Google (set VITE_GOOGLE_CLIENT_ID)</button>}

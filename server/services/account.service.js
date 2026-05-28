@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { nanoid } from 'nanoid';
-import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, isSmtpConfigured } from './email.service.js';
+import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, sendPasswordResetCode, isSmtpConfigured } from './email.service.js';
 import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js';
 
 import fsSync from 'node:fs';
@@ -135,6 +135,12 @@ function makeCode() {
 async function sendVerificationEmail(email, code) {
   if (!isSmtpConfigured()) return false;
   const result = await sendVerificationCode(email, code);
+  return result.sent;
+}
+
+async function sendResetEmail(email, code) {
+  if (!isSmtpConfigured()) return false;
+  const result = await sendPasswordResetCode(email, code);
   return result.sent;
 }
 
@@ -321,6 +327,60 @@ export async function resendVerification({ email }) {
   await writeStore(store);
   const emailSent = await sendVerificationEmail(cleanEmail, code);
   return { sent: emailSent, devCode: emailSent || process.env.EMAIL_DEV_CODES === 'false' ? undefined : code };
+}
+
+export async function requestPasswordReset({ email }) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const store = await readStore();
+  const user = store.users.find((item) => item.email === cleanEmail);
+  if (!user) return { sent: false };
+  const code = makeCode();
+  user.resetCodeHash = await bcrypt.hash(code, 10);
+  user.resetExpiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  pushAudit(user, 'password_reset_requested');
+  await writeStore(store);
+  const emailSent = await sendResetEmail(cleanEmail, code);
+  return {
+    sent: emailSent,
+    devCode: emailSent || process.env.EMAIL_DEV_CODES === 'false' ? undefined : code
+  };
+}
+
+export async function confirmPasswordReset({ email, code, password }, context = {}) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (String(password || '').length < 6) {
+    const error = new Error('Password baru minimal 6 karakter.');
+    error.status = 400;
+    throw error;
+  }
+  const store = await readStore();
+  const user = store.users.find((item) => item.email === cleanEmail);
+  if (!user) {
+    const error = new Error('Email tidak ditemukan.');
+    error.status = 404;
+    throw error;
+  }
+  if (!user.resetCodeHash || new Date(user.resetExpiresAt || 0).getTime() < Date.now()) {
+    const error = new Error('Kode reset sudah kedaluwarsa. Minta kode baru.');
+    error.status = 400;
+    throw error;
+  }
+  if (!(await bcrypt.compare(String(code || ''), user.resetCodeHash))) {
+    const error = new Error('Kode reset salah.');
+    error.status = 400;
+    throw error;
+  }
+  user.passwordHash = await bcrypt.hash(password, 10);
+  user.resetCodeHash = '';
+  user.resetExpiresAt = '';
+  user.emailVerified = true;
+  user.lastLoginAt = nowIso();
+  user.lastLoginIp = context.ip || null;
+  user.lastLoginUa = context.ua || null;
+  user.loginCount = Number(user.loginCount || 0) + 1;
+  pushAudit(user, 'password_reset_confirmed', { ip: context.ip || null });
+  await writeStore(store);
+  return publicUser(user);
 }
 
 export async function loginWithGoogle({ credential }, context = {}) {

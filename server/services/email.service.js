@@ -104,3 +104,14 @@ export async function sendPaidActivated(email, invoice) {
 export function isSmtpConfigured() {
   return Boolean(process.env.SMTP_HOST);
 }
+
+export async function sendPasswordResetCode(email, code) {
+  const subject = `Reset Password ${brand().name}`;
+  const text = `Kode reset password akun ${brand().name} kamu: ${code}\nKode berlaku 30 menit.`;
+  const html = shell('Reset Password', `
+    <p style="margin:0 0 12px;color:#cbd5f5;">Kamu meminta reset password. Masukkan kode di bawah ini di halaman reset password.</p>
+    <div style="margin:16px 0;padding:18px;border-radius:14px;background:#020617;border:1px solid ${brand().color};text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:${brand().color};">${code}</div>
+    <p style="margin:0;color:#94a3b8;font-size:13px;">Kode berlaku 30 menit. Abaikan email ini jika kamu tidak meminta reset password.</p>
+  `);
+  return sendEmail({ to: email, subject, html, text });
+}

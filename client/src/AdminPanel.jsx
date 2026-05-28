@@ -45,6 +45,7 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
   const [search, setSearch] = useState('');
   const [activeUser, setActiveUser] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [promoteTarget, setPromoteTarget] = useState('');
   const [loading, setLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [paymentFilter, setPaymentFilter] = useState('');
@@ -79,7 +80,8 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
   }, [call, search, paymentFilter, notify]);
 
   useEffect(() => {
-    refresh();
+    const timer = setTimeout(() => { refresh(); }, 300);
+    return () => clearTimeout(timer);
   }, [refresh]);
 
   async function openUser(id) {
@@ -238,11 +240,11 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
             <div className="actions tight">
               <input
                 placeholder="Promote: username / email / id"
-                value={editing?.promoteTarget || ''}
-                onChange={(e) => setEditing({ ...(editing || {}), promoteTarget: e.target.value })}
+                value={promoteTarget}
+                onChange={(e) => setPromoteTarget(e.target.value)}
                 style={{ background: '#020617', border: '1px solid #1f2937', color: '#e2e8f0', padding: '8px 10px', borderRadius: 10, minWidth: 240 }}
               />
-              <button className="secondary" onClick={() => editing?.promoteTarget && promoteToAdmin(editing.promoteTarget)}><Crown size={14} /> Promote ke Admin</button>
+              <button className="secondary" onClick={() => promoteTarget && promoteToAdmin(promoteTarget)}><Crown size={14} /> Promote ke Admin</button>
             </div>
             <span className="muted">{usersTotal} total user</span>
           </div>
