@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import audioRoutes from './routes/audio.routes.js';
 import accountRoutes from './routes/account.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,6 +41,7 @@ app.use('/api/files', express.static(uploadsDir, {
   }
 }));
 app.use('/api', accountRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api', audioRoutes);
 
 app.get('/health', (_req, res) => {

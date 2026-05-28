@@ -100,10 +100,19 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
 
     if (!sourcePath) return res.status(400).json({ error: 'Upload file audio atau masukkan URL YouTube.' });
 
-    const sourceProbe = youtubeUrl && meta.duration ? { duration: meta.duration } : await probeAudio(sourcePath).then((probe) => ({ duration: Number(probe.format.duration || 0) }));
-    const account = await assertConversionAllowed(auth.sub, sourceProbe.duration);
+    let sourceDuration = 0;
+    try {
+      if (youtubeUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
+      if (!sourceDuration) {
+        const probe = await probeAudio(sourcePath);
+        sourceDuration = Number(probe.format.duration || 0);
+      }
+    } catch {
+      sourceDuration = 0;
+    }
+    const account = await assertConversionAllowed(auth.sub, sourceDuration);
     if (account.plan.plan === 'paid') {
-      settings.maxDuration = Math.max(30, Math.ceil(sourceProbe.duration || settings.maxDuration || 400));
+      settings.maxDuration = Math.max(30, Math.ceil(sourceDuration || settings.maxDuration || 400));
       settings.maxDurationLimit = 14400;
     } else {
       settings.maxDuration = Math.min(settings.maxDuration, 600);
@@ -116,7 +125,11 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
     const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
     const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
 
-    const user = await recordConversion(auth.sub);
+    const user = await recordConversion(auth.sub, {
+      source: youtubeUrl ? 'youtube' : 'upload',
+      duration: result.duration,
+      title: meta.title
+    });
     res.json({
       fileName: outputName,
       audioUrl: `/api/files/${outputName}`,

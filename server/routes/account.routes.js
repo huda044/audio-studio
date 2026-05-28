@@ -3,6 +3,7 @@ import {
   confirmPayment,
   createPayment,
   getUserById,
+  handleMidtransWebhook,
   listUserPayments,
   loginUser,
   loginWithGoogle,
@@ -14,6 +15,8 @@ import {
   verifyToken
 } from '../services/account.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { clientIp, clientUa } from '../middleware/clientIp.js';
+import { verifyMidtransSignature, isMidtransConfigured } from '../services/midtrans.service.js';
 
 const router = express.Router();
 
@@ -37,9 +40,13 @@ const authLimit = rateLimit({
   message: 'Terlalu banyak percobaan login/daftar. Coba lagi nanti.'
 });
 
+function ctx(req) {
+  return { ip: clientIp(req), ua: clientUa(req) };
+}
+
 router.post('/auth/register', authLimit, async (req, res, next) => {
   try {
-    const result = await registerUser(req.body);
+    const result = await registerUser(req.body, ctx(req));
     res.json(result);
   } catch (error) {
     next(error);
@@ -48,7 +55,7 @@ router.post('/auth/register', authLimit, async (req, res, next) => {
 
 router.post('/auth/verify-email', authLimit, async (req, res, next) => {
   try {
-    const user = await verifyEmailCode(req.body);
+    const user = await verifyEmailCode(req.body, ctx(req));
     res.json({ token: signUser(user), user });
   } catch (error) {
     next(error);
@@ -65,7 +72,7 @@ router.post('/auth/resend-code', authLimit, async (req, res, next) => {
 
 router.post('/auth/login', authLimit, async (req, res, next) => {
   try {
-    const user = await loginUser(req.body);
+    const user = await loginUser(req.body, ctx(req));
     res.json({ token: signUser(user), user });
   } catch (error) {
     next(error);
@@ -74,7 +81,7 @@ router.post('/auth/login', authLimit, async (req, res, next) => {
 
 router.post('/auth/google', authLimit, async (req, res, next) => {
   try {
-    const user = await loginWithGoogle(req.body);
+    const user = await loginWithGoogle(req.body, ctx(req));
     res.json({ token: signUser(user), user });
   } catch (error) {
     next(error);
@@ -121,9 +128,36 @@ router.post('/billing/admin/confirm', async (req, res, next) => {
     if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
       return res.status(403).json({ error: 'Admin secret tidak valid.' });
     }
-    res.json({ payment: await confirmPayment(req.body.invoiceId) });
+    res.json({ payment: await confirmPayment(req.body.invoiceId, 'admin-secret') });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get('/billing/gateway', (_req, res) => {
+  res.json({
+    midtrans: {
+      enabled: isMidtransConfigured(),
+      clientKey: process.env.MIDTRANS_CLIENT_KEY || '',
+      production: process.env.MIDTRANS_PRODUCTION === 'true'
+    }
+  });
+});
+
+router.post('/billing/webhook/midtrans', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const valid = verifyMidtransSignature({
+      orderId: payload.order_id,
+      statusCode: payload.status_code,
+      grossAmount: payload.gross_amount,
+      signatureKey: payload.signature_key
+    });
+    if (!valid) return res.status(401).json({ error: 'Signature tidak valid.' });
+    await handleMidtransWebhook(payload);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 

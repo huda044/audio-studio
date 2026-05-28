@@ -11,9 +11,11 @@ import {
   Upload,
   Youtube,
   User,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Crown
 } from 'lucide-react';
 import './styles.css';
+import AdminPanel from './AdminPanel.jsx';
 
 const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -162,6 +164,11 @@ function App() {
   const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
+  const [adminMode, setAdminMode] = useState(false);
+  const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
+  const [adminPromptOpen, setAdminPromptOpen] = useState(false);
+  const [gatewayInfo, setGatewayInfo] = useState({ midtrans: { enabled: false } });
+  const googleButtonRef = useRef(null);
   const waveRef = useRef(null);
   const waveBoxRef = useRef(null);
 
@@ -176,6 +183,33 @@ function App() {
     if (authToken) localStorage.setItem('audio-studio-token', authToken);
     else localStorage.removeItem('audio-studio-token');
   }, [authToken]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === '1') setAdminPromptOpen(true);
+    fetch(`${API_BASE}/api/billing/gateway`).then(async (response) => {
+      if (response.ok) setGatewayInfo(await response.json());
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!gatewayInfo.midtrans?.enabled || !gatewayInfo.midtrans?.clientKey) return;
+    if (document.getElementById('midtrans-snap-script')) return;
+    const script = document.createElement('script');
+    script.id = 'midtrans-snap-script';
+    script.src = gatewayInfo.midtrans.production
+      ? 'https://app.midtrans.com/snap/snap.js'
+      : 'https://app.sandbox.midtrans.com/snap/snap.js';
+    script.setAttribute('data-client-key', gatewayInfo.midtrans.clientKey);
+    document.head.appendChild(script);
+  }, [gatewayInfo]);
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin' && !adminMode) {
+      setAdminMode(true);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -194,7 +228,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || currentUser) return;
+    if (!GOOGLE_CLIENT_ID) return;
     const scriptId = 'google-identity-script';
     if (document.getElementById(scriptId)) return;
     const script = document.createElement('script');
@@ -203,6 +237,46 @@ function App() {
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    if (currentUser || !GOOGLE_CLIENT_ID) return;
+    let cancelled = false;
+    const tryRender = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id || !googleButtonRef.current) {
+        setTimeout(tryRender, 500);
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async (result) => {
+          try {
+            const response = await fetch(`${API_BASE}/api/auth/google`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ credential: result.credential })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Login Google gagal.');
+            setAuthToken(data.token);
+            applyUserProfile(data.user);
+            notify('Login Google berhasil.');
+          } catch (error) {
+            notify(error.message, 'error');
+          }
+        }
+      });
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        shape: 'rectangular',
+        text: 'continue_with',
+        width: 280
+      });
+    };
+    tryRender();
+    return () => { cancelled = true; };
   }, [currentUser]);
 
   useEffect(() => {
@@ -361,28 +435,9 @@ function App() {
 
   async function googleLogin() {
     if (!GOOGLE_CLIENT_ID || !window.google?.accounts?.id) {
-      notify('Google Login belum dikonfigurasi admin website.', 'error');
+      notify('Tombol Login Google akan muncul otomatis. Pastikan VITE_GOOGLE_CLIENT_ID sudah di-set.', 'error');
       return;
     }
-    window.google.accounts.id.initialize({
-      client_id: GOOGLE_CLIENT_ID,
-      callback: async (result) => {
-        try {
-          const response = await fetch(`${API_BASE}/api/auth/google`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ credential: result.credential })
-          });
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error || 'Login Google gagal.');
-          setAuthToken(data.token);
-          applyUserProfile(data.user);
-          notify('Login Google berhasil.');
-        } catch (error) {
-          notify(error.message, 'error');
-        }
-      }
-    });
     window.google.accounts.id.prompt();
   }
 
@@ -440,9 +495,29 @@ function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal membuat invoice.');
       setPayments((items) => [data.payment, ...items].slice(0, 20));
-      notify('Invoice langganan dibuat.');
+      if (data.payment?.snapToken && window.snap?.pay) {
+        window.snap.pay(data.payment.snapToken, {
+          onSuccess: () => { notify('Pembayaran sukses, menunggu konfirmasi.'); refreshPayments(); },
+          onPending: () => { notify('Pembayaran pending. Selesaikan di metode pilihanmu.'); },
+          onError: () => { notify('Pembayaran gagal.', 'error'); },
+          onClose: () => { notify('Popup pembayaran ditutup.'); }
+        });
+      } else {
+        notify('Invoice langganan dibuat.');
+      }
     } catch (error) {
       notify(error.message, 'error');
+    }
+  }
+
+  async function refreshPayments() {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/billing/payments`, { headers: authHeaders() });
+      const data = await response.json();
+      if (response.ok) setPayments(data.payments || []);
+    } catch {
+      // diabaikan
     }
   }
 
@@ -545,6 +620,48 @@ function App() {
     notify('Format CENZ disalin.');
   }
 
+  function openAdminMode() {
+    if (currentUser?.role === 'admin') {
+      setAdminMode(true);
+      return;
+    }
+    setAdminPromptOpen(true);
+  }
+
+  function submitAdminSecret(event) {
+    event.preventDefault();
+    if (!adminSecret.trim()) {
+      notify('Masukkan ADMIN_SECRET.', 'error');
+      return;
+    }
+    sessionStorage.setItem('audio-studio-admin-secret', adminSecret.trim());
+    setAdminPromptOpen(false);
+    setAdminMode(true);
+  }
+
+  function exitAdmin() {
+    setAdminMode(false);
+    if (currentUser?.role !== 'admin') {
+      setAdminSecret('');
+      sessionStorage.removeItem('audio-studio-admin-secret');
+    }
+  }
+
+  if (adminMode) {
+    return (
+      <>
+        <Toast toast={toast} />
+        <AdminPanel
+          apiBase={API_BASE}
+          secret={currentUser?.role === 'admin' ? '' : adminSecret}
+          token={currentUser?.role === 'admin' ? authToken : ''}
+          onExit={exitAdmin}
+          notify={notify}
+        />
+      </>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#0d1117] text-slate-100">
       <Toast toast={toast} />
@@ -557,8 +674,23 @@ function App() {
           <div className="header-side">
             <div className="summary">{summary}</div>
             {currentUser && <div className="account-pill"><User size={15} /> {currentUser.username} {syncingProfile ? 'menyimpan...' : 'tersimpan'}</div>}
+            <button className="icon-wide" onClick={openAdminMode}><Crown size={15} /> Admin</button>
           </div>
         </header>
+
+        {adminPromptOpen && (
+          <section className="panel admin-prompt">
+            <h2><Crown size={18} /> Masuk Mode Admin</h2>
+            <p className="muted">Pakai ADMIN_SECRET dari env server, atau login dengan akun yang role-nya admin.</p>
+            <form onSubmit={submitAdminSecret} className="auth-form">
+              <label className="field"><span>ADMIN_SECRET</span><input type="password" value={adminSecret} onChange={(e) => setAdminSecret(e.target.value)} /></label>
+              <div className="actions">
+                <button type="submit" className="primary">Masuk</button>
+                <button type="button" className="icon-wide" onClick={() => setAdminPromptOpen(false)}>Batal</button>
+              </div>
+            </form>
+          </section>
+        )}
 
         <section className="panel">
           <h2><User size={20} /> Akun Audio Studio</h2>
@@ -633,7 +765,9 @@ function App() {
                   {authMode === 'register' && <label className="field"><span>Email</span><input type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} /></label>}
                   <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
                   <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
-                  <button type="button" className="secondary" onClick={googleLogin}>Login Google</button>
+                  {GOOGLE_CLIENT_ID
+                    ? <div ref={googleButtonRef} className="google-btn-slot" />
+                    : <button type="button" className="secondary" onClick={googleLogin}>Login Google (set VITE_GOOGLE_CLIENT_ID)</button>}
                 </form>
               )}
             </div>
