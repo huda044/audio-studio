@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
 const KEY_SECRET = 'audio-studio-local-key';
 const presets = [
   ['Lambat', 2.1],

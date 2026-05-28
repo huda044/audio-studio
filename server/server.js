@@ -39,6 +39,18 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, name: 'Audio Studio API' });
 });
 
+const clientDist = process.env.CLIENT_DIST;
+if (clientDist) {
+  app.use(express.static(clientDist));
+  app.get('*', async (_req, res, next) => {
+    try {
+      res.sendFile(path.join(clientDist, 'index.html'));
+    } catch (error) {
+      next(error);
+    }
+  });
+}
+
 app.use((err, _req, res, _next) => {
   const status = err.status || 500;
   const message = status === 500 ? 'Terjadi kesalahan server.' : err.message;
