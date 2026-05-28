@@ -213,10 +213,15 @@ function App() {
   }, [gatewayInfo]);
 
   useEffect(() => {
-    if (currentUser?.role === 'admin' && !adminMode) {
-      setAdminMode(true);
+    if (currentUser?.role === 'admin' && authToken && !adminMode) {
+      try {
+        const payload = JSON.parse(atob(authToken.split('.')[1]));
+        if (payload.role === 'admin') setAdminMode(true);
+      } catch {
+        // token invalid, skip
+      }
     }
-  }, [currentUser]);
+  }, [currentUser, authToken]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -696,10 +701,19 @@ function App() {
 
   function exitAdmin() {
     setAdminMode(false);
+    setAdminPromptOpen(false);
     if (currentUser?.role !== 'admin') {
       setAdminSecret('');
       sessionStorage.removeItem('audio-studio-admin-secret');
     }
+  }
+
+  function exitAdminAndLogout() {
+    setAdminMode(false);
+    setAdminSecret('');
+    sessionStorage.removeItem('audio-studio-admin-secret');
+    logout();
+    notify('Logout untuk refresh role admin. Login ulang.');
   }
 
   if (adminMode) {

@@ -56,11 +56,18 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
       headers: { ...headers, ...(options.headers || {}) }
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Request admin gagal.');
+    if (!response.ok) {
+      const err = new Error(data.error || 'Request admin gagal.');
+      err.status = response.status;
+      throw err;
+    }
     return data;
   }, [apiBase, headers]);
 
+  const [rejected, setRejected] = useState(false);
+
   const refresh = useCallback(async () => {
+    if (rejected) return;
     try {
       setLoading(true);
       const [statsData, usersData, paymentsData] = await Promise.all([
@@ -73,16 +80,24 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
       setUsersTotal(usersData.total || 0);
       setPayments(paymentsData.payments || []);
     } catch (error) {
+      if (error.status === 403 || error.message?.includes('ditolak')) {
+        setRejected(true);
+        notify?.('Akses admin ditolak. Logout dan login ulang untuk refresh role.', 'error');
+        setTimeout(() => onExit?.(), 2000);
+        return;
+      }
       notify?.(error.message, 'error');
     } finally {
       setLoading(false);
     }
-  }, [call, search, paymentFilter, notify]);
+  }, [call, search, paymentFilter, notify, onExit, rejected]);
 
   useEffect(() => {
-    const timer = setTimeout(() => { refresh(); }, 300);
+    const timer = setTimeout(() => { refresh(); }, 400);
     return () => clearTimeout(timer);
-  }, [refresh]);
+  }, [search, paymentFilter]);
+
+  useEffect(() => { refresh(); }, []);
 
   async function openUser(id) {
     try {
@@ -175,7 +190,8 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
   async function promoteToAdmin(target) {
     try {
       const data = await call('/users/promote', { method: 'POST', body: JSON.stringify({ target }) });
-      notify?.(`User ${data.user?.username || target} dijadikan admin.`);
+      const promoted = data.user?.username || data.user?.email || target;
+      notify?.(`User ${promoted} dijadikan admin. Logout dan login ulang supaya role aktif.`);
       refresh();
       if (activeUser?.id === data.user?.id) setActiveUser(data.user);
     } catch (error) {
