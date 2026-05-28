@@ -53,6 +53,14 @@ const EQ_PRESETS = [
   { value: 'podcast', label: 'Podcast' }
 ];
 
+const PIPELINE_STEPS = [
+  { key: 'info', label: 'Ambil info' },
+  { key: 'download', label: 'Download' },
+  { key: 'convert', label: 'Konversi' },
+  { key: 'upload', label: 'Upload' },
+  { key: 'ready', label: 'Asset siap' }
+];
+
 function encrypt(value) {
   return CryptoJS.AES.encrypt(value || '', KEY_SECRET).toString();
 }
@@ -214,6 +222,7 @@ function App() {
   const [lastError, setLastError] = useState(null);
   const abortRef = useRef(null);
   const [audioFilePreview, setAudioFilePreview] = useState(null);
+  const [lastUploadResult, setLastUploadResult] = useState(null);
   const [toast, setToast] = useState(null);
   const [adminMode, setAdminMode] = useState(false);
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
@@ -758,6 +767,7 @@ function App() {
     if (loading) return;
     try {
       setLastError(null);
+      setLastUploadResult(null);
       setLoading(true);
       setStep(0, 'Memulai konversi...');
       const result = processed || await processOnly();
@@ -801,6 +811,8 @@ function App() {
         expired: false
       };
       setHistory((items) => compactHistory([entry, ...items]));
+      setLastUploadResult(entry);
+      setStep(4, 'Asset siap. Lihat di panel kanan.');
       notify('Terunggah ke Roblox.');
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -1234,7 +1246,7 @@ function App() {
         {activePage === 'pipeline' && (
         <>
         <div className="pipeline-grid">
-          {/* === Kolom kiri: Sumber Audio + Format & Efek === */}
+          {/* === Kolom kiri: Sumber Audio + Format & Efek + Preview + Upload === */}
           <div className="pipeline-col">
 
             {/* Sumber Audio dengan tab toggle */}
@@ -1317,7 +1329,7 @@ function App() {
               )}
             </section>
 
-            {/* Format & Efek (preset speed + EQ + chip toggle + slider lanjutan) */}
+            {/* Format & Efek */}
             <section className="panel">
               <h2><Music2 size={20} /> Format & Efek</h2>
 
@@ -1410,10 +1422,8 @@ function App() {
                 </div>
               </details>
             </section>
-          </div>
 
-          {/* === Kolom kanan: Preview + Aksi === */}
-          <div className="pipeline-col">
+            {/* Preview Audio */}
             <section className="panel">
               <h2>Preview Audio</h2>
               <div ref={waveBoxRef} className="wavebox" />
@@ -1429,27 +1439,11 @@ function App() {
               ) : (
                 <p className="muted">Hasil konversi akan muncul di sini sebelum diupload.</p>
               )}
-              <div className="actions">
-                <button className="secondary" onClick={handleProcessClick} disabled={loading || (!audioFile && !youtubeUrl)}>
-                  {loading ? <Loader2 className="spin" size={18} /> : <Music2 size={18} />} Konversi Audio
-                </button>
-                {processed && (
-                  <a
-                    className="primary"
-                    href={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`}
-                    download={processed.fileName || 'audio.ogg'}
-                  >
-                    Download OGG
-                  </a>
-                )}
-                {processed && (
-                  <button className="icon-wide" onClick={() => setProcessed(null)}>Convert Lagi</button>
-                )}
-              </div>
             </section>
 
+            {/* Konfigurasi Roblox */}
             <section className="panel">
-              <h2><Upload size={20} /> Upload ke Roblox</h2>
+              <h2><Upload size={20} /> Tujuan Upload Roblox</h2>
               <div className="segmented">
                 <button className={mode === 'personal' ? 'active' : ''} onClick={() => setMode('personal')}>Personal Account</button>
                 <button className={mode === 'group' ? 'active' : ''} onClick={() => setMode('group')}>Group</button>
@@ -1472,11 +1466,161 @@ function App() {
                 <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
                 <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
               </label>
-              <button className="primary" onClick={convertAndUpload} disabled={loading || (!audioFile && !youtubeUrl && !processed)}>
-                {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />} Convert & Upload
-              </button>
             </section>
           </div>
+
+          {/* === Kolom kanan: Sticky stack (Progress + Result + Quota) === */}
+          <aside className="pipeline-side">
+            {/* Action buttons selalu di atas, di luar sticky cluster */}
+            <section className="panel side-panel">
+              <h3 className="side-title">Aksi</h3>
+              <div className="side-actions">
+                <button
+                  className="secondary"
+                  onClick={handleProcessClick}
+                  disabled={loading || (!audioFile && !youtubeUrl)}
+                >
+                  {loading ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />} Konversi
+                </button>
+                <button
+                  className="primary"
+                  onClick={convertAndUpload}
+                  disabled={loading || (!audioFile && !youtubeUrl && !processed)}
+                >
+                  {loading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Convert & Upload
+                </button>
+                {processed && (
+                  <a
+                    className="secondary"
+                    href={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`}
+                    download={processed.fileName || 'audio.ogg'}
+                  >
+                    Download OGG
+                  </a>
+                )}
+                {processed && (
+                  <button className="icon-wide" onClick={() => setProcessed(null)}>Reset Hasil</button>
+                )}
+              </div>
+            </section>
+
+            {/* Progress Pipeline */}
+            <section className="panel side-panel">
+              <h3 className="side-title">Progress Pipeline</h3>
+              <ol className="pipeline-steps">
+                {PIPELINE_STEPS.map((step, idx) => {
+                  let status = 'pending';
+                  if (loading) {
+                    if (idx < loadingStepIndex) status = 'done';
+                    else if (idx === loadingStepIndex) status = 'active';
+                  } else if (lastUploadResult && !lastError) {
+                    status = 'done';
+                  } else if (lastError && idx < loadingStepIndex) {
+                    status = 'done';
+                  } else if (lastError && idx === loadingStepIndex) {
+                    status = 'error';
+                  }
+                  return (
+                    <li key={step.key} className={`pipeline-step ${status}`}>
+                      <span className="bullet">
+                        {status === 'done' ? '✓' : status === 'error' ? '!' : idx + 1}
+                      </span>
+                      <span className="step-label">{step.label}</span>
+                    </li>
+                  );
+                })}
+              </ol>
+              {loading && loadingStep && (
+                <p className="step-note">{loadingStep}</p>
+              )}
+              {!loading && lastUploadResult && !lastError && (
+                <p className="step-note success">Asset berhasil diupload ke Roblox.</p>
+              )}
+              {!loading && lastError && (
+                <p className="step-note error">{lastError}</p>
+              )}
+            </section>
+
+            {/* Hasil Upload Roblox */}
+            <section className="panel side-panel">
+              <h3 className="side-title">Hasil Upload Roblox</h3>
+              {lastUploadResult ? (
+                <div className="result-list">
+                  <div className="result-head">
+                    <b>{lastUploadResult.title}</b>
+                    <p className="muted small">
+                      {new Date(lastUploadResult.createdAt).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                  {lastUploadResult.parts.map((part) => (
+                    <div className="result-row" key={`res-${part.part}`}>
+                      <div className="result-row-head">
+                        <span className="part-tag">Part {part.part}</span>
+                        <StatusBadge status={part.status} />
+                      </div>
+                      <code className="result-id">
+                        {part.rbxassetid || part.error || 'Menunggu assetId...'}
+                      </code>
+                      {part.rbxassetid && (
+                        <button
+                          className="icon-wide tiny"
+                          onClick={() => {
+                            navigator.clipboard.writeText(part.rbxassetid);
+                            notify('rbxassetid disalin.');
+                          }}
+                        >
+                          <Copy size={12} /> Copy
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    className="secondary"
+                    onClick={() => copyCenz(lastUploadResult)}
+                    style={{ marginTop: 8 }}
+                  >
+                    <Copy size={14} /> Copy in CENZ Format
+                  </button>
+                </div>
+              ) : (
+                <p className="muted small">Belum ada upload. Hasil akan muncul di sini setelah Convert & Upload.</p>
+              )}
+            </section>
+
+            {/* Quota / Penggunaan akun mini */}
+            {currentUser && currentUser.role !== 'admin' && (
+              <section className="panel side-panel quota-panel">
+                <h3 className="side-title">Penggunaan Akun</h3>
+                <div className="quota-stat">
+                  <div className="quota-row">
+                    <span className="muted small">Konversi</span>
+                    <b>{currentUser.usage?.conversions || 0}/3</b>
+                  </div>
+                  <div className="quota-bar">
+                    <div
+                      className="quota-fill"
+                      style={{ width: `${Math.min(100, ((currentUser.usage?.conversions || 0) / 3) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <p className="muted small">
+                  Plan: <b style={{ color: 'var(--brand-200)' }}>{currentUser.subscription?.label || 'Free'}</b>
+                  {currentUser.subscription?.plan === 'paid' && currentUser.subscription?.expiresAt
+                    ? ` · aktif sampai ${new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}`
+                    : ''}
+                </p>
+                {currentUser.subscription?.plan !== 'paid' && (
+                  <button
+                    className="primary"
+                    style={{ marginTop: 4 }}
+                    onClick={() => setBillingForm({ ...billingForm, step: 'pricing' })}
+                  >
+                    Upgrade
+                  </button>
+                )}
+              </section>
+            )}
+          </aside>
         </div>
         </>
         )}
