@@ -1,5 +1,6 @@
 import ytdl from '@distube/ytdl-core';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { nanoid } from 'nanoid';
 
@@ -28,6 +29,34 @@ function downloadStream(stream, outputPath) {
   });
 }
 
+function runYtDlp(args) {
+  return new Promise((resolve, reject) => {
+    execFile('yt-dlp', args, { windowsHide: true, maxBuffer: 1024 * 1024 * 12 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message || 'yt-dlp gagal dijalankan.'));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+async function getYtDlpInfo(url, videoId) {
+  const output = await runYtDlp([
+    '--dump-single-json',
+    '--no-warnings',
+    '--skip-download',
+    url
+  ]);
+  const info = JSON.parse(output);
+  return {
+    title: info.title || 'YouTube Audio',
+    thumbnail: info.thumbnail || info.thumbnails?.at(-1)?.url || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
+    duration: Number(info.duration || 0),
+    url
+  };
+}
+
 export async function getYoutubeInfo(url) {
   const videoId = extractVideoId(url);
   try {
@@ -42,6 +71,11 @@ export async function getYoutubeInfo(url) {
       url
     };
   } catch (error) {
+    try {
+      return await getYtDlpInfo(url, videoId);
+    } catch {
+      // Fall through to oEmbed/static thumbnail metadata.
+    }
     if (!videoId) throw error;
     try {
       const response = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
@@ -68,10 +102,23 @@ export async function getYoutubeInfo(url) {
 
 export async function downloadYoutubeAudio(url, uploadsDir) {
   const outputPath = path.join(uploadsDir, `youtube-${nanoid(10)}.webm`);
-  const stream = ytdl(url, {
-    quality: 'highestaudio',
-    filter: 'audioonly',
-    highWaterMark: 1 << 25
-  });
-  return downloadStream(stream, outputPath);
+  try {
+    const stream = ytdl(url, {
+      quality: 'highestaudio',
+      filter: 'audioonly',
+      highWaterMark: 1 << 25
+    });
+    return await downloadStream(stream, outputPath);
+  } catch {
+    const fallbackPath = path.join(uploadsDir, `youtube-${nanoid(10)}.%(ext)s`);
+    await runYtDlp([
+      '--extract-audio',
+      '--audio-format', 'mp3',
+      '--audio-quality', '0',
+      '--output', fallbackPath,
+      '--no-warnings',
+      url
+    ]);
+    return fallbackPath.replace('%(ext)s', 'mp3');
+  }
 }
