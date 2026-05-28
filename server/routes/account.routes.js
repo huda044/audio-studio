@@ -159,6 +159,9 @@ router.get('/billing/gateway', (_req, res) => {
       enabled: isMidtransConfigured(),
       clientKey: process.env.MIDTRANS_CLIENT_KEY || '',
       production: process.env.MIDTRANS_PRODUCTION === 'true'
+    },
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID || ''
     }
   });
 });

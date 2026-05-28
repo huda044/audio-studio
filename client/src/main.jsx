@@ -18,7 +18,7 @@ import './styles.css';
 import AdminPanel from './AdminPanel.jsx';
 
 const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+const VITE_GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const KEY_SECRET = 'audio-studio-local-key';
 const presets = [
   ['Lambat', 2.1],
@@ -170,6 +170,7 @@ function App() {
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
   const [adminPromptOpen, setAdminPromptOpen] = useState(false);
   const [gatewayInfo, setGatewayInfo] = useState({ midtrans: { enabled: false } });
+  const [googleClientId, setGoogleClientId] = useState(VITE_GOOGLE_CLIENT_ID);
   const googleButtonRef = useRef(null);
   const waveRef = useRef(null);
   const waveBoxRef = useRef(null);
@@ -191,7 +192,11 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('admin') === '1') setAdminPromptOpen(true);
     fetch(`${API_BASE}/api/billing/gateway`).then(async (response) => {
-      if (response.ok) setGatewayInfo(await response.json());
+      if (response.ok) {
+        const data = await response.json();
+        setGatewayInfo(data);
+        if (data.google?.clientId && !googleClientId) setGoogleClientId(data.google.clientId);
+      }
     }).catch(() => {});
   }, []);
 
@@ -230,7 +235,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
+    if (!googleClientId) return;
     const scriptId = 'google-identity-script';
     if (document.getElementById(scriptId)) return;
     const script = document.createElement('script');
@@ -239,10 +244,10 @@ function App() {
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
-  }, []);
+  }, [googleClientId]);
 
   useEffect(() => {
-    if (currentUser || !GOOGLE_CLIENT_ID) return;
+    if (currentUser || !googleClientId) return;
     let cancelled = false;
     const tryRender = () => {
       if (cancelled) return;
@@ -251,7 +256,7 @@ function App() {
         return;
       }
       window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
+        client_id: googleClientId,
         callback: async (result) => {
           try {
             const response = await fetch(`${API_BASE}/api/auth/google`, {
@@ -279,7 +284,7 @@ function App() {
     };
     tryRender();
     return () => { cancelled = true; };
-  }, [currentUser]);
+  }, [currentUser, googleClientId]);
 
   useEffect(() => {
     if (!authToken || !currentUser) return;
@@ -436,8 +441,8 @@ function App() {
   }
 
   async function googleLogin() {
-    if (!GOOGLE_CLIENT_ID || !window.google?.accounts?.id) {
-      notify('Tombol Login Google akan muncul otomatis. Pastikan VITE_GOOGLE_CLIENT_ID sudah di-set.', 'error');
+    if (!googleClientId || !window.google?.accounts?.id) {
+      notify('Google Login belum tersedia. Coba refresh halaman.', 'error');
       return;
     }
     window.google.accounts.id.prompt();
@@ -833,7 +838,7 @@ function App() {
                   <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
                   <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
                   {authMode === 'login' && <button type="button" className="secondary" onClick={() => setResetMode(true)}>Lupa Password?</button>}
-                  {GOOGLE_CLIENT_ID && <div ref={googleButtonRef} className="google-btn-slot" />}
+                  {googleClientId && <div ref={googleButtonRef} className="google-btn-slot" />}
                 </form>
               )}
             </div>
