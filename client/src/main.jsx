@@ -85,6 +85,10 @@ function StatusBadge({ status }) {
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
+function robloxPlaybackSpeed(speed) {
+  return (1 / Number(speed)).toFixed(2);
+}
+
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [youtubeInfo, setYoutubeInfo] = useState(null);
@@ -314,6 +318,18 @@ function App() {
                 </button>
               ))}
             </div>
+            <div className="roblox-note">
+              <b>Catatan PlaybackSpeed Roblox</b>
+              <p>Supaya audio terdengar normal di Roblox Studio, gunakan nilai kebalikan dari preset website: <code>PlaybackSpeed = 1 / speed</code>.</p>
+              <div className="speed-table">
+                {presets.map(([label, speed]) => (
+                  <div key={`${label}-roblox`}>
+                    <span>{label}</span>
+                    <code>{`${speed}x -> ${robloxPlaybackSpeed(speed)}`}</code>
+                  </div>
+                ))}
+              </div>
+            </div>
           </section>
         </div>
 
@@ -414,11 +430,24 @@ function App() {
                   <p className="muted">Kecepatan {entry.settings.speed}x | Amplifikasi {entry.settings.amplify} dB | Durasi Maks {entry.settings.maxDuration}s | Speed Normal (in-game) {entry.speedNormal}</p>
                   <div className="parts">
                     {entry.parts.map((part) => (
-                      <div key={`${entry.id}-${part.part}`}>
-                        <span>Part {part.part}</span>
-                        <StatusBadge status={part.status} />
-                        <code>{part.rbxassetid || part.error || 'Menunggu assetId'}</code>
-                      </div>
+                      <section className="part-trace" key={`${entry.id}-${part.part}`}>
+                        <div className="part-head">
+                          <span>Part {part.part}</span>
+                          <StatusBadge status={part.status} />
+                          <code>{part.rbxassetid || part.error || 'Menunggu assetId'}</code>
+                        </div>
+                        {!!part.trace?.length && (
+                          <div className="trace-list">
+                            {part.trace.map((item, index) => (
+                              <div key={`${entry.id}-${part.part}-${index}`}>
+                                <StatusBadge status={item.status} />
+                                <span>{item.step}</span>
+                                <p>{item.message}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
                     ))}
                   </div>
                   <div className="actions">

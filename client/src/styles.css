@@ -193,10 +193,39 @@ button:disabled {
 .preview-row p,
 .muted,
 .list-row p,
-.history-top p {
+.history-top p,
+.roblox-note p,
+.trace-list p {
   color: #91a3b8;
   margin: 4px 0 0;
   overflow-wrap: anywhere;
+}
+
+.roblox-note {
+  margin-top: 14px;
+  border: 1px solid #223041;
+  background: #0b1220;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.roblox-note b {
+  color: #e8fbff;
+}
+
+.speed-table {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.speed-table div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid #1d2b3d;
+  padding-top: 8px;
 }
 
 .wavebox {
@@ -278,12 +307,39 @@ button:disabled {
   margin-top: 12px;
 }
 
-.parts div {
+.part-head {
   display: grid;
   grid-template-columns: 62px 92px 1fr;
   gap: 8px;
   align-items: center;
   color: #d7e2f0;
+}
+
+.part-trace {
+  border: 1px solid #1e2b3a;
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(17, 24, 39, 0.62);
+}
+
+.trace-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.trace-list div {
+  display: grid;
+  grid-template-columns: 92px 130px 1fr;
+  gap: 8px;
+  align-items: start;
+  border-top: 1px solid #1d2b3d;
+  padding-top: 8px;
+}
+
+.trace-list span {
+  color: #d7e2f0;
+  font-weight: 700;
 }
 
 code {
@@ -345,7 +401,8 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .parts div {
+  .part-head,
+  .trace-list div {
     grid-template-columns: 1fr;
   }
 
