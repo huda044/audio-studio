@@ -608,3 +608,24 @@ code {
 .file-icon { width:60px; height:60px; background:#020617; border:1px solid #22d3ee; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#22d3ee; flex-shrink:0; }
 .youtube-embed { width:100%; aspect-ratio:16/9; border:none; border-radius:10px; background:#020617; }
 .input-preview audio { width:100%; }
+
+
+/* Loading stepper */
+.step-list { list-style: none; padding: 0; margin: 14px 0 8px; display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.step { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #64748b; }
+.step .dot { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; background: #1f2937; color: #94a3b8; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.step.done { color: #22d3ee; }
+.step.done .dot { background: #1D9E75; color: #fff; }
+.step.active { color: #fff; }
+.step.active .dot { background: #22d3ee; color: #0a0f18; box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.2); }
+
+/* Error banner */
+.error-banner { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1a0f12; border: 1px solid #ef4444; border-radius: 12px; padding: 14px 18px; display: flex; gap: 14px; align-items: center; z-index: 1500; max-width: 90vw; box-shadow: 0 12px 30px rgba(0,0,0,0.5); }
+.error-banner b { color: #ef4444; font-size: 13px; }
+.error-banner p { margin: 2px 0 0; color: #cbd5f5; font-size: 13px; }
+
+/* Result info */
+.result-info { display: flex; gap: 14px; flex-wrap: wrap; padding: 8px 0; font-size: 13px; }
+
+/* Anchor as primary button */
+a.primary, a.secondary { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }

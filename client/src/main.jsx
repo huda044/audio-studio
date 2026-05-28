@@ -195,6 +195,9 @@ function App() {
   const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
+  const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [lastError, setLastError] = useState(null);
+  const abortRef = useRef(null);
   const [audioFilePreview, setAudioFilePreview] = useState(null);
   const [toast, setToast] = useState(null);
   const [adminMode, setAdminMode] = useState(false);
@@ -625,20 +628,33 @@ function App() {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
+  function setStep(index, text) {
+    setLoadingStepIndex(index);
+    setLoadingStep(text);
+  }
+
   async function processOnly() {
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('youtubeUrl', youtubeUrl);
     form.append('settings', JSON.stringify(settings));
-    setLoadingStep(youtubeUrl ? 'Mengunduh audio dari YouTube...' : 'Memproses file audio...');
-    const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', headers: authHeaders(), body: form });
+    setStep(1, youtubeUrl ? 'Mengunduh audio dari YouTube...' : 'Memproses file audio...');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const response = await fetch(`${API_BASE}/api/process`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+      signal: controller.signal
+    });
+    setStep(2, 'Mengonversi format dan menerapkan efek...');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Konversi audio gagal.');
     if (data.account) {
       setCurrentUser((user) => user ? { ...user, usage: data.account.usage, subscription: data.account.subscription } : user);
     }
     setProcessed(data);
-    setLoadingStep('Konversi selesai.');
+    setStep(3, 'Audio siap diunduh atau di-upload ke Roblox.');
     notify('Konversi Audio selesai.');
     return data;
   }
@@ -646,10 +662,11 @@ function App() {
   async function convertAndUpload() {
     if (loading) return;
     try {
+      setLastError(null);
       setLoading(true);
-      setLoadingStep('Memulai konversi...');
+      setStep(0, 'Memulai konversi...');
       const result = processed || await processOnly();
-      setLoadingStep('Mengirim audio ke Roblox...');
+      setStep(2, 'Mengirim audio ke Roblox...');
       const audioSource = result.audioDataUrl || `${API_BASE}${result.audioUrl}`;
       const blob = await fetch(audioSource).then((response) => response.blob());
       const form = new FormData();
@@ -666,8 +683,14 @@ function App() {
         description: `Speed ${settings.speed}x, Amplifikasi ${settings.amplify} dB`
       }));
 
-      setLoadingStep('Menunggu Roblox memproses asset...');
-      const response = await fetch(`${API_BASE}/api/upload-roblox`, { method: 'POST', body: form });
+      setStep(3, 'Menunggu Roblox memproses asset...');
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const response = await fetch(`${API_BASE}/api/upload-roblox`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Upload Roblox gagal.');
 
@@ -685,25 +708,44 @@ function App() {
       setHistory((items) => compactHistory([entry, ...items]));
       notify('Terunggah ke Roblox.');
     } catch (error) {
-      notify(error.message, 'error');
+      if (error.name === 'AbortError') {
+        notify('Konversi dibatalkan.', 'info');
+      } else {
+        setLastError(error.message);
+        notify(error.message, 'error');
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
       setLoadingStep('');
+      setLoadingStepIndex(0);
     }
   }
 
   async function handleProcessClick() {
     if (loading) return;
     try {
+      setLastError(null);
       setLoading(true);
-      setLoadingStep('Memulai konversi...');
+      setStep(0, 'Memulai konversi...');
       await processOnly();
     } catch (error) {
-      notify(error.message, 'error');
+      if (error.name === 'AbortError') {
+        notify('Konversi dibatalkan.', 'info');
+      } else {
+        setLastError(error.message);
+        notify(error.message, 'error');
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
       setLoadingStep('');
+      setLoadingStepIndex(0);
     }
+  }
+
+  function cancelLoading() {
+    abortRef.current?.abort();
   }
 
   function addGroup() {
@@ -787,10 +829,38 @@ function App() {
       {loading && (
         <div className="loading-overlay">
           <div className="loading-card">
-            <Loader2 className="spin" size={40} />
+            <Loader2 className="spin" size={36} />
             <h3>Memproses</h3>
-            <p>{loadingStep || 'Mohon tunggu...'}</p>
-            <p className="muted small">Jangan tutup tab ini sampai selesai.</p>
+            <ol className="step-list">
+              {[
+                'Mempersiapkan',
+                'Mengunduh / membaca audio',
+                'Mengonversi & efek',
+                'Selesai / upload Roblox'
+              ].map((label, idx) => {
+                const status = idx < loadingStepIndex ? 'done' : idx === loadingStepIndex ? 'active' : 'pending';
+                return (
+                  <li key={label} className={`step ${status}`}>
+                    <span className="dot">{status === 'done' ? '✓' : idx + 1}</span>
+                    <span>{label}</span>
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="muted">{loadingStep || 'Mohon tunggu...'}</p>
+            <button className="icon-wide bad" onClick={cancelLoading}>Batalkan</button>
+          </div>
+        </div>
+      )}
+      {lastError && !loading && (
+        <div className="error-banner">
+          <div>
+            <b>Gagal memproses</b>
+            <p>{lastError}</p>
+          </div>
+          <div className="actions tight">
+            <button className="secondary" onClick={() => { setLastError(null); handleProcessClick(); }}>Coba Lagi</button>
+            <button className="icon-wide" onClick={() => setLastError(null)}>Tutup</button>
           </div>
         </div>
       )}
@@ -1089,7 +1159,14 @@ function App() {
           <h2>Preview Audio</h2>
           <div ref={waveBoxRef} className="wavebox" />
           {processed ? (
-            <audio className="w-full" controls src={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`} />
+            <>
+              <audio className="w-full" controls src={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`} />
+              <div className="result-info">
+                <span><b>{processed.title}</b></span>
+                <span className="muted">Durasi: {formatDuration(processed.duration)}</span>
+                <span className="muted">Ukuran: {formatBytes(processed.sizeBytes)}</span>
+              </div>
+            </>
           ) : (
             <p className="muted">Hasil konversi akan muncul di sini sebelum diupload.</p>
           )}
@@ -1097,6 +1174,18 @@ function App() {
             <button className="secondary" onClick={handleProcessClick} disabled={loading || (!audioFile && !youtubeUrl)}>
               {loading ? <Loader2 className="spin" size={18} /> : <Music2 size={18} />} Konversi Audio
             </button>
+            {processed && (
+              <a
+                className="primary"
+                href={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`}
+                download={processed.fileName || 'audio.ogg'}
+              >
+                Download OGG
+              </a>
+            )}
+            {processed && (
+              <button className="icon-wide" onClick={() => setProcessed(null)}>Convert Lagi</button>
+            )}
           </div>
         </section>
 
