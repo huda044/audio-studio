@@ -833,9 +833,7 @@ function App() {
                   <label className="field"><span>Password</span><input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} /></label>
                   <button className="primary auth-button" disabled={syncingProfile}>{authMode === 'login' ? 'Login' : 'Buat Akun'}</button>
                   {authMode === 'login' && <button type="button" className="secondary" onClick={() => setResetMode(true)}>Lupa Password?</button>}
-                  {GOOGLE_CLIENT_ID
-                    ? <div ref={googleButtonRef} className="google-btn-slot" />
-                    : <button type="button" className="secondary" onClick={googleLogin}>Login Google (set VITE_GOOGLE_CLIENT_ID)</button>}
+                  {GOOGLE_CLIENT_ID && <div ref={googleButtonRef} className="google-btn-slot" />}
                 </form>
               )}
             </div>

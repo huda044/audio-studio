@@ -8,6 +8,9 @@ function getTransporter() {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === 'true',
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
     auth: process.env.SMTP_USER ? {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
@@ -48,14 +51,19 @@ function shell(title, bodyHtml) {
 export async function sendEmail({ to, subject, html, text }) {
   const transporter = getTransporter();
   if (!transporter) return { sent: false, reason: 'smtp_not_configured' };
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-    to,
-    subject,
-    text,
-    html
-  });
-  return { sent: true };
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+      to,
+      subject,
+      text,
+      html
+    });
+    return { sent: true };
+  } catch (error) {
+    console.error('[smtp-send-error]', error.message);
+    return { sent: false, reason: error.message };
+  }
 }
 
 export async function sendVerificationCode(email, code) {

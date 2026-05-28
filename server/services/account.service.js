@@ -134,14 +134,24 @@ function makeCode() {
 
 async function sendVerificationEmail(email, code) {
   if (!isSmtpConfigured()) return false;
-  const result = await sendVerificationCode(email, code);
-  return result.sent;
+  try {
+    const result = await sendVerificationCode(email, code);
+    return result.sent;
+  } catch (error) {
+    console.error('[smtp-error] verification:', error.message);
+    return false;
+  }
 }
 
 async function sendResetEmail(email, code) {
   if (!isSmtpConfigured()) return false;
-  const result = await sendPasswordResetCode(email, code);
-  return result.sent;
+  try {
+    const result = await sendPasswordResetCode(email, code);
+    return result.sent;
+  } catch (error) {
+    console.error('[smtp-error] reset:', error.message);
+    return false;
+  }
 }
 
 function publicUser(user) {
