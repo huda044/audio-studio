@@ -20,13 +20,13 @@
   --color-danger:  #E24B4A;
   --color-info:    #378ADD;
 
-  /* Surfaces (dark theme adapted) */
-  --surface-base:    #0a0710;
-  --surface-1:       #14101e;
-  --surface-2:       #1c1730;
-  --surface-3:       #2a2342;
-  --border-default:  rgba(143, 119, 221, 0.18);
-  --border-emphasis: rgba(143, 119, 221, 0.32);
+  /* Surfaces — pure black-ish neutral (Phase 2 mockup) */
+  --surface-base:    #050505;
+  --surface-1:       #0e0e10;
+  --surface-2:       #161618;
+  --surface-3:       #1f1f22;
+  --border-default:  rgba(255, 255, 255, 0.08);
+  --border-emphasis: rgba(143, 119, 221, 0.35);
 
   /* Text */
   --text-primary:   #f1eef9;
@@ -34,7 +34,7 @@
   --text-muted:     #6e6589;
 
   /* Shadow */
-  --shadow-card: 0 8px 32px rgba(38, 33, 92, 0.22);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -1026,4 +1026,133 @@ input:focus, select:focus, textarea:focus {
 @media (max-width: 900px) {
   .sidebar-mobile-toggle { display: inline-flex; }
   .sidebar-mobile-close { display: inline-flex; }
+}
+
+
+/* =====================================================================
+   Pipeline Page — 2-column SaaS layout (Phase 2 mockup)
+   ===================================================================== */
+
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+.pipeline-col {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+/* Source tab toggle (YouTube / Upload) */
+.source-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: var(--surface-2);
+  padding: 4px;
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+.source-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.source-tabs button:hover { color: var(--text-primary); }
+.source-tabs button.active {
+  background: var(--brand-500);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(83, 74, 183, 0.4);
+}
+
+/* Format grid — dropdown 2x2 */
+.format-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+@media (max-width: 540px) {
+  .format-grid { grid-template-columns: 1fr; }
+}
+
+/* Effect chips */
+.effect-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+.chip:hover {
+  border-color: var(--brand-400);
+  color: var(--text-primary);
+}
+.chip.active {
+  background: rgba(127, 119, 221, 0.18);
+  border-color: var(--brand-400);
+  color: var(--brand-100);
+}
+
+/* Advanced collapsible block */
+.advanced-fx {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 12px;
+}
+.advanced-fx > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 0;
+  list-style: none;
+  user-select: none;
+}
+.advanced-fx > summary::-webkit-details-marker { display: none; }
+.advanced-fx > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 140ms ease;
+}
+.advanced-fx[open] > summary::before { transform: rotate(90deg); }
+.advanced-fx[open] > summary { color: var(--brand-200); }
+
+/* Stack on smaller screens */
+@media (max-width: 1024px) {
+  .pipeline-grid { grid-template-columns: 1fr; }
+}
+
+/* Tighten panel padding for the SaaS feel */
+.app-content > .pipeline-grid .panel {
+  padding: 18px 18px 16px;
+  border-radius: 12px;
+  background: var(--surface-1) !important;
+  border: 1px solid var(--border-default) !important;
 }

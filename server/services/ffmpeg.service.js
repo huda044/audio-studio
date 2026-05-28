@@ -56,6 +56,8 @@ function buildFilters(settings) {
 
   if (settings.bassBoost) filters.push('equalizer=f=90:t=q:w=1:g=8');
   if (settings.reverb) filters.push('aecho=0.8:0.88:60:0.35');
+  if (settings.echo) filters.push('aecho=0.8:0.9:1000:0.3');
+  if (settings.normalize) filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
   if (settings.fadeIn > 0) filters.push(`afade=t=in:st=0:d=${clamp(settings.fadeIn, 0, 30)}`);
   if (settings.fadeOut > 0) {
     const fadeOut = clamp(settings.fadeOut, 0, 30);

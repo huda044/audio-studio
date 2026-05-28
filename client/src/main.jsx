@@ -36,6 +36,8 @@ const defaultSettings = {
   pitch: 0,
   bassBoost: false,
   reverb: false,
+  normalize: false,
+  echo: false,
   fadeIn: 0,
   fadeOut: 0,
   trimStart: 0,
@@ -184,6 +186,7 @@ function App() {
   const [youtubeInfo, setYoutubeInfo] = useState(null);
   const [youtubePreviewError, setYoutubePreviewError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
+  const [sourceTab, setSourceTab] = useState('youtube');
   const [settings, setSettings] = useState(defaultSettings);
   const [processed, setProcessed] = useState(null);
   const [mode, setMode] = useState('personal');
@@ -1230,151 +1233,255 @@ function App() {
 
         {activePage === 'pipeline' && (
         <>
-        <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-          <section className="panel">
-            <h2><Youtube size={20} /> Input Audio</h2>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="field">
-                <span>URL YouTube</span>
-                <input value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..." />
-              </label>
-              <label className="field">
-                <span>Upload File (.mp3 / .wav / .ogg)</span>
-                <input type="file" accept=".mp3,.wav,.ogg,audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
-              </label>
-            </div>
+        <div className="pipeline-grid">
+          {/* === Kolom kiri: Sumber Audio + Format & Efek === */}
+          <div className="pipeline-col">
 
-            {youtubeInfo && (
-              <div className="input-preview youtube">
-                <div className="input-preview-head">
-                  <img src={youtubeInfo.thumbnail} alt="" />
-                  <div>
-                    <b>{youtubeInfo.title}</b>
-                    <p className="muted">Durasi: {youtubeInfo.duration ? formatDuration(youtubeInfo.duration) : 'tidak tersedia'}</p>
-                    <p className="muted small">{youtubeUrl}</p>
-                  </div>
-                </div>
-                {extractYoutubeId(youtubeUrl) && (
-                  <iframe
-                    className="youtube-embed"
-                    src={`https://www.youtube.com/embed/${extractYoutubeId(youtubeUrl)}`}
-                    title="YouTube preview"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                  />
-                )}
-              </div>
-            )}
-            {youtubePreviewError && <p className="muted mt-3">{youtubePreviewError}</p>}
-
-            {audioFilePreview && (
-              <div className="input-preview file">
-                <div className="input-preview-head">
-                  <div className="file-icon"><Music2 size={28} /></div>
-                  <div>
-                    <b>{audioFilePreview.name}</b>
-                    <p className="muted">{formatBytes(audioFilePreview.size)} {audioFilePreview.type ? `· ${audioFilePreview.type}` : ''}</p>
-                  </div>
-                  <button className="icon-wide" onClick={() => setAudioFile(null)}>Hapus</button>
-                </div>
-                <audio controls src={audioFilePreview.url} className="w-full" />
-              </div>
-            )}
-          </section>
-
-          <section className="panel">
-            <h2><Music2 size={20} /> Preset Kecepatan</h2>
-            <div className="preset-grid">
-              {presets.map(([label, speed]) => (
-                <button key={label} className={settings.speed === speed ? 'active' : ''} onClick={() => setSetting('speed', speed)}>
-                  {label}<span>{speed}x</span>
+            {/* Sumber Audio dengan tab toggle */}
+            <section className="panel">
+              <h2><Youtube size={20} /> Sumber Audio</h2>
+              <div className="source-tabs">
+                <button
+                  type="button"
+                  className={sourceTab === 'youtube' ? 'active' : ''}
+                  onClick={() => { setSourceTab('youtube'); setAudioFile(null); }}
+                >
+                  <Youtube size={15} /> YouTube
                 </button>
-              ))}
-            </div>
-            <div className="roblox-note">
-              <b>Catatan PlaybackSpeed Roblox</b>
-              <p>Supaya audio terdengar normal di Roblox Studio, gunakan nilai kebalikan dari preset website: <code>PlaybackSpeed = 1 / speed</code>.</p>
-              <div className="speed-table">
-                {presets.map(([label, speed]) => (
-                  <div key={`${label}-roblox`}>
-                    <span>{label}</span>
-                    <code>{`${speed}x -> ${robloxPlaybackSpeed(speed)}`}</code>
-                  </div>
+                <button
+                  type="button"
+                  className={sourceTab === 'upload' ? 'active' : ''}
+                  onClick={() => { setSourceTab('upload'); setYoutubeUrl(''); setYoutubeInfo(null); }}
+                >
+                  <Upload size={15} /> Upload File
+                </button>
+              </div>
+
+              {sourceTab === 'youtube' ? (
+                <>
+                  <label className="field">
+                    <span>URL YouTube</span>
+                    <input
+                      value={youtubeUrl}
+                      onChange={(e) => setYoutubeUrl(e.target.value)}
+                      placeholder="https://youtube.com/watch?v=..."
+                    />
+                  </label>
+                  {youtubeInfo && (
+                    <div className="input-preview youtube">
+                      <div className="input-preview-head">
+                        <img src={youtubeInfo.thumbnail} alt="" />
+                        <div>
+                          <b>{youtubeInfo.title}</b>
+                          <p className="muted">Durasi: {youtubeInfo.duration ? formatDuration(youtubeInfo.duration) : 'tidak tersedia'}</p>
+                          <p className="muted small">{youtubeUrl}</p>
+                        </div>
+                      </div>
+                      {extractYoutubeId(youtubeUrl) && (
+                        <iframe
+                          className="youtube-embed"
+                          src={`https://www.youtube.com/embed/${extractYoutubeId(youtubeUrl)}`}
+                          title="YouTube preview"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      )}
+                    </div>
+                  )}
+                  {youtubePreviewError && <p className="muted mt-3">{youtubePreviewError}</p>}
+                </>
+              ) : (
+                <>
+                  <label className="field">
+                    <span>Upload File (.mp3 / .wav / .ogg)</span>
+                    <input
+                      type="file"
+                      accept=".mp3,.wav,.ogg,audio/*"
+                      onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                  {audioFilePreview && (
+                    <div className="input-preview file">
+                      <div className="input-preview-head">
+                        <div className="file-icon"><Music2 size={28} /></div>
+                        <div>
+                          <b>{audioFilePreview.name}</b>
+                          <p className="muted">{formatBytes(audioFilePreview.size)} {audioFilePreview.type ? `· ${audioFilePreview.type}` : ''}</p>
+                        </div>
+                        <button className="icon-wide" onClick={() => setAudioFile(null)}>Hapus</button>
+                      </div>
+                      <audio controls src={audioFilePreview.url} className="w-full" />
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+
+            {/* Format & Efek (preset speed + EQ + chip toggle + slider lanjutan) */}
+            <section className="panel">
+              <h2><Music2 size={20} /> Format & Efek</h2>
+
+              <div className="format-grid">
+                <label className="field">
+                  <span>Format Output</span>
+                  <select value="ogg" disabled>
+                    <option value="ogg">OGG (Roblox compatible)</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Preset Kecepatan</span>
+                  <select
+                    value={String(settings.speed)}
+                    onChange={(e) => setSetting('speed', Number(e.target.value))}
+                  >
+                    {presets.map(([label, speed]) => (
+                      <option key={label} value={speed}>{label} — {speed}x</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>EQ Preset</span>
+                  <select
+                    value={settings.eqPreset || ''}
+                    onChange={(e) => setSetting('eqPreset', e.target.value)}
+                  >
+                    {EQ_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Durasi Maks (s)</span>
+                  <input
+                    type="number"
+                    min={30}
+                    max={600}
+                    step={10}
+                    value={settings.maxDuration}
+                    onChange={(e) => setSetting('maxDuration', Number(e.target.value) || 0)}
+                  />
+                </label>
+              </div>
+
+              <div className="effect-chips">
+                {[
+                  { key: 'normalize', label: 'Normalize' },
+                  { key: 'bassBoost', label: 'Bass Boost' },
+                  { key: 'reverb', label: 'Reverb' },
+                  { key: 'echo', label: 'Echo' }
+                ].map((chip) => (
+                  <button
+                    type="button"
+                    key={chip.key}
+                    className={`chip ${settings[chip.key] ? 'active' : ''}`}
+                    onClick={() => setSetting(chip.key, !settings[chip.key])}
+                  >
+                    {chip.label}
+                  </button>
                 ))}
               </div>
-            </div>
-          </section>
-        </div>
 
-        <section className="panel">
-          <h2>Panel Efek Audio</h2>
-          <div className="control-grid">
-            <Slider label="Kecepatan" value={settings.speed} min={0.5} max={3} step={0.1} suffix="x" onChange={(v) => setSetting('speed', v)} />
-            <Slider label="Amplifikasi (dB)" value={settings.amplify} min={-20} max={20} step={1} suffix=" dB" onChange={(v) => setSetting('amplify', v)} />
-            <Slider label="Durasi Maks (detik)" value={settings.maxDuration} min={30} max={600} step={10} suffix="s" onChange={(v) => setSetting('maxDuration', v)} />
-            <Slider label="Pitch" value={settings.pitch} min={-12} max={12} step={1} suffix=" st" onChange={(v) => setSetting('pitch', v)} />
-            <Slider label="Fade In" value={settings.fadeIn} min={0} max={30} step={1} suffix="s" onChange={(v) => setSetting('fadeIn', v)} />
-            <Slider label="Fade Out" value={settings.fadeOut} min={0} max={30} step={1} suffix="s" onChange={(v) => setSetting('fadeOut', v)} />
+              <details className="advanced-fx">
+                <summary>Pengaturan Lanjutan</summary>
+                <div className="control-grid">
+                  <Slider label="Kecepatan" value={settings.speed} min={0.5} max={3} step={0.1} suffix="x" onChange={(v) => setSetting('speed', v)} />
+                  <Slider label="Amplifikasi (dB)" value={settings.amplify} min={-20} max={20} step={1} suffix=" dB" onChange={(v) => setSetting('amplify', v)} />
+                  <Slider label="Pitch" value={settings.pitch} min={-12} max={12} step={1} suffix=" st" onChange={(v) => setSetting('pitch', v)} />
+                  <Slider label="Fade In" value={settings.fadeIn} min={0} max={30} step={1} suffix="s" onChange={(v) => setSetting('fadeIn', v)} />
+                  <Slider label="Fade Out" value={settings.fadeOut} min={0} max={30} step={1} suffix="s" onChange={(v) => setSetting('fadeOut', v)} />
+                  <label className="field">
+                    <span>Trim Start (s)</span>
+                    <input type="number" min={0} value={settings.trimStart} onChange={(e) => setSetting('trimStart', Number(e.target.value) || 0)} />
+                  </label>
+                  <label className="field">
+                    <span>Trim End (s)</span>
+                    <input type="number" min={0} value={settings.trimEnd} onChange={(e) => setSetting('trimEnd', Number(e.target.value) || 0)} />
+                  </label>
+                </div>
+                <div className="roblox-note" style={{ marginTop: 12 }}>
+                  <b>PlaybackSpeed Roblox</b>
+                  <p>Supaya audio normal di Roblox Studio: <code>PlaybackSpeed = 1 / speed</code>.</p>
+                  <div className="speed-table">
+                    {presets.map(([label, speed]) => (
+                      <div key={`${label}-roblox`}>
+                        <span>{label}</span>
+                        <code>{`${speed}x → ${robloxPlaybackSpeed(speed)}`}</code>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            </section>
           </div>
-          <div className="toggles">
-            <label><input type="checkbox" checked={settings.bassBoost} onChange={(e) => setSetting('bassBoost', e.target.checked)} /> Bass Boost</label>
-            <label><input type="checkbox" checked={settings.reverb} onChange={(e) => setSetting('reverb', e.target.checked)} /> Reverb</label>
-          </div>
-          <div className="control-grid" style={{ marginTop: 14 }}>
-            <label className="field">
-              <span>EQ Preset</span>
-              <select value={settings.eqPreset || ''} onChange={(e) => setSetting('eqPreset', e.target.value)}>
-                {EQ_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </label>
-            <label className="field">
-              <span>Trim Start (detik, 0 = mulai dari awal)</span>
-              <input type="number" min={0} value={settings.trimStart} onChange={(e) => setSetting('trimStart', Number(e.target.value) || 0)} />
-            </label>
-            <label className="field">
-              <span>Trim End (detik, 0 = sampai akhir)</span>
-              <input type="number" min={0} value={settings.trimEnd} onChange={(e) => setSetting('trimEnd', Number(e.target.value) || 0)} />
-            </label>
-          </div>
-        </section>
 
-        <section className="panel">
-          <h2>Preview Audio</h2>
-          <div ref={waveBoxRef} className="wavebox" />
-          {processed ? (
-            <>
-              <audio className="w-full" controls src={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`} />
-              <div className="result-info">
-                <span><b>{processed.title}</b></span>
-                <span className="muted">Durasi: {formatDuration(processed.duration)}</span>
-                <span className="muted">Ukuran: {formatBytes(processed.sizeBytes)}</span>
+          {/* === Kolom kanan: Preview + Aksi === */}
+          <div className="pipeline-col">
+            <section className="panel">
+              <h2>Preview Audio</h2>
+              <div ref={waveBoxRef} className="wavebox" />
+              {processed ? (
+                <>
+                  <audio className="w-full" controls src={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`} />
+                  <div className="result-info">
+                    <span><b>{processed.title}</b></span>
+                    <span className="muted">Durasi: {formatDuration(processed.duration)}</span>
+                    <span className="muted">Ukuran: {formatBytes(processed.sizeBytes)}</span>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">Hasil konversi akan muncul di sini sebelum diupload.</p>
+              )}
+              <div className="actions">
+                <button className="secondary" onClick={handleProcessClick} disabled={loading || (!audioFile && !youtubeUrl)}>
+                  {loading ? <Loader2 className="spin" size={18} /> : <Music2 size={18} />} Konversi Audio
+                </button>
+                {processed && (
+                  <a
+                    className="primary"
+                    href={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`}
+                    download={processed.fileName || 'audio.ogg'}
+                  >
+                    Download OGG
+                  </a>
+                )}
+                {processed && (
+                  <button className="icon-wide" onClick={() => setProcessed(null)}>Convert Lagi</button>
+                )}
               </div>
-            </>
-          ) : (
-            <p className="muted">Hasil konversi akan muncul di sini sebelum diupload.</p>
-          )}
-          <div className="actions">
-            <button className="secondary" onClick={handleProcessClick} disabled={loading || (!audioFile && !youtubeUrl)}>
-              {loading ? <Loader2 className="spin" size={18} /> : <Music2 size={18} />} Konversi Audio
-            </button>
-            {processed && (
-              <a
-                className="primary"
-                href={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`}
-                download={processed.fileName || 'audio.ogg'}
-              >
-                Download OGG
-              </a>
-            )}
-            {processed && (
-              <button className="icon-wide" onClick={() => setProcessed(null)}>Convert Lagi</button>
-            )}
+            </section>
+
+            <section className="panel">
+              <h2><Upload size={20} /> Upload ke Roblox</h2>
+              <div className="segmented">
+                <button className={mode === 'personal' ? 'active' : ''} onClick={() => setMode('personal')}>Personal Account</button>
+                <button className={mode === 'group' ? 'active' : ''} onClick={() => setMode('group')}>Group</button>
+              </div>
+              {mode === 'personal' ? (
+                <label className="field"><span>Roblox User ID</span><input value={userId} onChange={(e) => setUserId(e.target.value)} /></label>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="field">
+                    <span>Pilih Grup Tertaut</span>
+                    <select value={selectedGroupId} onChange={(e) => setSelectedGroupId(e.target.value)}>
+                      <option value="">Manual / belum pilih</option>
+                      {linkedGroupOptions}
+                    </select>
+                  </label>
+                  <label className="field"><span>Group ID Manual</span><input value={groupId} onChange={(e) => setGroupId(e.target.value)} /></label>
+                </div>
+              )}
+              <label className="field">
+                <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
+                <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
+              </label>
+              <button className="primary" onClick={convertAndUpload} disabled={loading || (!audioFile && !youtubeUrl && !processed)}>
+                {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />} Convert & Upload
+              </button>
+            </section>
           </div>
-        </section>
+        </div>
         </>
         )}
 
-        {(activePage === 'pipeline' || activePage === 'keys') && (
+        {activePage === 'keys' && (
           <section className="panel">
             <h2><Upload size={20} /> Konfigurasi Upload Roblox</h2>
             <div className="segmented">
@@ -1399,21 +1506,12 @@ function App() {
               <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
               <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
             </label>
-            {activePage === 'pipeline' && (
-              <button className="primary" onClick={convertAndUpload} disabled={loading || (!audioFile && !youtubeUrl && !processed)}>
-                {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />} Convert & Upload
-              </button>
-            )}
-            {activePage === 'keys' && (
-              <>
-                <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
-                <button className="secondary" onClick={testRobloxConnection} disabled={!apiKey}>Test Connection</button>
-              </>
-            )}
+            <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
+            <button className="secondary" onClick={testRobloxConnection} disabled={!apiKey}>Test Connection</button>
           </section>
         )}
 
-        {(activePage === 'pipeline' || activePage === 'groups') && (
+        {activePage === 'groups' && (
           <section className="panel">
             <h2><LinkIcon size={20} /> Manajemen Grup</h2>
             <div className="grid gap-3 md:grid-cols-3">

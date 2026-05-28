@@ -69,6 +69,8 @@ function parseSettings(raw = '{}') {
     pitch: Number(parsed.pitch ?? 0),
     bassBoost: Boolean(parsed.bassBoost),
     reverb: Boolean(parsed.reverb),
+    normalize: Boolean(parsed.normalize),
+    echo: Boolean(parsed.echo),
     fadeIn: Number(parsed.fadeIn ?? 0),
     fadeOut: Number(parsed.fadeOut ?? 0),
     trimStart: Number(parsed.trimStart ?? 0),
