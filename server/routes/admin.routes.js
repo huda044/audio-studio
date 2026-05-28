@@ -33,6 +33,33 @@ router.use(adminLimit, adminGuard);
 
 router.get('/check', (_req, res) => res.json({ ok: true }));
 
+router.post('/test-email', async (req, res) => {
+  try {
+    const { sendEmail, isSmtpConfigured } = await import('../services/email.service.js');
+    if (!isSmtpConfigured()) return res.json({ ok: false, reason: 'smtp_not_configured', env: { SMTP_HOST: process.env.SMTP_HOST || '(empty)' } });
+    const to = String(req.body?.to || '').trim();
+    if (!to) return res.status(400).json({ error: 'Field "to" wajib.' });
+    const result = await sendEmail({
+      to,
+      subject: 'Test Email — Audio Studio',
+      text: 'Test SMTP dari Audio Studio. Kalau email ini sampai, SMTP sudah jalan.',
+      html: '<p>Test SMTP dari <b>Audio Studio</b>. Kalau email ini sampai, SMTP sudah jalan.</p>'
+    });
+    res.json({
+      ok: result.sent,
+      reason: result.reason || null,
+      env: {
+        SMTP_HOST: process.env.SMTP_HOST || '(empty)',
+        SMTP_PORT: process.env.SMTP_PORT || '(default 587)',
+        SMTP_USER: process.env.SMTP_USER || '(empty)',
+        EMAIL_FROM: process.env.EMAIL_FROM || process.env.SMTP_USER || '(empty)'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 router.get('/stats', async (_req, res, next) => {
   try {
     res.json(await adminStats());
