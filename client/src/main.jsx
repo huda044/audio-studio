@@ -106,6 +106,35 @@ function robloxPlaybackSpeed(speed) {
   return (1 / Number(speed)).toFixed(2);
 }
 
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function extractYoutubeId(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes('youtu.be')) return parsed.pathname.split('/').filter(Boolean)[0] || '';
+    if (parsed.searchParams.get('v')) return parsed.searchParams.get('v');
+    const m1 = parsed.pathname.match(/\/shorts\/([^/?]+)/);
+    if (m1) return m1[1];
+    const m2 = parsed.pathname.match(/\/embed\/([^/?]+)/);
+    if (m2) return m2[1];
+  } catch {
+    return '';
+  }
+  return '';
+}
+
 function compactGroups(items) {
   return (Array.isArray(items) ? items : []).slice(0, 30).map((group) => ({
     id: group.id,
@@ -165,6 +194,8 @@ function App() {
   const [syncingProfile, setSyncingProfile] = useState(false);
   const lastProfileSyncRef = useRef('');
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
+  const [audioFilePreview, setAudioFilePreview] = useState(null);
   const [toast, setToast] = useState(null);
   const [adminMode, setAdminMode] = useState(false);
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
@@ -300,6 +331,21 @@ function App() {
       })
       .catch(() => {});
   }, [authToken, currentUser?.id]);
+
+  useEffect(() => {
+    if (!audioFile) {
+      setAudioFilePreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(audioFile);
+    setAudioFilePreview({
+      name: audioFile.name,
+      size: audioFile.size,
+      type: audioFile.type,
+      url
+    });
+    return () => URL.revokeObjectURL(url);
+  }, [audioFile]);
 
   useEffect(() => {
     const trimmed = youtubeUrl.trim();
@@ -584,6 +630,7 @@ function App() {
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('youtubeUrl', youtubeUrl);
     form.append('settings', JSON.stringify(settings));
+    setLoadingStep(youtubeUrl ? 'Mengunduh audio dari YouTube...' : 'Memproses file audio...');
     const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', headers: authHeaders(), body: form });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Konversi audio gagal.');
@@ -591,14 +638,18 @@ function App() {
       setCurrentUser((user) => user ? { ...user, usage: data.account.usage, subscription: data.account.subscription } : user);
     }
     setProcessed(data);
+    setLoadingStep('Konversi selesai.');
     notify('Konversi Audio selesai.');
     return data;
   }
 
   async function convertAndUpload() {
+    if (loading) return;
     try {
       setLoading(true);
+      setLoadingStep('Memulai konversi...');
       const result = processed || await processOnly();
+      setLoadingStep('Mengirim audio ke Roblox...');
       const audioSource = result.audioDataUrl || `${API_BASE}${result.audioUrl}`;
       const blob = await fetch(audioSource).then((response) => response.blob());
       const form = new FormData();
@@ -615,6 +666,7 @@ function App() {
         description: `Speed ${settings.speed}x, Amplifikasi ${settings.amplify} dB`
       }));
 
+      setLoadingStep('Menunggu Roblox memproses asset...');
       const response = await fetch(`${API_BASE}/api/upload-roblox`, { method: 'POST', body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Upload Roblox gagal.');
@@ -636,17 +688,21 @@ function App() {
       notify(error.message, 'error');
     } finally {
       setLoading(false);
+      setLoadingStep('');
     }
   }
 
   async function handleProcessClick() {
+    if (loading) return;
     try {
       setLoading(true);
+      setLoadingStep('Memulai konversi...');
       await processOnly();
     } catch (error) {
       notify(error.message, 'error');
     } finally {
       setLoading(false);
+      setLoadingStep('');
     }
   }
 
@@ -728,6 +784,16 @@ function App() {
   return (
     <main className="min-h-screen bg-[#0d1117] text-slate-100">
       <Toast toast={toast} />
+      {loading && (
+        <div className="loading-overlay">
+          <div className="loading-card">
+            <Loader2 className="spin" size={40} />
+            <h3>Memproses</h3>
+            <p>{loadingStep || 'Mohon tunggu...'}</p>
+            <p className="muted small">Jangan tutup tab ini sampai selesai.</p>
+          </div>
+        </div>
+      )}
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 lg:px-8">
         <header className="flex flex-col gap-3 border-b border-slate-800 pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -940,16 +1006,43 @@ function App() {
                 <input type="file" accept=".mp3,.wav,.ogg,audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
               </label>
             </div>
+
             {youtubeInfo && (
-              <div className="preview-row">
-                <img src={youtubeInfo.thumbnail} alt="" />
-                <div>
-                  <b>{youtubeInfo.title}</b>
-                  <p>{youtubeInfo.duration ? `${Math.round(youtubeInfo.duration)} detik` : 'Durasi tidak tersedia'}</p>
+              <div className="input-preview youtube">
+                <div className="input-preview-head">
+                  <img src={youtubeInfo.thumbnail} alt="" />
+                  <div>
+                    <b>{youtubeInfo.title}</b>
+                    <p className="muted">Durasi: {youtubeInfo.duration ? formatDuration(youtubeInfo.duration) : 'tidak tersedia'}</p>
+                    <p className="muted small">{youtubeUrl}</p>
+                  </div>
                 </div>
+                {extractYoutubeId(youtubeUrl) && (
+                  <iframe
+                    className="youtube-embed"
+                    src={`https://www.youtube.com/embed/${extractYoutubeId(youtubeUrl)}`}
+                    title="YouTube preview"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                )}
               </div>
             )}
             {youtubePreviewError && <p className="muted mt-3">{youtubePreviewError}</p>}
+
+            {audioFilePreview && (
+              <div className="input-preview file">
+                <div className="input-preview-head">
+                  <div className="file-icon"><Music2 size={28} /></div>
+                  <div>
+                    <b>{audioFilePreview.name}</b>
+                    <p className="muted">{formatBytes(audioFilePreview.size)} {audioFilePreview.type ? `· ${audioFilePreview.type}` : ''}</p>
+                  </div>
+                  <button className="icon-wide" onClick={() => setAudioFile(null)}>Hapus</button>
+                </div>
+                <audio controls src={audioFilePreview.url} className="w-full" />
+              </div>
+            )}
           </section>
 
           <section className="panel">
