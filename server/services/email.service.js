@@ -27,6 +27,35 @@ function brand() {
   };
 }
 
+async function sendViaBrevoApi({ to, subject, html, text }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) return null;
+  const fromEmail = process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const fromName = process.env.APP_NAME || 'Audio Studio';
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'api-key': apiKey
+    },
+    body: JSON.stringify({
+      sender: { name: fromName, email: fromEmail },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+      textContent: text
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.message || `Brevo API ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return { messageId: data.messageId };
+}
+
 function shell(title, bodyHtml) {
   const { name, color, site } = brand();
   return `<!doctype html><html><body style="margin:0;padding:0;background:#0d1117;font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;color:#e2e8f0;">
@@ -49,6 +78,16 @@ function shell(title, bodyHtml) {
 }
 
 export async function sendEmail({ to, subject, html, text }) {
+  // Prefer Brevo HTTP API if BREVO_API_KEY is set (works behind firewalls that block SMTP)
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const result = await sendViaBrevoApi({ to, subject, html, text });
+      if (result) return { sent: true, via: 'brevo-api', messageId: result.messageId };
+    } catch (error) {
+      console.error('[brevo-api-error]', error.message);
+      // fallthrough to SMTP if available
+    }
+  }
   const transporter = getTransporter();
   if (!transporter) return { sent: false, reason: 'smtp_not_configured' };
   try {
@@ -59,7 +98,7 @@ export async function sendEmail({ to, subject, html, text }) {
       text,
       html
     });
-    return { sent: true };
+    return { sent: true, via: 'smtp' };
   } catch (error) {
     console.error('[smtp-send-error]', error.message);
     return { sent: false, reason: error.message };
@@ -110,7 +149,7 @@ export async function sendPaidActivated(email, invoice) {
 }
 
 export function isSmtpConfigured() {
-  return Boolean(process.env.SMTP_HOST);
+  return Boolean(process.env.SMTP_HOST || process.env.BREVO_API_KEY);
 }
 
 export async function sendPasswordResetCode(email, code) {
