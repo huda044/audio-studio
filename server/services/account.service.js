@@ -899,6 +899,23 @@ export async function adminStats() {
   };
 }
 
+export async function adminActivityFeed(limit = 50) {
+  const store = await readStore();
+  const events = [];
+  for (const user of store.users) {
+    for (const log of (user.auditLog || [])) {
+      events.push({
+        ...log,
+        userId: user.id,
+        username: user.username,
+        userEmail: user.email
+      });
+    }
+  }
+  events.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  return events.slice(0, limit);
+}
+
 export async function handleMidtransWebhook(payload) {
   const orderId = payload.order_id || payload.orderId;
   if (!orderId) {

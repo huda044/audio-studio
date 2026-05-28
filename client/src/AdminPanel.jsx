@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Crown,
   Loader2,
+  Mail,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -40,6 +41,7 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
 
   const [tab, setTab] = useState('overview');
   const [stats, setStats] = useState(null);
+  const [activity, setActivity] = useState([]);
   const [users, setUsers] = useState([]);
   const [usersTotal, setUsersTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -49,6 +51,7 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
   const [loading, setLoading] = useState(false);
   const [payments, setPayments] = useState([]);
   const [paymentFilter, setPaymentFilter] = useState('');
+  const [emailTest, setEmailTest] = useState({ to: '', sending: false, result: null });
 
   const call = useCallback(async (path, options = {}) => {
     const response = await fetch(`${apiBase}/api/admin${path}`, {
@@ -70,15 +73,17 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
     if (rejected) return;
     try {
       setLoading(true);
-      const [statsData, usersData, paymentsData] = await Promise.all([
+      const [statsData, usersData, paymentsData, activityData] = await Promise.all([
         call('/stats'),
         call(`/users?search=${encodeURIComponent(search)}&limit=200`),
-        call(`/payments?status=${encodeURIComponent(paymentFilter)}&limit=200`)
+        call(`/payments?status=${encodeURIComponent(paymentFilter)}&limit=200`),
+        call('/activity?limit=30').catch(() => ({ events: [] }))
       ]);
       setStats(statsData);
       setUsers(usersData.users || []);
       setUsersTotal(usersData.total || 0);
       setPayments(paymentsData.payments || []);
+      setActivity(activityData.events || []);
     } catch (error) {
       if (error.status === 403 || error.message?.includes('ditolak')) {
         setRejected(true);
@@ -219,6 +224,23 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
     }
   }
 
+  async function sendTestEmail() {
+    if (!emailTest.to.trim()) {
+      notify?.('Masukkan alamat email tujuan.', 'error');
+      return;
+    }
+    setEmailTest((s) => ({ ...s, sending: true, result: null }));
+    try {
+      const data = await call('/test-email', { method: 'POST', body: JSON.stringify({ to: emailTest.to.trim() }) });
+      setEmailTest((s) => ({ ...s, sending: false, result: data }));
+      if (data.ok) notify?.('Email test terkirim. Cek inbox.');
+      else notify?.(data.reason || 'Gagal kirim email.', 'error');
+    } catch (error) {
+      setEmailTest((s) => ({ ...s, sending: false, result: { ok: false, reason: error.message } }));
+      notify?.(error.message, 'error');
+    }
+  }
+
   return (
     <main className="admin-shell">
       <header className="admin-topbar">
@@ -229,6 +251,7 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
           <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><ShieldCheck size={15} /> Overview</button>
           <button className={tab === 'users' || tab === 'user-detail' ? 'active' : ''} onClick={() => setTab('users')}><UserCog size={15} /> Users</button>
           <button className={tab === 'invoices' ? 'active' : ''} onClick={() => setTab('invoices')}><Wallet size={15} /> Invoices</button>
+          <button className={tab === 'email' ? 'active' : ''} onClick={() => setTab('email')}><Mail size={15} /> Email Test</button>
         </div>
         <div className="admin-actions">
           <button className="secondary" onClick={refresh} disabled={loading}>{loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} Refresh</button>
@@ -237,12 +260,62 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
       </header>
 
       {tab === 'overview' && (
+        <>
         <section className="admin-grid">
           <article className="stat-card"><span>Total User</span><b>{stats?.users?.total ?? '-'}</b><p>{stats?.users?.verified || 0} terverifikasi</p></article>
           <article className="stat-card"><span>User Paid</span><b>{stats?.users?.paid ?? '-'}</b><p>{stats?.users?.suspended || 0} suspended/banned</p></article>
           <article className="stat-card"><span>Total Konversi</span><b>{stats?.conversions ?? '-'}</b><p>seluruh user</p></article>
           <article className="stat-card"><span>Invoice Pending</span><b>{stats?.invoices?.pending ?? '-'}</b><p>{stats?.invoices?.accepted || 0} diterima</p></article>
           <article className="stat-card wide"><span>Pendapatan Tercatat</span><b>{fmtMoney(stats?.invoices?.revenue)}</b><p>akumulasi invoice diterima</p></article>
+        </section>
+        <section className="admin-block">
+          <h3 style={{ margin: 0, fontSize: 13, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--brand-200)' }}>Activity Feed</h3>
+          <div className="audit-log">
+            {activity.length === 0 && <p className="muted">Belum ada aktivitas.</p>}
+            {activity.map((event) => (
+              <div key={event.id}>
+                <b>{event.event}</b>
+                <span>@{event.username}</span>
+                <span className="muted">{fmtDate(event.at)}</span>
+                {event.invoiceId && <span className="muted small">{event.invoiceId}</span>}
+                {event.changed?.length ? <span className="muted small">{event.changed.join(', ')}</span> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+        </>
+      )}
+
+      {tab === 'email' && (
+        <section className="admin-block">
+          <h3 style={{ margin: 0, fontSize: 13, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--brand-200)' }}>Test Email Delivery</h3>
+          <p className="muted">Kirim email test untuk memastikan SMTP / Brevo API jalan.</p>
+          <div className="actions tight" style={{ marginTop: 6 }}>
+            <input
+              type="email"
+              placeholder="alamat@email.com"
+              value={emailTest.to}
+              onChange={(e) => setEmailTest((s) => ({ ...s, to: e.target.value }))}
+              style={{ minWidth: 260 }}
+            />
+            <button className="primary" onClick={sendTestEmail} disabled={emailTest.sending}>
+              {emailTest.sending ? <><Loader2 size={14} className="spin" /> Mengirim...</> : <><Mail size={14} /> Kirim Test</>}
+            </button>
+          </div>
+          {emailTest.result && (
+            <div className="admin-card" style={{ marginTop: 12 }}>
+              <h3>Hasil</h3>
+              <p className={emailTest.result.ok ? '' : 'muted'} style={{ color: emailTest.result.ok ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                {emailTest.result.ok ? '✓ Email terkirim' : `✗ Gagal: ${emailTest.result.reason}`}
+              </p>
+              {emailTest.result.via && <p className="muted small">Channel: {emailTest.result.via}</p>}
+              {emailTest.result.env && (
+                <pre style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--surface-2)', padding: 10, borderRadius: 8, overflow: 'auto' }}>
+{JSON.stringify(emailTest.result.env, null, 2)}
+                </pre>
+              )}
+            </div>
+          )}
         </section>
       )}
 

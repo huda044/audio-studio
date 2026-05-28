@@ -9,6 +9,7 @@ import {
   adminListPayments,
   adminRejectPayment,
   adminStats,
+  adminActivityFeed,
   confirmPayment,
   isAdminRequest
 } from '../services/account.service.js';
@@ -63,6 +64,15 @@ router.post('/test-email', async (req, res) => {
 router.get('/stats', async (_req, res, next) => {
   try {
     res.json(await adminStats());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/activity', async (req, res, next) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    res.json({ events: await adminActivityFeed(limit) });
   } catch (error) {
     next(error);
   }
