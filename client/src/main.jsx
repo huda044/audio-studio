@@ -892,6 +892,7 @@ function App() {
           </section>
         )}
 
+        {(!currentUser || activePage === 'settings' || activePage === 'billing') && (
         <section className="panel">
           <h2><User size={20} /> Akun Audio Studio</h2>
           {currentUser ? (
@@ -1063,7 +1064,10 @@ function App() {
             </div>
           )}
         </section>
+        )}
 
+        {activePage === 'pipeline' && (
+        <>
         <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
           <section className="panel">
             <h2><Youtube size={20} /> Input Audio</h2>
@@ -1189,7 +1193,10 @@ function App() {
             )}
           </div>
         </section>
+        </>
+        )}
 
+        {(activePage === 'pipeline' || activePage === 'keys' || activePage === 'groups') && (
         <div className="grid gap-5 lg:grid-cols-2">
           <section className="panel">
             <h2><Upload size={20} /> Konfigurasi Upload Roblox</h2>
@@ -1238,7 +1245,9 @@ function App() {
             </div>
           </section>
         </div>
+        )}
 
+        {activePage === 'history' && (
         <section className="panel">
           <h2>Dashboard Riwayat Upload</h2>
           <div className="history-grid">
@@ -1286,6 +1295,7 @@ function App() {
             {!history.length && <p className="muted">Belum ada riwayat upload.</p>}
           </div>
         </section>
+        )}
       </AppShell>
     </>
   );
