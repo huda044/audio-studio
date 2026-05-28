@@ -3,6 +3,7 @@ import multer from 'multer';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
@@ -14,9 +15,26 @@ import { probeAudio } from '../services/ffmpeg.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsDir = process.env.VERCEL
-  ? path.join(os.tmpdir(), 'audio-studio-uploads')
-  : path.resolve(__dirname, '..', '..', 'uploads');
+
+function resolveUploadsDir() {
+  const candidates = [];
+  if (process.env.UPLOADS_DIR) candidates.push(process.env.UPLOADS_DIR);
+  if (process.env.VERCEL) candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
+  candidates.push(path.resolve(__dirname, '..', '..', 'uploads'));
+  candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
+  for (const dir of candidates) {
+    try {
+      fsSync.mkdirSync(dir, { recursive: true });
+      fsSync.accessSync(dir, fsSync.constants.W_OK);
+      return dir;
+    } catch {
+      // try next
+    }
+  }
+  return path.join(os.tmpdir(), 'audio-studio-uploads');
+}
+
+const uploadsDir = resolveUploadsDir();
 
 const router = express.Router();
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);

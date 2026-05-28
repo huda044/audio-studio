@@ -13,10 +13,28 @@ import adminRoutes from './routes/admin.routes.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
-const uploadsDir = process.env.VERCEL ? path.join(os.tmpdir(), 'audio-studio-uploads') : path.join(rootDir, 'uploads');
-const port = process.env.PORT || 4000;
 
-await fs.mkdir(uploadsDir, { recursive: true });
+async function resolveUploadsDir() {
+  const fsSync = await import('node:fs');
+  const candidates = [];
+  if (process.env.UPLOADS_DIR) candidates.push(process.env.UPLOADS_DIR);
+  if (process.env.VERCEL) candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
+  candidates.push(path.join(rootDir, 'uploads'));
+  candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
+  for (const dir of candidates) {
+    try {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.access(dir, fsSync.constants.W_OK);
+      return dir;
+    } catch {
+      // try next
+    }
+  }
+  return path.join(os.tmpdir(), 'audio-studio-uploads');
+}
+
+const uploadsDir = await resolveUploadsDir();
+const port = process.env.PORT || 4000;
 
 const configuredOrigins = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const allowedOrigins = configuredOrigins

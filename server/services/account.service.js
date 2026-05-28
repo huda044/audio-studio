@@ -8,7 +8,28 @@ import { nanoid } from 'nanoid';
 import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, isSmtpConfigured } from './email.service.js';
 import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js';
 
-const dataDir = process.env.DATA_DIR || (process.env.VERCEL ? path.join(os.tmpdir(), 'audio-studio-data') : path.resolve('data'));
+import fsSync from 'node:fs';
+
+function resolveDataDir() {
+  const candidates = [];
+  if (process.env.DATA_DIR) candidates.push(process.env.DATA_DIR);
+  if (process.env.VERCEL) candidates.push(path.join(os.tmpdir(), 'audio-studio-data'));
+  candidates.push(path.resolve('data'));
+  candidates.push(path.join(os.tmpdir(), 'audio-studio-data'));
+  for (const dir of candidates) {
+    try {
+      fsSync.mkdirSync(dir, { recursive: true });
+      fsSync.accessSync(dir, fsSync.constants.W_OK);
+      return dir;
+    } catch {
+      // try next
+    }
+  }
+  // last resort, will likely fail later but keeps server starting
+  return path.join(os.tmpdir(), 'audio-studio-data');
+}
+
+const dataDir = resolveDataDir();
 const usersPath = path.join(dataDir, 'users.json');
 const paymentsPath = path.join(dataDir, 'payments.json');
 const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
@@ -835,19 +856,6 @@ export async function handleMidtransWebhook(payload) {
     await writePayments(paymentStore);
   }
   return invoice;
-}
-  const secret = process.env.ADMIN_SECRET;
-  if (secret && req.headers['x-admin-secret'] === secret) return { ok: true, actor: 'secret' };
-  try {
-    const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    if (!token) return { ok: false };
-    const decoded = verifyToken(token);
-    if (decoded?.role === 'admin') return { ok: true, actor: decoded.username || decoded.sub };
-  } catch {
-    // ignore invalid tokens
-  }
-  return { ok: false };
 }
 
 
