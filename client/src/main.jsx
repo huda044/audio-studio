@@ -37,8 +37,19 @@ const defaultSettings = {
   bassBoost: false,
   reverb: false,
   fadeIn: 0,
-  fadeOut: 0
+  fadeOut: 0,
+  trimStart: 0,
+  trimEnd: 0,
+  eqPreset: ''
 };
+
+const EQ_PRESETS = [
+  { value: '', label: 'Flat (default)' },
+  { value: 'bass_heavy', label: 'Bass Heavy' },
+  { value: 'vocal_clear', label: 'Vocal Clear' },
+  { value: 'lo_fi', label: 'Lo-Fi' },
+  { value: 'podcast', label: 'Podcast' }
+];
 
 function encrypt(value) {
   return CryptoJS.AES.encrypt(value || '', KEY_SECRET).toString();
@@ -404,6 +415,62 @@ function App() {
     waveRef.current.load(source);
     return () => waveRef.current?.destroy();
   }, [processed]);
+
+  // Auto-poll pending asset status setiap 60 detik
+  useEffect(() => {
+    if (!history.length || !apiKey) return;
+    const hasPending = history.some((entry) => entry.parts?.some((p) => p.status === 'Pending' && p.operationId));
+    if (!hasPending) return;
+
+    const interval = setInterval(async () => {
+      const uploadKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
+      if (!uploadKey) return;
+      const pendingPairs = [];
+      for (const entry of history) {
+        for (const part of (entry.parts || [])) {
+          if (part.status === 'Pending' && part.operationId) {
+            pendingPairs.push({ entryId: entry.id, partNum: part.part, operationId: part.operationId });
+            if (pendingPairs.length >= 5) break;
+          }
+        }
+        if (pendingPairs.length >= 5) break;
+      }
+      if (!pendingPairs.length) return;
+      const updates = await Promise.all(pendingPairs.map(async (pair) => {
+        try {
+          const r = await fetch(`${API_BASE}/api/asset-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operationId: pair.operationId, apiKey: uploadKey })
+          });
+          if (!r.ok) return null;
+          const d = await r.json();
+          return { ...pair, ...d };
+        } catch { return null; }
+      }));
+      const valid = updates.filter(Boolean).filter((u) => u.status && u.status !== 'Pending');
+      if (!valid.length) return;
+      setHistory((items) => items.map((entry) => {
+        const matches = valid.filter((u) => u.entryId === entry.id);
+        if (!matches.length) return entry;
+        return {
+          ...entry,
+          parts: entry.parts.map((p) => {
+            const m = matches.find((x) => x.partNum === p.part);
+            if (!m) return p;
+            return {
+              ...p,
+              status: m.status,
+              assetId: m.assetId || p.assetId,
+              rbxassetid: m.rbxassetid || p.rbxassetid,
+              error: m.error || null
+            };
+          })
+        };
+      }));
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [history, apiKey, mode, activeGroup]);
 
   const linkedGroupOptions = useMemo(() => groups.map((group) => (
     <option key={group.groupId} value={group.groupId}>{group.name} ({group.groupId})</option>
@@ -795,6 +862,39 @@ function App() {
     const ids = entry.parts.filter((part) => part.rbxassetid).map((part, index) => `[${index + 1}] = "${part.rbxassetid}"`).join(',\n');
     navigator.clipboard.writeText(`{\n${ids}\n}`);
     notify('Format CENZ disalin.');
+  }
+
+  function reuseEntry(entry) {
+    if (entry.youtubeUrl) {
+      setYoutubeUrl(entry.youtubeUrl);
+      setAudioFile(null);
+    }
+    if (entry.settings) {
+      setSettings({ ...defaultSettings, ...entry.settings });
+    }
+    setProcessed(null);
+    setActivePage('pipeline');
+    notify('Settings dimuat dari riwayat. Klik Convert untuk ulang.');
+  }
+
+  async function testRobloxConnection() {
+    const key = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
+    if (!key) {
+      notify('Isi API key dulu.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/roblox-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key })
+      });
+      const data = await response.json();
+      if (data.ok) notify('API key valid. Roblox API menerima koneksi.');
+      else notify(data.error || 'Test koneksi gagal.', 'error');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
   }
 
   async function recheckPart(entry, part) {
@@ -1220,6 +1320,22 @@ function App() {
             <label><input type="checkbox" checked={settings.bassBoost} onChange={(e) => setSetting('bassBoost', e.target.checked)} /> Bass Boost</label>
             <label><input type="checkbox" checked={settings.reverb} onChange={(e) => setSetting('reverb', e.target.checked)} /> Reverb</label>
           </div>
+          <div className="control-grid" style={{ marginTop: 14 }}>
+            <label className="field">
+              <span>EQ Preset</span>
+              <select value={settings.eqPreset || ''} onChange={(e) => setSetting('eqPreset', e.target.value)}>
+                {EQ_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Trim Start (detik, 0 = mulai dari awal)</span>
+              <input type="number" min={0} value={settings.trimStart} onChange={(e) => setSetting('trimStart', Number(e.target.value) || 0)} />
+            </label>
+            <label className="field">
+              <span>Trim End (detik, 0 = sampai akhir)</span>
+              <input type="number" min={0} value={settings.trimEnd} onChange={(e) => setSetting('trimEnd', Number(e.target.value) || 0)} />
+            </label>
+          </div>
         </section>
 
         <section className="panel">
@@ -1289,7 +1405,10 @@ function App() {
               </button>
             )}
             {activePage === 'keys' && (
-              <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
+              <>
+                <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
+                <button className="secondary" onClick={testRobloxConnection} disabled={!apiKey}>Test Connection</button>
+              </>
             )}
           </section>
         )}
@@ -1380,6 +1499,7 @@ function App() {
                   </div>
                   <div className="actions">
                     <button className="secondary" onClick={() => copyCenz(entry)}><Copy size={16} /> Copy in CENZ Format</button>
+                    <button className="secondary" onClick={() => reuseEntry(entry)}>Re-upload</button>
                     <button className="icon" onClick={() => setHistory((items) => items.filter((item) => item.id !== entry.id))}><Trash2 size={17} /></button>
                   </div>
                 </div>

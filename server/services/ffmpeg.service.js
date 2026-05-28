@@ -43,6 +43,17 @@ function buildFilters(settings) {
   filters.push(...atempoChain(speed));
   filters.push(`volume=${amplify}dB`);
 
+  // EQ presets
+  const eqPresets = {
+    bass_heavy: ['equalizer=f=60:width_type=o:width=2:g=8', 'equalizer=f=200:width_type=o:width=1:g=3'],
+    vocal_clear: ['equalizer=f=3000:width_type=o:width=1:g=4', 'equalizer=f=7000:width_type=o:width=1:g=2'],
+    lo_fi: ['equalizer=f=100:width_type=o:width=2:g=3', 'equalizer=f=8000:width_type=o:width=2:g=-6'],
+    podcast: ['equalizer=f=100:width_type=h:width=80:g=-10', 'equalizer=f=3000:width_type=o:width=1:g=3']
+  };
+  if (settings.eqPreset && eqPresets[settings.eqPreset]) {
+    filters.push(...eqPresets[settings.eqPreset]);
+  }
+
   if (settings.bassBoost) filters.push('equalizer=f=90:t=q:w=1:g=8');
   if (settings.reverb) filters.push('aecho=0.8:0.88:60:0.35');
   if (settings.fadeIn > 0) filters.push(`afade=t=in:st=0:d=${clamp(settings.fadeIn, 0, 30)}`);
@@ -66,14 +77,22 @@ export function probeAudio(inputPath) {
 
 export async function processAudio({ inputPath, outputPath, settings }) {
   const { filters, maxDuration } = buildFilters(settings);
+  const trimStart = Math.max(0, Number(settings.trimStart || 0));
+  const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
   await new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    let cmd = ffmpeg(inputPath);
+    if (trimStart > 0) cmd = cmd.seekInput(trimStart);
+    cmd
       .audioFilters(filters)
       .audioCodec('libvorbis')
       .audioBitrate('128k')
       .format('ogg')
-      .duration(maxDuration)
-      .outputOptions(['-vn'])
+      .outputOptions(['-vn']);
+    // Use trimEnd if specified (seconds from start of original after seek)
+    const effectiveDuration = trimEnd > 0 && trimEnd > trimStart
+      ? Math.min(trimEnd - trimStart, maxDuration)
+      : maxDuration;
+    cmd.duration(effectiveDuration)
       .on('end', resolve)
       .on('error', reject)
       .save(outputPath);

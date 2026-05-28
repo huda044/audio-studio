@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Music2,
   History,
@@ -9,6 +9,8 @@ import {
   Crown,
   ChevronRight,
   LogOut,
+  Menu,
+  X,
   User
 } from 'lucide-react';
 
@@ -40,10 +42,16 @@ export default function AppShell({
   historyCount = 0
 }) {
   const isAdmin = currentUser?.role === 'admin';
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <div className="app-shell">
-      <aside className="app-sidebar">
+      <aside className={`app-sidebar ${mobileOpen ? 'open' : ''}`}>
+        {mobileOpen && (
+          <button className="sidebar-mobile-close" onClick={() => setMobileOpen(false)} aria-label="Tutup menu">
+            <X size={18} />
+          </button>
+        )}
         <div className="sidebar-brand">
           <div className="sidebar-logo">L</div>
           <div>
@@ -68,7 +76,7 @@ export default function AppShell({
                   <button
                     key={item.id}
                     className={`sidebar-item ${isActive ? 'active' : ''}`}
-                    onClick={() => onNavigate(item.id)}
+                    onClick={() => { onNavigate(item.id); setMobileOpen(false); }}
                     type="button"
                   >
                     <Icon size={16} />
@@ -117,12 +125,16 @@ export default function AppShell({
       <div className="app-main">
         <header className="app-topbar">
           <div className="topbar-title">
+            <button className="sidebar-mobile-toggle" onClick={() => setMobileOpen(true)} aria-label="Buka menu">
+              <Menu size={18} />
+            </button>
             <h1>{pageTitle}</h1>
           </div>
           <div className="topbar-actions">{pageActions}</div>
         </header>
         <div className="app-content">{children}</div>
       </div>
+      {mobileOpen && <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />}
     </div>
   );
 }

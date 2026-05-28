@@ -70,7 +70,10 @@ function parseSettings(raw = '{}') {
     bassBoost: Boolean(parsed.bassBoost),
     reverb: Boolean(parsed.reverb),
     fadeIn: Number(parsed.fadeIn ?? 0),
-    fadeOut: Number(parsed.fadeOut ?? 0)
+    fadeOut: Number(parsed.fadeOut ?? 0),
+    trimStart: Number(parsed.trimStart ?? 0),
+    trimEnd: Number(parsed.trimEnd ?? 0),
+    eqPreset: typeof parsed.eqPreset === 'string' ? parsed.eqPreset : ''
   };
 }
 
@@ -174,6 +177,36 @@ router.post('/asset-status', async (req, res, next) => {
     if (!apiKey) return res.status(400).json({ error: 'apiKey wajib.' });
     const result = await checkAssetStatus(operationId, apiKey);
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/roblox-test', async (req, res, next) => {
+  try {
+    const { apiKey } = req.body || {};
+    if (!apiKey) return res.status(400).json({ error: 'API key wajib.' });
+    // Cek dengan get user-restricted-access (tidak perlu permission khusus, hanya verifikasi key valid)
+    const axios = (await import('axios')).default;
+    try {
+      // Roblox tidak punya endpoint "ping" universal. Kita pakai operation lookup dengan ID dummy
+      // dan periksa response code. Key invalid = 401, key valid tapi op not found = 404.
+      const response = await axios.get('https://apis.roblox.com/assets/v1/operations/dummy-op', {
+        headers: { 'x-api-key': apiKey },
+        timeout: 8000,
+        validateStatus: () => true
+      });
+      if (response.status === 401 || response.status === 403) {
+        return res.json({ ok: false, error: 'API key tidak valid atau tidak punya permission Assets.' });
+      }
+      if (response.status >= 500) {
+        return res.json({ ok: false, error: 'Roblox API sedang bermasalah, coba lagi nanti.' });
+      }
+      // 404 (operation tidak ada) = key valid
+      return res.json({ ok: true, status: response.status });
+    } catch (error) {
+      return res.json({ ok: false, error: error.message });
+    }
   } catch (error) {
     next(error);
   }
