@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 import AdminPanel from './AdminPanel.jsx';
+import AppShell from './AppShell.jsx';
 
 const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
 const VITE_GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -203,6 +204,7 @@ function App() {
   const [adminMode, setAdminMode] = useState(false);
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
   const [adminPromptOpen, setAdminPromptOpen] = useState(false);
+  const [activePage, setActivePage] = useState('pipeline');
   const [gatewayInfo, setGatewayInfo] = useState({ midtrans: { enabled: false } });
   const [googleClientId, setGoogleClientId] = useState(VITE_GOOGLE_CLIENT_ID);
   const googleButtonRef = useRef(null);
@@ -824,7 +826,7 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0d1117] text-slate-100">
+    <>
       <Toast toast={toast} />
       {loading && (
         <div className="loading-overlay">
@@ -864,18 +866,17 @@ function App() {
           </div>
         </div>
       )}
-      <section className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 lg:px-8">
-        <header className="flex flex-col gap-3 border-b border-slate-800 pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-cyan-300">Roblox Audio Pipeline</p>
-            <h1 className="mt-2 text-4xl font-black text-white">Audio Studio</h1>
-          </div>
-          <div className="header-side">
-            <div className="summary">{summary}</div>
-            {currentUser && <div className="account-pill"><User size={15} /> {currentUser.username}</div>}
-            <button className="icon-wide" onClick={openAdminMode}><Crown size={15} /> Admin</button>
-          </div>
-        </header>
+      <AppShell
+        activePage={activePage}
+        onNavigate={setActivePage}
+        currentUser={currentUser}
+        onOpenAdmin={openAdminMode}
+        onLogout={logout}
+        pageTitle={PAGE_TITLES[activePage] || 'Audio Studio'}
+        invoicePending={payments.filter((p) => p.status === 'Pending').length}
+        historyCount={history.length}
+        pageActions={<div className="summary">{summary}</div>}
+      >
 
         {adminPromptOpen && (
           <section className="panel admin-prompt">
@@ -1285,9 +1286,18 @@ function App() {
             {!history.length && <p className="muted">Belum ada riwayat upload.</p>}
           </div>
         </section>
-      </section>
-    </main>
+      </AppShell>
+    </>
   );
 }
+
+const PAGE_TITLES = {
+  pipeline: 'Konversi Audio',
+  history: 'Riwayat Upload',
+  keys: 'API Keys & Konfigurasi Roblox',
+  groups: 'Manajemen Grup',
+  billing: 'Langganan & Invoice',
+  settings: 'Pengaturan Akun'
+};
 
 createRoot(document.getElementById('root')).render(<App />);
