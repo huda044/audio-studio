@@ -160,6 +160,14 @@ function cleanRobloxId(value) {
   return /^\d{2,32}$/.test(text) ? text : '';
 }
 
+function apiError(data, fallback) {
+  const error = new Error(data?.error || fallback);
+  error.details = Array.isArray(data?.details)
+    ? data.details.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5)
+    : [];
+  return error;
+}
+
 function extractYoutubeId(url) {
   try {
     const parsed = new URL(url);
@@ -247,7 +255,8 @@ function App() {
     state: 'idle',
     stepIndex: 0,
     message: 'Siap memproses audio.',
-    error: ''
+    error: '',
+    details: []
   });
   const [lastError, setLastError] = useState(null);
   const abortRef = useRef(null);
@@ -856,7 +865,8 @@ function App() {
       state: 'running',
       stepIndex: index,
       message: text,
-      error: ''
+      error: '',
+      details: []
     }));
   }
 
@@ -865,7 +875,8 @@ function App() {
       state,
       stepIndex,
       message,
-      error: ''
+      error: '',
+      details: []
     });
   }
 
@@ -874,7 +885,8 @@ function App() {
       state: 'error',
       stepIndex: current.stepIndex || fallbackStep,
       message: error.message,
-      error: error.message
+      error: error.message,
+      details: Array.isArray(error.details) ? error.details : []
     }));
   }
 
@@ -896,8 +908,8 @@ function App() {
       body: form,
       signal: controller.signal
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Konversi audio gagal.');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw apiError(data, 'Konversi audio gagal.');
     const converted = { ...data, requestSignature };
     if (data.account) {
       setCurrentUser((user) => user ? { ...user, usage: data.account.usage, subscription: data.account.subscription } : user);
@@ -1995,6 +2007,16 @@ function App() {
               <p className={`step-note ${pipelineStatus.state === 'error' ? 'error' : pipelineStatus.state === 'uploaded' || pipelineStatus.state === 'converted' ? 'success' : ''}`}>
                 {loading ? (loadingStep || pipelineStatus.message) : pipelineStatus.message}
               </p>
+              {!!pipelineStatus.details?.length && (
+                <div className="trace-mini">
+                  {pipelineStatus.details.map((item, index) => (
+                    <div key={`${item}-${index}`}>
+                      <span>{index + 1}</span>
+                      <p>{item}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
               {pipelineStatus.state === 'stale' && <p className="step-note warning">Klik Konversi lagi supaya preset/manual terbaru benar-benar masuk ke file OGG.</p>}
             </section>
 

@@ -285,7 +285,7 @@ function jsRuntimeArgs() {
   return runtimes.flatMap((runtime) => ['--js-runtimes', runtime]);
 }
 
-function ytDlpCommonArgs() {
+function ytDlpCommonArgs(options = {}) {
   const args = [
     '--no-playlist',
     '--no-warnings',
@@ -296,7 +296,7 @@ function ytDlpCommonArgs() {
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
-  const extractorArgs = String(process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=android,web').trim();
+  const extractorArgs = String(options.extractorArgs || process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=android,web').trim();
 
   if (cookiesFile) args.push('--cookies', cookiesFile);
   if (proxy) args.push('--proxy', proxy);
@@ -532,9 +532,9 @@ function inferExtensionFromUrl(url, contentType = '') {
   return 'media';
 }
 
-async function getDirectMediaUrl(url) {
+async function getDirectMediaUrl(url, options = {}) {
   const output = await runYtDlp([
-    ...ytDlpCommonArgs(),
+    ...ytDlpCommonArgs(options),
     '--format', 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
     '--get-url',
     url
@@ -547,8 +547,8 @@ async function getDirectMediaUrl(url) {
   return directUrl;
 }
 
-async function downloadDirectMedia(url, uploadsDir) {
-  const directUrl = await getDirectMediaUrl(url);
+async function downloadDirectMedia(url, uploadsDir, options = {}) {
+  const directUrl = await getDirectMediaUrl(url, options);
   const response = await fetch(directUrl, {
     headers: { 'user-agent': USER_AGENT },
     signal: AbortSignal.timeout(Number(process.env.YOUTUBE_DIRECT_DOWNLOAD_TIMEOUT_MS || 90000))
@@ -605,7 +605,7 @@ async function downloadWithYtDlp(url, uploadsDir, options = {}) {
   const outputTemplate = path.join(uploadsDir, `${outputPrefix}%(ext)s`);
   try {
     await runYtDlp([
-      ...ytDlpCommonArgs(),
+      ...ytDlpCommonArgs(options),
       ...sectionArgs(options),
       '--format', 'bestaudio[ext=m4a]/bestaudio/best',
       '--output', outputTemplate,
@@ -641,8 +641,30 @@ function orderedStrategies(options = {}) {
   const base = configured
     ? configured.split(',').map((item) => item.trim()).filter(Boolean)
     : ['yt-dlp', 'direct-url', 'ytdl-core'];
-  if (options.sectionEnd && hasCookieSupport() && !base.includes('yt-dlp-section')) return ['yt-dlp-section', ...base];
-  return base;
+  const strategies = options.sectionEnd && hasCookieSupport() && !base.includes('yt-dlp-section')
+    ? ['yt-dlp-section', ...base]
+    : [...base];
+
+  if (String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
+    const insertAfter = (needle, extra) => {
+      if (strategies.includes(extra)) return;
+      const index = strategies.indexOf(needle);
+      if (index >= 0) strategies.splice(index + 1, 0, extra);
+    };
+    insertAfter('yt-dlp-section', 'yt-dlp-section-default');
+    insertAfter('yt-dlp', 'yt-dlp-default');
+    insertAfter('direct-url', 'direct-url-default');
+  }
+
+  return strategies;
+}
+
+function strategyOptions(strategy, options = {}) {
+  const next = { ...options };
+  if (strategy.endsWith('-default')) {
+    next.extractorArgs = 'youtube:player_client=default';
+  }
+  return next;
 }
 
 export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
@@ -651,17 +673,17 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
 
   for (const strategy of orderedStrategies(options)) {
     try {
-      if (strategy === 'yt-dlp-section') {
-        const outputPath = await downloadWithYtDlp(url, uploadsDir, options);
-        return { path: outputPath, method: 'yt-dlp-section', failures, sectionEnd: options.sectionEnd || 0 };
+      if (strategy === 'yt-dlp-section' || strategy === 'yt-dlp-section-default') {
+        const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy, options));
+        return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };
       }
-      if (strategy === 'yt-dlp') {
-        const outputPath = await downloadWithYtDlp(url, uploadsDir);
-        return { path: outputPath, method: 'yt-dlp', failures };
+      if (strategy === 'yt-dlp' || strategy === 'yt-dlp-default') {
+        const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy));
+        return { path: outputPath, method: strategy, failures };
       }
-      if (strategy === 'direct-url') {
-        const outputPath = await downloadDirectMedia(url, uploadsDir);
-        return { path: outputPath, method: 'direct-url', failures };
+      if (strategy === 'direct-url' || strategy === 'direct-url-default') {
+        const outputPath = await downloadDirectMedia(url, uploadsDir, strategyOptions(strategy));
+        return { path: outputPath, method: strategy, failures };
       }
       if (strategy === 'ytdl-core') {
         const outputPath = await downloadWithYtdl(url, uploadsDir);
@@ -684,7 +706,7 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
 
   const error = httpError(
     hasCookieSupport()
-      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie kemungkinan expired/salah akun, atau video dibatasi YouTube.'
+      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan Space sudah deploy versi terbaru, cookie dari akun yang bisa memutar video, dan YouTube tidak membatasi video ini.'
       : 'Download YouTube gagal. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE lalu restart Space.',
     422
   );

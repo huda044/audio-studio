@@ -60,4 +60,6 @@ Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panja
 
 Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.
 
+Jika client YouTube utama gagal, backend juga mencoba fallback `player_client=default` (`YTDLP_ALT_CLIENT_FALLBACKS=true`) sebelum menyerah.
+
 Render Free tetap punya batasan: service bisa sleep saat idle, filesystem tidak permanen, dan resource bukan untuk traffic besar terus-menerus. Tetapi untuk backend FFmpeg gratis, ini lebih kuat daripada Vercel serverless.
