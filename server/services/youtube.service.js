@@ -459,9 +459,9 @@ function ytDlpCommonArgs(options = {}) {
   const args = [
     '--no-playlist',
     '--no-warnings',
-    '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 10),
-    '--retries', String(process.env.YTDLP_RETRIES || 1),
-    '--fragment-retries', String(process.env.YTDLP_RETRIES || 1),
+    '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 15),
+    '--retries', String(process.env.YTDLP_RETRIES || 2),
+    '--fragment-retries', String(process.env.YTDLP_FRAGMENT_RETRIES || process.env.YTDLP_RETRIES || 2),
     ...jsRuntimeArgs()
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
@@ -708,7 +708,7 @@ async function getDirectMediaUrl(url, options = {}) {
     '--format', 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
     '--get-url',
     url
-  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 25000));
+  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 45000));
   const directUrl = output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -780,7 +780,9 @@ async function downloadWithYtDlp(url, uploadsDir, options = {}) {
       '--format', 'bestaudio[ext=m4a]/bestaudio/best',
       '--output', outputTemplate,
       url
-    ], Number(process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 30000));
+    ], Number(options.sectionEnd
+      ? (process.env.YTDLP_SECTION_TIMEOUT_MS || 120000)
+      : (process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 90000)));
   } catch (error) {
     await removeDownloadedFiles(uploadsDir, outputPrefix);
     throw error;
@@ -811,9 +813,13 @@ function orderedStrategies(options = {}) {
   const base = configured
     ? configured.split(',').map((item) => item.trim()).filter(Boolean)
     : ['yt-dlp', 'direct-url', 'ytdl-core'];
-  const strategies = options.sectionEnd && hasCookieSupport() && !base.includes('yt-dlp-section')
-    ? ['yt-dlp-section', ...base]
-    : [...base];
+  const strategies = [];
+  if (options.sectionEnd && !base.includes('yt-dlp-section')) {
+    strategies.push('yt-dlp-section');
+  }
+  for (const strategy of base) {
+    if (!strategies.includes(strategy)) strategies.push(strategy);
+  }
 
   if (String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
     const insertAfter = (needle, extra) => {
@@ -821,14 +827,20 @@ function orderedStrategies(options = {}) {
       const index = strategies.indexOf(needle);
       if (index >= 0) strategies.splice(index + 1, 0, extra);
     };
-    // Default extractor pakai android,web. Tambah variants: tv, mweb, ios untuk bypass video tertentu.
+    // Tambah beberapa client publik. Ini bukan jaminan melewati bot-check,
+    // tapi sering cukup untuk video yang gagal di satu client extractor.
     insertAfter('yt-dlp-section', 'yt-dlp-section-default');
+    insertAfter('yt-dlp-section-default', 'yt-dlp-section-tv');
+    insertAfter('yt-dlp-section-tv', 'yt-dlp-section-mweb');
+    insertAfter('yt-dlp-section-mweb', 'yt-dlp-section-ios');
+    insertAfter('direct-url', 'direct-url-default');
+    insertAfter('direct-url-default', 'direct-url-tv');
+    insertAfter('direct-url-tv', 'direct-url-mweb');
+    insertAfter('direct-url-mweb', 'direct-url-ios');
     insertAfter('yt-dlp', 'yt-dlp-default');
     insertAfter('yt-dlp-default', 'yt-dlp-tv');
     insertAfter('yt-dlp-tv', 'yt-dlp-mweb');
     insertAfter('yt-dlp-mweb', 'yt-dlp-ios');
-    insertAfter('direct-url', 'direct-url-default');
-    insertAfter('direct-url-default', 'direct-url-tv');
   }
 
   return strategies;
@@ -854,7 +866,7 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
 
   for (const strategy of orderedStrategies(options)) {
     try {
-      if (strategy === 'yt-dlp-section' || strategy === 'yt-dlp-section-default') {
+      if (strategy.startsWith('yt-dlp-section')) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy, options));
         return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };
       }
@@ -872,16 +884,10 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
       }
     } catch (error) {
       failures.push(`${strategy}: ${cleanErrorText(error.message)}`);
-      if (isTimeoutError(error) && strategy.startsWith('yt-dlp')) {
-        const next = httpError('Download YouTube timeout. Backend menghentikan proses agar tidak menggantung lama. Coba link lain, upload file audio, atau tambahkan cookie YouTube jika hosting terkena bot-check.', 408);
-        next.details = failures;
-        throw next;
-      }
-      if (isBotCheckError(error) && !hasCookieSupport()) {
-        const next = httpError(botCheckMessage(), 428);
-        next.details = failures;
-        throw next;
-      }
+      // Jangan berhenti di bot-check/timeout pertama. Client extractor lain
+      // atau direct media URL masih bisa berhasil untuk video yang sama.
+      if (isBotCheckError(error) && !hasCookieSupport()) continue;
+      if (isTimeoutError(error) && strategy.startsWith('yt-dlp')) continue;
     }
   }
 
@@ -889,9 +895,11 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   if (cookieStatus.state === 'invalid') {
     finalMessage = `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape lengkap dengan newline antar baris, lalu restart Space.`;
   } else if (cookieStatus.state === 'ok') {
-    finalMessage = 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan Space sudah deploy versi terbaru, cookie dari akun yang bisa memutar video, dan YouTube tidak membatasi video ini.';
+    finalMessage = 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan cookie dari akun yang bisa memutar video ini, backend sudah deploy versi terbaru, dan coba aktifkan YOUTUBE_PROXY kalau IP hosting dibatasi.';
+  } else if (failures.some((item) => item.toLowerCase().includes('timeout'))) {
+    finalMessage = 'Download YouTube timeout di semua fallback. Backend sudah mencoba mode potongan dan beberapa client extractor; coba kecilkan Max Duration, isi cookie YouTube, atau pakai proxy hosting yang tidak dibatasi YouTube.';
   } else {
-    finalMessage = 'Download YouTube gagal. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE lalu restart Space.';
+    finalMessage = 'Download YouTube gagal. Backend sudah mencoba beberapa fallback public. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE, atau set YOUTUBE_PROXY lalu restart backend.';
   }
   const error = httpError(finalMessage, 422);
   error.details = failures;

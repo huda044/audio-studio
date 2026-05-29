@@ -13,6 +13,22 @@ services:
         value: 250
       - key: INLINE_AUDIO_LIMIT_MB
         value: 8
+      - key: YTDLP_ENABLE_SECTIONS
+        value: true
+      - key: YTDLP_ALT_CLIENT_FALLBACKS
+        value: true
+      - key: YTDLP_SOCKET_TIMEOUT
+        value: 15
+      - key: YTDLP_RETRIES
+        value: 2
+      - key: YTDLP_FRAGMENT_RETRIES
+        value: 2
+      - key: YTDLP_GET_URL_TIMEOUT_MS
+        value: 45000
+      - key: YTDLP_SECTION_TIMEOUT_MS
+        value: 120000
+      - key: YTDLP_DOWNLOAD_TIMEOUT_MS
+        value: 90000
       - key: DATA_STORE_NAMESPACE
         value: audio-studio
       - key: DATA_STORE_TABLE

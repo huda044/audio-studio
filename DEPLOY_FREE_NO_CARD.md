@@ -49,6 +49,9 @@ EMAIL_DEV_CODES=true
 PROCESS_RATE_LIMIT=12
 INFO_RATE_LIMIT=45
 JSON_LIMIT=512kb
+YTDLP_ENABLE_SECTIONS=true
+YTDLP_ALT_CLIENT_FALLBACKS=true
+YTDLP_SECTION_TIMEOUT_MS=120000
 ```
 
 Naikkan `MAX_UPLOAD_MB` hanya kalau platform hosting mengizinkan upload sebesar itu.
@@ -64,6 +67,7 @@ Pengaturan hemat limit:
 - `PROCESS_RATE_LIMIT` membatasi konversi/upload berat per window 30 menit.
 - `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
 - `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
+- `YTDLP_ENABLE_SECTIONS=true` membuat backend mengambil potongan durasi yang dibutuhkan dulu, bukan download video panjang penuh.
 - Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.
 
 Catatan akun, email, Google, dan pembayaran:
