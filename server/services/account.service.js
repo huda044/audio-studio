@@ -342,6 +342,9 @@ export async function registerUser({ username, email, password }, context = {}) 
 }
 
 export async function loginUser({ username, password }, context = {}) {
+  await ensureBootstrapAdmin().catch((error) => {
+    console.error('[admin-bootstrap-login-error]', error.message);
+  });
   const cleanUsername = String(username || '').trim().toLowerCase();
   const store = await readStore();
   const user = store.users.find((item) => item.username === cleanUsername || item.email === cleanUsername);

@@ -1,10 +1,13 @@
 import ytdl from '@distube/ytdl-core';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createWriteStream, existsSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import crypto from 'node:crypto';
 import { nanoid } from 'nanoid';
+import ffmpegPath from 'ffmpeg-static';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,12 +20,41 @@ const USER_AGENT = process.env.YOUTUBE_USER_AGENT
 let cachedYtdlOptionsKey = '';
 let cachedYtdlOptions = null;
 let cachedYtDlpPath;
+let cachedCookiesKey = '';
+let cachedCookiesFile = '';
 
 function httpError(message, status = 422, cause) {
   const error = new Error(message);
   error.status = status;
   if (cause) error.cause = cause;
   return error;
+}
+
+function cleanErrorText(value) {
+  return String(value || '')
+    .replace(/\uFFFD/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 900);
+}
+
+function isBotCheckError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('not a bot')
+    || message.includes('sign in to confirm')
+    || message.includes('use --cookies')
+    || message.includes('cookies-from-browser')
+    || message.includes('status code: 429')
+    || message.includes('http error 429');
+}
+
+function isTimeoutError(error) {
+  return Number(error?.status || 0) === 408
+    || String(error?.message || '').toLowerCase().includes('timeout');
+}
+
+function botCheckMessage() {
+  return 'YouTube menolak request dari hosting ini karena bot-check. Tambahkan cookie YouTube ke secret YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE di backend, lalu restart Space. Atau upload file audio langsung.';
 }
 
 function isYoutubeHost(hostname) {
@@ -113,6 +145,55 @@ function parseCookiesJson(raw) {
   }
 }
 
+function normalizeCookieText(raw) {
+  const text = String(raw || '').replace(/\\n/g, '\n').trim();
+  if (!text) return '';
+  if (text.includes('\t') && text.includes('youtube')) return text;
+  const rows = ['# Netscape HTTP Cookie File'];
+  for (const item of text.split(';')) {
+    const [name, ...rest] = item.trim().split('=');
+    const value = rest.join('=');
+    if (!name || !value) continue;
+    rows.push(`.youtube.com\tTRUE\t/\tTRUE\t1893456000\t${name.trim()}\t${value.trim()}`);
+  }
+  return rows.length > 1 ? rows.join('\n') : text;
+}
+
+function envCookieText() {
+  const rawText = process.env.YTDLP_COOKIES_TEXT || process.env.YOUTUBE_COOKIES_TEXT || '';
+  if (rawText) return normalizeCookieText(rawText);
+  const rawBase64 = process.env.YTDLP_COOKIES_BASE64 || process.env.YOUTUBE_COOKIES_BASE64 || '';
+  if (rawBase64) {
+    try {
+      return normalizeCookieText(Buffer.from(rawBase64, 'base64').toString('utf8'));
+    } catch {
+      return '';
+    }
+  }
+  if (process.env.YOUTUBE_COOKIE) return normalizeCookieText(process.env.YOUTUBE_COOKIE);
+  return '';
+}
+
+function resolveGeneratedCookiesFile() {
+  const cookiesFile = String(process.env.YTDLP_COOKIES_FILE || '').trim();
+  if (cookiesFile) return cookiesFile;
+  const text = envCookieText();
+  if (!text) return '';
+  const key = crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
+  if (cachedCookiesFile && cachedCookiesKey === key && existsSync(cachedCookiesFile)) return cachedCookiesFile;
+  const dir = path.join(os.tmpdir(), 'audio-studio-cookies');
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `youtube-${key}.txt`);
+  writeFileSync(filePath, `${text}\n`, { mode: 0o600 });
+  cachedCookiesKey = key;
+  cachedCookiesFile = filePath;
+  return filePath;
+}
+
+function hasCookieSupport() {
+  return Boolean(resolveGeneratedCookiesFile() || process.env.YOUTUBE_COOKIES_JSON || process.env.YOUTUBE_COOKIE);
+}
+
 function getYtdlOptions() {
   const key = JSON.stringify({
     cookieJson: process.env.YOUTUBE_COOKIES_JSON || '',
@@ -153,8 +234,12 @@ function execFileAsync(file, args, timeoutMs) {
       timeout: timeoutMs
     }, (error, stdout, stderr) => {
       if (error) {
+        if (error.killed || error.signal) {
+          reject(httpError(`${path.basename(file)} timeout setelah ${Math.round(timeoutMs / 1000)} detik.`, 408, error));
+          return;
+        }
         const message = stderr || error.message || `${path.basename(file)} gagal dijalankan.`;
-        reject(httpError(message.trim(), error.code === 'ENOENT' ? 503 : 422, error));
+        reject(httpError(cleanErrorText(message), error.code === 'ENOENT' ? 503 : 422, error));
         return;
       }
       resolve(stdout);
@@ -191,11 +276,11 @@ function ytDlpCommonArgs() {
   const args = [
     '--no-playlist',
     '--no-warnings',
-    '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 20),
-    '--retries', String(process.env.YTDLP_RETRIES || 2),
-    '--fragment-retries', String(process.env.YTDLP_RETRIES || 2)
+    '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 10),
+    '--retries', String(process.env.YTDLP_RETRIES || 1),
+    '--fragment-retries', String(process.env.YTDLP_RETRIES || 1)
   ];
-  const cookiesFile = String(process.env.YTDLP_COOKIES_FILE || '').trim();
+  const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
   const extractorArgs = String(process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=android,web').trim();
 
@@ -205,7 +290,7 @@ function ytDlpCommonArgs() {
   return args;
 }
 
-async function runYtDlp(args, timeoutMs = 45000) {
+async function runYtDlp(args, timeoutMs = 25000) {
   const binary = await resolveYtDlpPath();
   if (!binary) {
     throw httpError('yt-dlp belum tersedia di backend. Jalankan npm install ulang atau deploy dengan installer yt-dlp aktif.', 503);
@@ -409,6 +494,13 @@ async function findDownloadedFile(uploadsDir, prefix) {
   return matches[0]?.fullPath || '';
 }
 
+async function removeDownloadedFiles(uploadsDir, prefix) {
+  const files = await fs.readdir(uploadsDir).catch(() => []);
+  await Promise.all(files
+    .filter((file) => file.startsWith(prefix))
+    .map((file) => fs.unlink(path.join(uploadsDir, file)).catch(() => {})));
+}
+
 function inferExtensionFromUrl(url, contentType = '') {
   try {
     const parsed = new URL(url);
@@ -432,7 +524,7 @@ async function getDirectMediaUrl(url) {
     '--format', 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
     '--get-url',
     url
-  ], 60000);
+  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 25000));
   const directUrl = output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -445,7 +537,7 @@ async function downloadDirectMedia(url, uploadsDir) {
   const directUrl = await getDirectMediaUrl(url);
   const response = await fetch(directUrl, {
     headers: { 'user-agent': USER_AGENT },
-    signal: AbortSignal.timeout(Number(process.env.YOUTUBE_DIRECT_DOWNLOAD_TIMEOUT_MS || 180000))
+    signal: AbortSignal.timeout(Number(process.env.YOUTUBE_DIRECT_DOWNLOAD_TIMEOUT_MS || 90000))
   });
   if (!response.ok || !response.body) {
     throw httpError(`Direct media download gagal: HTTP ${response.status}.`, response.status || 422);
@@ -480,16 +572,35 @@ async function downloadDirectMedia(url, uploadsDir) {
   return outputPath;
 }
 
-async function downloadWithYtDlp(url, uploadsDir) {
+function sectionArgs(options = {}) {
+  const sectionEnd = Number(options.sectionEnd || 0);
+  if (!sectionEnd || sectionEnd < 30 || String(process.env.YTDLP_ENABLE_SECTIONS || 'true').toLowerCase() === 'false') {
+    return [];
+  }
+  const args = [
+    '--download-sections', `*0-${Math.ceil(sectionEnd)}`,
+    '--force-keyframes-at-cuts'
+  ];
+  if (ffmpegPath) args.push('--ffmpeg-location', path.dirname(ffmpegPath));
+  return args;
+}
+
+async function downloadWithYtDlp(url, uploadsDir, options = {}) {
   const id = nanoid(10);
   const outputPrefix = `youtube-${id}.`;
   const outputTemplate = path.join(uploadsDir, `${outputPrefix}%(ext)s`);
-  await runYtDlp([
-    ...ytDlpCommonArgs(),
-    '--format', 'bestaudio[ext=m4a]/bestaudio/best',
-    '--output', outputTemplate,
-    url
-  ], Number(process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 180000));
+  try {
+    await runYtDlp([
+      ...ytDlpCommonArgs(),
+      ...sectionArgs(options),
+      '--format', 'bestaudio[ext=m4a]/bestaudio/best',
+      '--output', outputTemplate,
+      url
+    ], Number(process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 30000));
+  } catch (error) {
+    await removeDownloadedFiles(uploadsDir, outputPrefix);
+    throw error;
+  }
   const outputPath = await findDownloadedFile(uploadsDir, outputPrefix);
   if (!outputPath) throw httpError('yt-dlp selesai, tetapi file audio tidak ditemukan.', 422);
   return outputPath;
@@ -504,40 +615,63 @@ async function downloadWithYtdl(url, uploadsDir) {
       filter: 'audioonly',
       highWaterMark: 1 << 25
     });
-    return await downloadStream(stream, outputPath);
+    return await downloadStream(stream, outputPath, Number(process.env.YTDL_CORE_DOWNLOAD_TIMEOUT_MS || 60000));
   } catch (error) {
     await fs.unlink(outputPath).catch(() => {});
     throw error;
   }
 }
 
-export async function downloadYoutubeAudio(input, uploadsDir) {
+function orderedStrategies(options = {}) {
+  const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
+  const base = configured
+    ? configured.split(',').map((item) => item.trim()).filter(Boolean)
+    : ['yt-dlp', 'direct-url', 'ytdl-core'];
+  if (options.sectionEnd && hasCookieSupport() && !base.includes('yt-dlp-section')) return ['yt-dlp-section', ...base];
+  return base;
+}
+
+export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   const { url } = normalizeYoutubeUrl(input);
   const failures = [];
 
-  try {
-    const outputPath = await downloadDirectMedia(url, uploadsDir);
-    return { path: outputPath, method: 'direct-url', failures };
-  } catch (error) {
-    failures.push(`direct-url: ${error.message}`);
-  }
-
-  try {
-    const outputPath = await downloadWithYtDlp(url, uploadsDir);
-    return { path: outputPath, method: 'yt-dlp', failures };
-  } catch (error) {
-    failures.push(`yt-dlp: ${error.message}`);
-  }
-
-  try {
-    const outputPath = await downloadWithYtdl(url, uploadsDir);
-    return { path: outputPath, method: 'ytdl-core', failures };
-  } catch (error) {
-    failures.push(`ytdl-core: ${error.message}`);
+  for (const strategy of orderedStrategies(options)) {
+    try {
+      if (strategy === 'yt-dlp-section') {
+        const outputPath = await downloadWithYtDlp(url, uploadsDir, options);
+        return { path: outputPath, method: 'yt-dlp-section', failures, sectionEnd: options.sectionEnd || 0 };
+      }
+      if (strategy === 'yt-dlp') {
+        const outputPath = await downloadWithYtDlp(url, uploadsDir);
+        return { path: outputPath, method: 'yt-dlp', failures };
+      }
+      if (strategy === 'direct-url') {
+        const outputPath = await downloadDirectMedia(url, uploadsDir);
+        return { path: outputPath, method: 'direct-url', failures };
+      }
+      if (strategy === 'ytdl-core') {
+        const outputPath = await downloadWithYtdl(url, uploadsDir);
+        return { path: outputPath, method: 'ytdl-core', failures };
+      }
+    } catch (error) {
+      failures.push(`${strategy}: ${cleanErrorText(error.message)}`);
+      if (isTimeoutError(error) && strategy.startsWith('yt-dlp')) {
+        const next = httpError('Download YouTube timeout. Backend menghentikan proses agar tidak menggantung lama. Coba link lain, upload file audio, atau tambahkan cookie YouTube jika hosting terkena bot-check.', 408);
+        next.details = failures;
+        throw next;
+      }
+      if (isBotCheckError(error) && !hasCookieSupport()) {
+        const next = httpError(botCheckMessage(), 428);
+        next.details = failures;
+        throw next;
+      }
+    }
   }
 
   const error = httpError(
-    'Download YouTube gagal. Pastikan link publik, backend punya yt-dlp, dan jika hosting terkena bot check YouTube isi YOUTUBE_COOKIES_JSON/YTDLP_COOKIES_FILE.',
+    hasCookieSupport()
+      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie kemungkinan expired/salah akun, atau video dibatasi YouTube.'
+      : 'Download YouTube gagal. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE lalu restart Space.',
     422
   );
   error.details = failures;

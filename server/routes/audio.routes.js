@@ -158,6 +158,18 @@ function resolveRobloxCreator(creator = {}, required = true) {
   return { creator: null, mode: 'unknown', warnings: [message] };
 }
 
+function computeYoutubeSectionEnd(settings = {}, sourceDuration = 0) {
+  if (String(process.env.YTDLP_ENABLE_SECTIONS || 'true').toLowerCase() === 'false') return 0;
+  const speed = Math.min(Math.max(Number(settings.speed || 1), 0.5), 3);
+  const maxDuration = Math.min(Math.max(Number(settings.maxDuration || 400), 30), Number(settings.maxDurationLimit || 14400));
+  const trimStart = Math.max(0, Number(settings.trimStart || 0));
+  const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
+  const neededInput = Math.ceil(maxDuration * speed + 12);
+  let end = trimEnd > trimStart ? trimEnd : trimStart + neededInput;
+  if (sourceDuration) end = Math.min(end, Math.ceil(sourceDuration));
+  return end >= 30 ? end : 0;
+}
+
 router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {
     if (!req.query.url) return res.status(400).json({ error: 'URL YouTube wajib diisi.' });
@@ -180,6 +192,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         throw error;
       }
       const settings = parseSettings(req.body.settings);
+      const requestedMaxDuration = settings.maxDuration;
       const youtubeUrl = req.body.youtubeUrl?.trim();
       const warnings = [];
       const downloadTrace = [];
@@ -190,14 +203,15 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       };
 
       if (!sourcePath && youtubeUrl) {
-        const download = await downloadYoutubeAudio(youtubeUrl, uploadsDir);
+        const sectionEnd = computeYoutubeSectionEnd(settings, Number(meta.duration || 0));
+        const download = await downloadYoutubeAudio(youtubeUrl, uploadsDir, { sectionEnd });
         sourcePath = typeof download === 'string' ? download : download.path;
         downloadedPath = sourcePath;
         if (download?.method) {
           downloadTrace.push({
             step: 'Download',
             status: 'Accepted',
-            message: `YouTube berhasil diambil lewat ${download.method}.`
+            message: `YouTube berhasil diambil lewat ${download.method}${download.sectionEnd ? ` sampai ${formatSeconds(download.sectionEnd)}` : ''}.`
           });
         }
         if (download?.failures?.length) {
@@ -227,11 +241,11 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       }
       const account = await assertConversionAllowed(auth.sub, sourceDuration);
       if (account.plan.plan === 'paid') {
-        settings.maxDuration = Math.max(30, Math.ceil(Math.min(sourceDuration || settings.maxDuration || 400, settings.maxDurationLimit || 14400)));
         settings.maxDurationLimit = 14400;
+        settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || 400, settings.maxDurationLimit)));
       } else {
-        settings.maxDuration = Math.min(settings.maxDuration, 600);
         settings.maxDurationLimit = 600;
+        settings.maxDuration = Math.min(requestedMaxDuration || settings.maxDuration, 600);
       }
 
       const outputName = `processed-${nanoid(10)}.ogg`;
