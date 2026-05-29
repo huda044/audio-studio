@@ -11,6 +11,7 @@ import audioRoutes from './routes/audio.routes.js';
 import accountRoutes from './routes/account.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import { ensureBootstrapAdmin } from './services/account.service.js';
+import { getDataStoreInfo, warnIfEphemeralDataStore } from './services/dataStore.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,7 @@ async function resolveUploadsDir() {
 
 const uploadsDir = await resolveUploadsDir();
 const port = process.env.PORT || 4000;
+warnIfEphemeralDataStore();
 try {
   const bootstrap = await ensureBootstrapAdmin();
   if (bootstrap.created) console.log(`[admin-bootstrap] admin account created: ${bootstrap.user.username}`);
@@ -82,11 +84,17 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', audioRoutes);
 
 app.get('/health', (_req, res) => {
+  const store = getDataStoreInfo();
   res.json({
     ok: true,
     name: 'Audio Studio API',
     uptime: Math.round(process.uptime()),
-    uploads: Boolean(uploadsDir)
+    uploads: Boolean(uploadsDir),
+    dataStore: {
+      backend: store.backend,
+      durable: store.durable,
+      durability: store.durability
+    }
   });
 });
 

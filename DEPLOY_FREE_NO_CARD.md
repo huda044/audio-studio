@@ -33,8 +33,12 @@ Batasan:
 MAX_UPLOAD_MB=250
 INLINE_AUDIO_LIMIT_MB=8
 DATA_DIR=/data
+DATABASE_URL=postgres://user:password@host:5432/db
+SECRETS_MASTER_KEY=isi-output-node-scripts-generate-master-key
 JWT_SECRET=ganti-dengan-random-secret-panjang
-ADMIN_SECRET=ganti-dengan-secret-admin
+ADMIN_BOOTSTRAP_USERNAME=admin
+ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+ADMIN_BOOTSTRAP_PASSWORD=ganti-password-admin-kuat
 GOOGLE_CLIENT_ID=isi-kalau-pakai-google-login
 SMTP_HOST=isi-kalau-email-verifikasi-asli
 SMTP_PORT=587
@@ -49,7 +53,11 @@ JSON_LIMIT=512kb
 
 Naikkan `MAX_UPLOAD_MB` hanya kalau platform hosting mengizinkan upload sebesar itu.
 
-Fitur akun menyimpan data profile ke `DATA_DIR`. Di hosting gratis tanpa storage persistent, data bisa hilang saat container dibuat ulang. Untuk akun yang benar-benar tahan lama, aktifkan persistent storage/bucket atau pindah backend ke layanan database gratis.
+Fitur akun sekarang bisa memakai PostgreSQL lewat `DATABASE_URL`. Ini yang disarankan agar akun terdaftar, Group ID, Creator ID, invoice, history, dan API key terenkripsi tetap aman setelah rebuild/redeploy.
+
+Kalau `DATABASE_URL` kosong, data disimpan ke file JSON di `DATA_DIR`. Di hosting gratis tanpa storage persistent, file itu bisa hilang saat container dibuat ulang. `DATA_DIR=/data` hanya aman kalau platform benar-benar memasang persistent storage ke path itu.
+
+Generate `SECRETS_MASTER_KEY` dari folder `server` dengan `node scripts/generate-master-key.mjs`, lalu simpan hasilnya sebagai env hosting.
 
 Pengaturan hemat limit:
 
@@ -63,4 +71,5 @@ Catatan akun, email, Google, dan pembayaran:
 - Jika `SMTP_HOST` belum diisi, kode verifikasi muncul sebagai dev code dari API agar sistem tetap bisa dites gratis.
 - Untuk email sungguhan, isi SMTP provider.
 - Untuk Google Login, isi `GOOGLE_CLIENT_ID` di backend dan `VITE_GOOGLE_CLIENT_ID` saat build frontend.
-- QRIS/DANA/Mandiri saat ini dibuat sebagai invoice manual `Pending`. Admin bisa mengaktifkan invoice dengan endpoint admin memakai `ADMIN_SECRET`, atau nanti disambungkan ke payment gateway resmi.
+- `SECRETS_MASTER_KEY` wajib stabil. Kalau berubah, API key Roblox yang sudah terenkripsi tidak bisa dibuka lagi.
+- QRIS/DANA/Mandiri saat ini dibuat sebagai invoice manual `Pending`. Admin bisa mengaktifkan invoice dari menu **CMS Admin** setelah login sebagai admin.

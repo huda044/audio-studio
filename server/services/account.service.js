@@ -1,38 +1,12 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
 import { nanoid } from 'nanoid';
 import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, sendPasswordResetCode, isSmtpConfigured } from './email.service.js';
 import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js';
 import { encryptSecret, decryptSecret, isEncryptedSecret, isCryptoConfigured, maskSecret } from './crypto.service.js';
+import { readJsonStore, writeJsonStore, getDataStoreInfo } from './dataStore.service.js';
 
-import fsSync from 'node:fs';
-
-function resolveDataDir() {
-  const candidates = [];
-  if (process.env.DATA_DIR) candidates.push(process.env.DATA_DIR);
-  if (process.env.VERCEL) candidates.push(path.join(os.tmpdir(), 'audio-studio-data'));
-  candidates.push(path.resolve('data'));
-  candidates.push(path.join(os.tmpdir(), 'audio-studio-data'));
-  for (const dir of candidates) {
-    try {
-      fsSync.mkdirSync(dir, { recursive: true });
-      fsSync.accessSync(dir, fsSync.constants.W_OK);
-      return dir;
-    } catch {
-      // try next
-    }
-  }
-  // last resort, will likely fail later but keeps server starting
-  return path.join(os.tmpdir(), 'audio-studio-data');
-}
-
-const dataDir = resolveDataDir();
-const usersPath = path.join(dataDir, 'users.json');
-const paymentsPath = path.join(dataDir, 'payments.json');
 const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '365d';
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
@@ -48,50 +22,24 @@ const SUBSCRIPTION_HISTORY_MAX = 30;
 
 let writeQueue = Promise.resolve();
 
-async function ensureStore() {
-  await fs.mkdir(dataDir, { recursive: true });
-  try {
-    await fs.access(usersPath);
-  } catch {
-    await fs.writeFile(usersPath, JSON.stringify({ users: [] }, null, 2));
-  }
-  try {
-    await fs.access(paymentsPath);
-  } catch {
-    await fs.writeFile(paymentsPath, JSON.stringify({ payments: [] }, null, 2));
-  }
-}
-
 async function readStore() {
-  await ensureStore();
-  const raw = await fs.readFile(usersPath, 'utf8');
-  const parsed = JSON.parse(raw || '{"users":[]}');
+  const parsed = await readJsonStore('users', { users: [] });
   parsed.users = (parsed.users || []).map(migrateUser);
   return parsed;
 }
 
 async function writeStore(store) {
-  await ensureStore();
-  writeQueue = writeQueue.then(() => atomicWriteJson(usersPath, store));
+  writeQueue = writeQueue.then(() => writeJsonStore('users', store));
   await writeQueue;
 }
 
 async function readPayments() {
-  await ensureStore();
-  const raw = await fs.readFile(paymentsPath, 'utf8');
-  return JSON.parse(raw || '{"payments":[]}');
+  return readJsonStore('payments', { payments: [] });
 }
 
 async function writePayments(store) {
-  await ensureStore();
-  writeQueue = writeQueue.then(() => atomicWriteJson(paymentsPath, store));
+  writeQueue = writeQueue.then(() => writeJsonStore('payments', store));
   await writeQueue;
-}
-
-async function atomicWriteJson(filePath, value) {
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(value));
-  await fs.rename(tmpPath, filePath);
 }
 
 function nowIso() {
@@ -1297,12 +1245,14 @@ export async function adminCmsConfig() {
     auth: {
       googleConfigured: Boolean(googleClientId),
       smtpConfigured: isSmtpConfigured(),
+      cryptoConfigured: isCryptoConfigured(),
       adminBootstrapConfigured: Boolean(
         (process.env.ADMIN_BOOTSTRAP_USERNAME || process.env.ADMIN_USERNAME)
         && (process.env.ADMIN_BOOTSTRAP_EMAIL || process.env.ADMIN_EMAIL)
         && (process.env.ADMIN_BOOTSTRAP_PASSWORD || process.env.ADMIN_PASSWORD)
       )
     },
+    persistence: getDataStoreInfo(),
     conversion: {
       freeConvertLimit: FREE_CONVERT_LIMIT,
       freeDurationLimitSeconds: FREE_DURATION_LIMIT,

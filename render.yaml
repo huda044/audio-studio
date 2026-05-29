@@ -13,3 +13,19 @@ services:
         value: 250
       - key: INLINE_AUDIO_LIMIT_MB
         value: 8
+      - key: DATA_STORE_NAMESPACE
+        value: audio-studio
+      - key: DATA_STORE_TABLE
+        value: audio_studio_kv
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: SECRETS_MASTER_KEY
+        sync: false
+      - key: ADMIN_BOOTSTRAP_USERNAME
+        sync: false
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        sync: false
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false

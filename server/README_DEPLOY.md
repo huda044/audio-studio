@@ -32,6 +32,20 @@ VITE_API_BASE=https://audio-studio-api.onrender.com
 - Upload Roblox otomatis dipotong per part mengikuti limit Open Cloud audio: maksimal 7 menit dan di bawah 20MB per asset
 - Endpoint mengembalikan `requestId`, `conversionTrace`, `warnings`, dan `uploadSummary` agar status berhasil/gagal/pending bisa dilacak jelas
 
+## Data Akun Tidak Reset Saat Deploy
+
+Untuk menyimpan akun terdaftar, API key Roblox terenkripsi, Group ID, Creator ID, invoice, dan history secara permanen, isi env backend:
+
+```env
+DATABASE_URL=postgres://user:password@host:5432/db
+SECRETS_MASTER_KEY=isi-output-node-scripts-generate-master-key
+JWT_SECRET=random-panjang-stabil
+```
+
+`DATABASE_URL` dipakai sebagai data store utama. File JSON di `DATA_DIR` hanya menjadi mirror lokal. Kalau `DATABASE_URL` kosong, backend memakai file lokal dan data bisa reset saat Render/container rebuild tanpa persistent disk.
+
+Generate `SECRETS_MASTER_KEY` dari folder `server` dengan `node scripts/generate-master-key.mjs`, lalu simpan hasilnya sebagai env hosting. Nilainya harus tetap sama antar deploy. Kalau berubah, API key Roblox lama tidak bisa didekripsi walaupun database masih ada.
+
 ## Akun Admin CMS
 
 Admin panel sekarang memakai akun login biasa dengan role `admin`, bukan `ADMIN_SECRET`.

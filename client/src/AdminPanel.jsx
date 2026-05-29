@@ -374,7 +374,15 @@ export default function AdminPanel({ apiBase, token, currentUser, onExit, onLogo
                 <h3>Auth</h3>
                 <p><CheckCircle2 size={14} /> Google: {cmsConfig.auth?.googleConfigured ? 'configured' : 'not configured'}</p>
                 <p><CheckCircle2 size={14} /> Email: {cmsConfig.auth?.smtpConfigured ? 'configured' : 'dev mode'}</p>
+                <p><CheckCircle2 size={14} /> Secret key: {cmsConfig.auth?.cryptoConfigured ? 'configured' : 'not configured'}</p>
                 <p><CheckCircle2 size={14} /> Admin bootstrap: {cmsConfig.auth?.adminBootstrapConfigured ? 'configured' : 'not configured'}</p>
+              </article>
+              <article className="admin-card">
+                <h3>Data Persistence</h3>
+                <p><b>{cmsConfig.persistence?.backend || 'file'}</b> / {cmsConfig.persistence?.durability || '-'}</p>
+                <p className="muted small">Namespace: {cmsConfig.persistence?.namespace || '-'}</p>
+                {cmsConfig.persistence?.table && <p className="muted small">Table: {cmsConfig.persistence.table}</p>}
+                {!cmsConfig.persistence?.durable && <p className="muted small" style={{ color: 'var(--color-warning)' }}>{cmsConfig.persistence?.warning}</p>}
               </article>
               <article className="admin-card">
                 <h3>Conversion</h3>

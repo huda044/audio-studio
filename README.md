@@ -69,6 +69,8 @@ Backend Express sebaiknya dipublish ke hosting Node terpisah seperti Render, Rai
 CLIENT_ORIGIN=https://nama-project.vercel.app
 ```
 
+Untuk akun dan konfigurasi Roblox yang tidak reset saat redeploy, backend harus punya storage persisten. Cara paling aman sekarang adalah isi env `DATABASE_URL` dari PostgreSQL gratis/managed dan isi `SECRETS_MASTER_KEY` tetap. Kalau `DATABASE_URL` kosong, backend jatuh ke file JSON di `DATA_DIR`; ini bisa hilang di hosting/container gratis saat rebuild.
+
 Untuk lokal, contoh env tersedia di `client/.env.example` dan `server/.env.example`.
 
 Deployment saat ini:
@@ -93,6 +95,7 @@ Saya sudah menambahkan `render.yaml` untuk deploy backend ke Render. Backend Ren
 
 ## Catatan Keamanan
 
-- API key Roblox tidak disimpan atau dilog server.
-- Frontend menyimpan API key di `localStorage` dalam bentuk terenkripsi memakai `crypto-js`.
+- API key Roblox tidak dilog server dan tidak dikirim balik ke browser.
+- API key Roblox disimpan terenkripsi server-side memakai `SECRETS_MASTER_KEY`.
+- Pastikan `SECRETS_MASTER_KEY` tidak berubah antar deploy, supaya API key lama masih bisa didekripsi.
 - File sementara di folder `uploads` dibersihkan otomatis secara berkala.
