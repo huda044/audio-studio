@@ -9,6 +9,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY server/package*.json ./server/
+COPY server/scripts ./server/scripts
 RUN cd server && npm ci --omit=dev
 
 COPY client/package*.json ./client/

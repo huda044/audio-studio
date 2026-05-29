@@ -4,4 +4,5 @@ dist/
 uploads/*
 !uploads/.gitkeep
 server/data/
+server/bin/yt-dlp*
 *.log

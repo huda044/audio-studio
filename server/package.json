@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node scripts/install-yt-dlp.mjs || echo yt-dlp install skipped"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",

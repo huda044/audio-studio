@@ -61,7 +61,14 @@ const upload = multer({
 });
 
 function parseSettings(raw = '{}') {
-  const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+  let parsed;
+  try {
+    parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+  } catch {
+    const error = new Error('Pengaturan audio tidak valid.');
+    error.status = 400;
+    throw error;
+  }
   return {
     speed: Number(parsed.speed ?? 2.3),
     amplify: Number(parsed.amplify ?? -4),
@@ -111,7 +118,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
     if (!auth) return res.status(401).json({ error: 'Login dibutuhkan untuk konversi audio.' });
     const settings = parseSettings(req.body.settings);
     const youtubeUrl = req.body.youtubeUrl?.trim();
-    const meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
+    let meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
       title: req.file?.originalname || 'Audio Studio',
       thumbnail: ''
     };
@@ -132,6 +139,9 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       }
     } catch {
       sourceDuration = 0;
+    }
+    if (sourceDuration && youtubeUrl && !meta.duration) {
+      meta = { ...meta, duration: sourceDuration, durationSource: 'ffprobe' };
     }
     const account = await assertConversionAllowed(auth.sub, sourceDuration);
     if (account.plan.plan === 'paid') {
