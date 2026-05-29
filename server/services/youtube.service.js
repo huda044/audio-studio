@@ -756,6 +756,19 @@ function inferExtensionFromUrl(url, contentType = '') {
   return 'media';
 }
 
+function inferAudioContainerFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const mime = decodeURIComponent(parsed.searchParams.get('mime') || '').toLowerCase();
+    if (mime.includes('webm')) return 'webm';
+    if (mime.includes('mp4')) return 'm4a';
+    if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
+  } catch {
+    // Use safe default below.
+  }
+  return 'm4a';
+}
+
 async function getDirectMediaUrl(url, options = {}) {
   const output = await runYtDlp([
     ...ytDlpCommonArgs(options),
@@ -769,6 +782,38 @@ async function getDirectMediaUrl(url, options = {}) {
     .find((line) => /^https?:\/\//i.test(line));
   if (!directUrl) throw httpError('yt-dlp tidak mengembalikan direct media URL.', 422);
   return directUrl;
+}
+
+async function downloadDirectMediaSection(url, uploadsDir, options = {}) {
+  const directUrl = await getDirectMediaUrl(url, options);
+  const sectionEnd = Math.max(30, Math.ceil(Number(options.sectionEnd || 0)));
+  const ext = inferAudioContainerFromUrl(directUrl);
+  const outputPath = path.join(uploadsDir, `youtube-${nanoid(10)}-section.${ext}`);
+  const timeoutMs = Number(process.env.YOUTUBE_DIRECT_SECTION_TIMEOUT_MS || process.env.YTDLP_SECTION_TIMEOUT_MS || 120000);
+  const args = [
+    '-nostdin',
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-y',
+    '-user_agent', USER_AGENT,
+    '-t', String(sectionEnd),
+    '-i', directUrl,
+    '-vn',
+    '-map', '0:a:0',
+    '-c:a', 'copy',
+    '-movflags', '+faststart',
+    outputPath
+  ];
+  if (!ffmpegPath) throw httpError('FFmpeg tidak tersedia untuk direct-section YouTube.', 503);
+  try {
+    await execFileAsync(ffmpegPath, args, timeoutMs);
+    const stat = await fs.stat(outputPath).catch(() => null);
+    if (!stat?.size) throw httpError('Direct-section menghasilkan file kosong.', 422);
+    return outputPath;
+  } catch (error) {
+    await fs.unlink(outputPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function downloadDirectMedia(url, uploadsDir, options = {}) {
@@ -835,7 +880,7 @@ async function downloadWithYtDlp(url, uploadsDir, options = {}) {
       '--output', outputTemplate,
       url
     ], Number(options.sectionEnd
-      ? (process.env.YTDLP_SECTION_TIMEOUT_MS || 120000)
+      ? (process.env.YTDLP_SECTION_TIMEOUT_MS || 45000)
       : (process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 90000)));
   } catch (error) {
     await removeDownloadedFiles(uploadsDir, outputPrefix);
@@ -866,16 +911,15 @@ function orderedStrategies(options = {}) {
   const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
   const base = configured
     ? configured.split(',').map((item) => item.trim()).filter(Boolean)
-    : ['direct-url', 'ytdl-core', 'yt-dlp'];
+    : ['direct-section', 'direct-url', 'ytdl-core', 'yt-dlp'];
   const strategies = [];
   const add = (strategy) => {
     if (strategy && !strategies.includes(strategy)) strategies.push(strategy);
   };
-  if (options.sectionEnd && !base.includes('yt-dlp-section')) {
-    add('yt-dlp-section');
-  }
+  if (options.sectionEnd) add('direct-section');
   add('direct-url');
   for (const strategy of base) add(strategy);
+  if (options.sectionEnd && !strategies.includes('yt-dlp-section')) add('yt-dlp-section');
 
   if (String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
     const insertAfter = (needle, extra) => {
@@ -885,15 +929,20 @@ function orderedStrategies(options = {}) {
     };
     // Tambah beberapa client publik. Ini bukan jaminan melewati bot-check,
     // tapi sering cukup untuk video yang gagal di satu client extractor.
-    insertAfter('yt-dlp-section', 'yt-dlp-section-default');
-    insertAfter('yt-dlp-section-default', 'yt-dlp-section-tv');
-    insertAfter('yt-dlp-section-tv', 'yt-dlp-section-mweb');
-    insertAfter('yt-dlp-section-mweb', 'yt-dlp-section-ios');
+    insertAfter('direct-section', 'direct-section-default');
+    insertAfter('direct-section-default', 'direct-section-tv');
+    insertAfter('direct-section-tv', 'direct-section-mweb');
+    insertAfter('direct-section-mweb', 'direct-section-ios');
+    insertAfter('direct-section-ios', 'direct-section-web-embedded');
     insertAfter('direct-url', 'direct-url-default');
     insertAfter('direct-url-default', 'direct-url-tv');
     insertAfter('direct-url-tv', 'direct-url-mweb');
     insertAfter('direct-url-mweb', 'direct-url-ios');
     insertAfter('direct-url-ios', 'direct-url-web-embedded');
+    insertAfter('yt-dlp-section', 'yt-dlp-section-default');
+    insertAfter('yt-dlp-section-default', 'yt-dlp-section-tv');
+    insertAfter('yt-dlp-section-tv', 'yt-dlp-section-mweb');
+    insertAfter('yt-dlp-section-mweb', 'yt-dlp-section-ios');
     insertAfter('yt-dlp', 'yt-dlp-default');
     insertAfter('yt-dlp-default', 'yt-dlp-tv');
     insertAfter('yt-dlp-tv', 'yt-dlp-mweb');
@@ -926,6 +975,10 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
 
   for (const strategy of orderedStrategies(options)) {
     try {
+      if (strategy.startsWith('direct-section')) {
+        const outputPath = await downloadDirectMediaSection(url, uploadsDir, strategyOptions(strategy, options));
+        return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };
+      }
       if (strategy.startsWith('yt-dlp-section')) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy, options));
         return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };

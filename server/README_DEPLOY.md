@@ -70,7 +70,7 @@ YTDLP_COOKIES_TEXT=isi export cookies.txt format Netscape
 YTDLP_COOKIES_BASE64=base64_dari_file_cookies_txt
 ```
 
-Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panjang tidak selalu diunduh penuh. Sekarang mode potongan dicoba dulu, lalu backend mencoba beberapa client extractor (`mweb`, `tv`, `ios`, `default`) sebelum menyerah.
+Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panjang tidak selalu diunduh penuh. Sekarang mode paling awal adalah `direct-section`: backend ambil direct media URL dulu, lalu FFmpeg hanya membaca potongan durasi yang dibutuhkan. Setelah itu baru fallback ke client extractor (`mweb`, `tv`, `ios`, `default`) sebelum menyerah.
 
 Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.
 

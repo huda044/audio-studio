@@ -40,13 +40,15 @@ services:
       - key: YTDLP_CONCURRENT_FRAGMENTS
         value: 1
       - key: YOUTUBE_DOWNLOAD_ORDER
-        value: direct-url,ytdl-core,yt-dlp
+        value: direct-section,direct-url,ytdl-core,yt-dlp
       - key: YTDLP_GET_URL_TIMEOUT_MS
         value: 45000
       - key: YTDLP_SECTION_TIMEOUT_MS
-        value: 120000
+        value: 45000
       - key: YTDLP_DOWNLOAD_TIMEOUT_MS
         value: 90000
+      - key: YOUTUBE_DIRECT_SECTION_TIMEOUT_MS
+        value: 120000
       - key: DATA_STORE_NAMESPACE
         value: audio-studio
       - key: DATA_STORE_TABLE
