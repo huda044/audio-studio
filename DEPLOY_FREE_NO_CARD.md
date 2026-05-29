@@ -51,6 +51,9 @@ INFO_RATE_LIMIT=45
 JSON_LIMIT=512kb
 YTDLP_ENABLE_SECTIONS=true
 YTDLP_ALT_CLIENT_FALLBACKS=true
+YTDLP_FORCE_UPDATE=true
+YTDLP_FORCE_IPV4=true
+YOUTUBE_DOWNLOAD_ORDER=direct-url,ytdl-core,yt-dlp
 YTDLP_SECTION_TIMEOUT_MS=120000
 ```
 
@@ -68,6 +71,7 @@ Pengaturan hemat limit:
 - `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
 - `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
 - `YTDLP_ENABLE_SECTIONS=true` membuat backend mengambil potongan durasi yang dibutuhkan dulu, bukan download video panjang penuh.
+- `YTDLP_FORCE_IPV4=true` dan `YOUTUBE_DOWNLOAD_ORDER=direct-url,ytdl-core,yt-dlp` mengurangi error SSL/TLS dan mencoba direct media URL sebelum download penuh.
 - Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.
 
 Catatan akun, email, Google, dan pembayaran:

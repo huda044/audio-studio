@@ -74,6 +74,8 @@ Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panja
 
 Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.
 
-Jika IP hosting tetap kena bot-check, isi cookie YouTube yang masih valid atau pakai proxy pribadi lewat `YOUTUBE_PROXY`. Tidak ada bypass yang selalu berhasil kalau YouTube memblokir IP hosting, tetapi fallback ini menghindari timeout download penuh dan memperbesar peluang sukses untuk video public.
+Untuk error SSL/TLS dari hosting ke YouTube, backend default memaksa IPv4 (`YTDLP_FORCE_IPV4=true`), menurunkan koneksi paralel, dan memberi retry extractor. Kalau masih muncul `UNEXPECTED_EOF_WHILE_READING`, aktifkan proxy pribadi lewat `YOUTUBE_PROXY` atau pindah provider/IP hosting.
+
+Jika IP hosting tetap kena bot-check, isi cookie YouTube yang masih valid. Kalau cookie sudah valid tetapi YouTube tetap meminta token, yt-dlp sekarang mendukung env `YOUTUBE_PO_TOKEN` dan `YOUTUBE_VISITOR_DATA` yang diteruskan ke extractor args. Tidak ada bypass yang selalu berhasil kalau YouTube memblokir IP/session, tetapi fallback ini menghindari timeout download penuh dan memperbesar peluang sukses untuk video public.
 
 Render Free tetap punya batasan: service bisa sleep saat idle, filesystem tidak permanen, dan resource bukan untuk traffic besar terus-menerus. Tetapi untuk backend FFmpeg gratis, ini lebih kuat daripada Vercel serverless.

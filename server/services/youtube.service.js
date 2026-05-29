@@ -81,6 +81,23 @@ function isTimeoutError(error) {
     || String(error?.message || '').toLowerCase().includes('timeout');
 }
 
+function isNetworkTlsErrorText(value) {
+  const message = String(value || '').toLowerCase();
+  return message.includes('unexpected_eof_while_reading')
+    || message.includes('eof occurred in violation of protocol')
+    || message.includes('ssl')
+    || message.includes('tls')
+    || message.includes('connection reset')
+    || message.includes('remote end closed connection')
+    || message.includes('unable to download api page');
+}
+
+function envEnabled(name, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultValue;
+  return !['0', 'false', 'no', 'off'].includes(String(raw).toLowerCase());
+}
+
 function isYoutubeHost(hostname) {
   const host = hostname.toLowerCase();
   return host === 'youtu.be'
@@ -420,11 +437,11 @@ function execFileAsync(file, args, timeoutMs) {
 async function resolveYtDlpPath() {
   if (cachedYtDlpPath !== undefined) return cachedYtDlpPath;
   const envPath = String(process.env.YTDLP_PATH || process.env.YT_DLP_PATH || '').trim().replace(/^["']|["']$/g, '');
+  const preferLocal = envEnabled('YTDLP_PREFER_LOCAL', isWindows);
+  const systemCandidates = [isWindows ? 'yt-dlp.exe' : 'yt-dlp', 'yt-dlp'];
   const candidates = [
     envPath,
-    localYtDlp,
-    isWindows ? 'yt-dlp.exe' : 'yt-dlp',
-    'yt-dlp'
+    ...(preferLocal ? [localYtDlp, ...systemCandidates] : [...systemCandidates, localYtDlp])
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -462,16 +479,53 @@ function ytDlpCommonArgs(options = {}) {
     '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 15),
     '--retries', String(process.env.YTDLP_RETRIES || 2),
     '--fragment-retries', String(process.env.YTDLP_FRAGMENT_RETRIES || process.env.YTDLP_RETRIES || 2),
+    '--extractor-retries', String(process.env.YTDLP_EXTRACTOR_RETRIES || 4),
+    '--retry-sleep', String(process.env.YTDLP_RETRY_SLEEP || 'extractor:linear=1::4'),
+    '--concurrent-fragments', String(process.env.YTDLP_CONCURRENT_FRAGMENTS || 1),
     ...jsRuntimeArgs()
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
-  const extractorArgs = String(options.extractorArgs || process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=mweb,tv_embedded,web').trim();
+  const extractorArgs = buildExtractorArgs(options);
+  const impersonate = String(process.env.YTDLP_IMPERSONATE || '').trim();
+  const httpChunkSize = String(process.env.YTDLP_HTTP_CHUNK_SIZE || '').trim();
+  const sleepRequests = String(process.env.YTDLP_SLEEP_REQUESTS || '').trim();
 
   if (cookiesFile) args.push('--cookies', cookiesFile);
   if (proxy) args.push('--proxy', proxy);
+  if (envEnabled('YTDLP_FORCE_IPV4', true)) args.push('--force-ipv4');
+  if (envEnabled('YTDLP_LEGACY_SERVER_CONNECT', false)) args.push('--legacy-server-connect');
+  if (envEnabled('YTDLP_NO_CHECK_CERTIFICATES', false)) args.push('--no-check-certificates');
+  if (impersonate) args.push('--impersonate', impersonate);
+  if (httpChunkSize) args.push('--http-chunk-size', httpChunkSize);
+  if (sleepRequests) args.push('--sleep-requests', sleepRequests);
   if (extractorArgs) args.push('--extractor-args', extractorArgs);
   return args;
+}
+
+function buildExtractorArgs(options = {}) {
+  const parts = [];
+  const playerClient = options.playerClient
+    || process.env.YOUTUBE_PLAYER_CLIENT
+    || process.env.YTDLP_PLAYER_CLIENT
+    || '';
+  const playerClientArg = options.extractorArgs
+    || process.env.YTDLP_EXTRACTOR_ARGS
+    || `youtube:player_client=${playerClient || 'mweb,tv_embedded,web'}`;
+  if (playerClientArg) parts.push(playerClientArg);
+
+  const visitorData = String(process.env.YOUTUBE_VISITOR_DATA || '').trim();
+  const poToken = String(process.env.YOUTUBE_PO_TOKEN || process.env.YTDLP_PO_TOKEN || '').trim();
+  const dataSyncId = String(process.env.YOUTUBE_DATA_SYNC_ID || '').trim();
+  const playerSkip = String(process.env.YOUTUBE_PLAYER_SKIP || '').trim();
+  const extraYoutubeArgs = [];
+
+  if (visitorData) extraYoutubeArgs.push(`visitor_data=${visitorData}`);
+  if (poToken) extraYoutubeArgs.push(`po_token=${poToken}`);
+  if (dataSyncId) extraYoutubeArgs.push(`data_sync_id=${dataSyncId}`);
+  if (playerSkip) extraYoutubeArgs.push(`player_skip=${playerSkip}`);
+  if (extraYoutubeArgs.length) parts.push(`youtube:${extraYoutubeArgs.join(';')}`);
+  return parts.join(' ');
 }
 
 async function runYtDlp(args, timeoutMs = 25000) {
@@ -812,14 +866,16 @@ function orderedStrategies(options = {}) {
   const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
   const base = configured
     ? configured.split(',').map((item) => item.trim()).filter(Boolean)
-    : ['yt-dlp', 'direct-url', 'ytdl-core'];
+    : ['direct-url', 'ytdl-core', 'yt-dlp'];
   const strategies = [];
+  const add = (strategy) => {
+    if (strategy && !strategies.includes(strategy)) strategies.push(strategy);
+  };
   if (options.sectionEnd && !base.includes('yt-dlp-section')) {
-    strategies.push('yt-dlp-section');
+    add('yt-dlp-section');
   }
-  for (const strategy of base) {
-    if (!strategies.includes(strategy)) strategies.push(strategy);
-  }
+  add('direct-url');
+  for (const strategy of base) add(strategy);
 
   if (String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
     const insertAfter = (needle, extra) => {
@@ -837,10 +893,12 @@ function orderedStrategies(options = {}) {
     insertAfter('direct-url-default', 'direct-url-tv');
     insertAfter('direct-url-tv', 'direct-url-mweb');
     insertAfter('direct-url-mweb', 'direct-url-ios');
+    insertAfter('direct-url-ios', 'direct-url-web-embedded');
     insertAfter('yt-dlp', 'yt-dlp-default');
     insertAfter('yt-dlp-default', 'yt-dlp-tv');
     insertAfter('yt-dlp-tv', 'yt-dlp-mweb');
     insertAfter('yt-dlp-mweb', 'yt-dlp-ios');
+    insertAfter('yt-dlp-ios', 'yt-dlp-web-embedded');
   }
 
   return strategies;
@@ -856,6 +914,8 @@ function strategyOptions(strategy, options = {}) {
     next.extractorArgs = 'youtube:player_client=mweb';
   } else if (strategy.endsWith('-ios')) {
     next.extractorArgs = 'youtube:player_client=ios';
+  } else if (strategy.endsWith('-web-embedded')) {
+    next.extractorArgs = 'youtube:player_client=web_embedded';
   }
   return next;
 }
@@ -874,7 +934,7 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy));
         return { path: outputPath, method: strategy, failures };
       }
-      if (strategy === 'direct-url' || strategy === 'direct-url-default' || strategy === 'direct-url-tv') {
+      if (strategy.startsWith('direct-url')) {
         const outputPath = await downloadDirectMedia(url, uploadsDir, strategyOptions(strategy));
         return { path: outputPath, method: strategy, failures };
       }
@@ -895,7 +955,9 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   if (cookieStatus.state === 'invalid') {
     finalMessage = `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape lengkap dengan newline antar baris, lalu restart Space.`;
   } else if (cookieStatus.state === 'ok') {
-    finalMessage = 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan cookie dari akun yang bisa memutar video ini, backend sudah deploy versi terbaru, dan coba aktifkan YOUTUBE_PROXY kalau IP hosting dibatasi.';
+    finalMessage = failures.some((item) => isNetworkTlsErrorText(item))
+      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Ada error SSL/TLS dari jaringan hosting ke YouTube; backend sudah paksa IPv4 dan retry, jadi langkah berikutnya adalah pakai YOUTUBE_PROXY atau deploy di provider/IP lain.'
+      : 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie bisa sudah rotated/kurang lengkap, atau YouTube meminta PO Token. Coba export cookie ulang dari incognito, atau isi YOUTUBE_PO_TOKEN dan YOUTUBE_VISITOR_DATA.';
   } else if (failures.some((item) => item.toLowerCase().includes('timeout'))) {
     finalMessage = 'Download YouTube timeout di semua fallback. Backend sudah mencoba mode potongan dan beberapa client extractor; coba kecilkan Max Duration, isi cookie YouTube, atau pakai proxy hosting yang tidak dibatasi YouTube.';
   } else {

@@ -13,16 +13,34 @@ services:
         value: 250
       - key: INLINE_AUDIO_LIMIT_MB
         value: 8
+      - key: YTDLP_FORCE_UPDATE
+        value: true
+      - key: YTDLP_PREFER_LOCAL
+        value: false
       - key: YTDLP_ENABLE_SECTIONS
         value: true
       - key: YTDLP_ALT_CLIENT_FALLBACKS
         value: true
+      - key: YTDLP_FORCE_IPV4
+        value: true
+      - key: YTDLP_LEGACY_SERVER_CONNECT
+        value: false
+      - key: YTDLP_NO_CHECK_CERTIFICATES
+        value: false
       - key: YTDLP_SOCKET_TIMEOUT
         value: 15
       - key: YTDLP_RETRIES
         value: 2
       - key: YTDLP_FRAGMENT_RETRIES
         value: 2
+      - key: YTDLP_EXTRACTOR_RETRIES
+        value: 4
+      - key: YTDLP_RETRY_SLEEP
+        value: extractor:linear=1::4
+      - key: YTDLP_CONCURRENT_FRAGMENTS
+        value: 1
+      - key: YOUTUBE_DOWNLOAD_ORDER
+        value: direct-url,ytdl-core,yt-dlp
       - key: YTDLP_GET_URL_TIMEOUT_MS
         value: 45000
       - key: YTDLP_SECTION_TIMEOUT_MS
