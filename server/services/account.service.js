@@ -103,6 +103,9 @@ function migrateUser(user) {
   const next = { ...user };
   next.role = next.role || 'user';
   next.status = next.status || 'active';
+  next.discordId = next.discordId || '';
+  next.discordUsername = next.discordUsername || '';
+  next.discordAvatar = next.discordAvatar || '';
   next.usage = next.usage || { conversions: 0, lastConversionAt: null };
   next.usage.conversions = Number(next.usage.conversions || 0);
   next.usage.lastConversionAt = next.usage.lastConversionAt || null;
@@ -541,6 +544,146 @@ export async function loginWithGoogle({ credential }, context = {}) {
   user.lastLoginUa = context.ua || null;
   user.loginCount = Number(user.loginCount || 0) + 1;
   pushAudit(user, isNew ? 'register_google' : 'login_google', { ip: context.ip || null });
+  await writeStore(store);
+  return publicUser(user);
+}
+
+// ===========================================================================
+// Discord OAuth (Authorization Code flow)
+// ===========================================================================
+
+export function isDiscordConfigured() {
+  return Boolean(discordClientId && discordClientSecret && discordRedirectUri);
+}
+
+export function buildDiscordAuthUrl(state = '') {
+  if (!isDiscordConfigured()) {
+    const error = new Error('Discord login belum dikonfigurasi.');
+    error.status = 503;
+    throw error;
+  }
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: discordClientId,
+    scope: discordScopes.join(' '),
+    redirect_uri: discordRedirectUri,
+    prompt: 'consent'
+  });
+  if (state) params.set('state', state);
+  return `https://discord.com/api/oauth2/authorize?${params.toString()}`;
+}
+
+async function exchangeDiscordCode(code) {
+  const body = new URLSearchParams({
+    client_id: discordClientId,
+    client_secret: discordClientSecret,
+    grant_type: 'authorization_code',
+    code: String(code || ''),
+    redirect_uri: discordRedirectUri
+  });
+  const response = await fetch('https://discord.com/api/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: body.toString()
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error_description || data.error || 'Discord menolak code.');
+    error.status = response.status === 401 ? 401 : 400;
+    throw error;
+  }
+  return data;
+}
+
+async function fetchDiscordUser(accessToken) {
+  const response = await fetch('https://discord.com/api/users/@me', {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.message || 'Gagal membaca profil Discord.');
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+export async function loginWithDiscord({ code }, context = {}) {
+  if (!isDiscordConfigured()) {
+    const error = new Error('Discord login belum dikonfigurasi di server.');
+    error.status = 503;
+    throw error;
+  }
+  if (!code) {
+    const error = new Error('Discord OAuth code tidak ada.');
+    error.status = 400;
+    throw error;
+  }
+  const tokenSet = await exchangeDiscordCode(code);
+  const profile = await fetchDiscordUser(tokenSet.access_token);
+  const discordId = String(profile.id || '').trim();
+  if (!discordId) {
+    const error = new Error('Discord tidak mengembalikan ID user.');
+    error.status = 502;
+    throw error;
+  }
+  const emailFromDiscord = String(profile.email || '').toLowerCase();
+  if (!emailFromDiscord && !discordScopes.includes('email')) {
+    // OK, kita pakai pseudo email berbasis ID
+  }
+  const fallbackEmail = emailFromDiscord || `${discordId}@discord.local`;
+  const usernameRaw = String(profile.username || profile.global_name || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const usernameBase = (usernameRaw || `discord${discordId}`).slice(0, 18);
+
+  const store = await readStore();
+  let user = store.users.find((item) => item.discordId === discordId)
+    || (emailFromDiscord ? store.users.find((item) => item.email === emailFromDiscord) : null);
+  let isNew = false;
+  if (!user) {
+    let candidate = usernameBase;
+    let suffix = 0;
+    while (store.users.some((item) => item.username === candidate)) {
+      suffix += 1;
+      candidate = `${usernameBase}${suffix}`.slice(0, 22);
+      if (suffix > 50) {
+        candidate = `${usernameBase}${nanoid(4)}`;
+        break;
+      }
+    }
+    user = migrateUser({
+      id: nanoid(12),
+      username: candidate,
+      email: fallbackEmail,
+      emailVerified: Boolean(profile.verified) || !emailFromDiscord, // email Discord-only sudah equivalent verified
+      discordId,
+      discordUsername: profile.username || '',
+      discordAvatar: profile.avatar || '',
+      passwordHash: '',
+      role: 'user',
+      status: 'active',
+      createdAt: nowIso(),
+      subscription: { plan: 'free', label: 'Free', expiresAt: null, history: [] },
+      usage: { conversions: 0, lastConversionAt: null, lastReason: null },
+      profile: { robloxConfig: {}, groups: [], history: [] }
+    });
+    store.users.push(user);
+    isNew = true;
+  } else {
+    user.discordId = discordId;
+    user.discordUsername = profile.username || user.discordUsername || '';
+    user.discordAvatar = profile.avatar || user.discordAvatar || '';
+    user.emailVerified = true;
+    if (emailFromDiscord && user.email !== emailFromDiscord) {
+      const conflict = store.users.find((item) => item.email === emailFromDiscord && item.id !== user.id);
+      if (!conflict) user.email = emailFromDiscord;
+    }
+  }
+  ensureAccountUsable(user);
+  user.lastLoginAt = nowIso();
+  user.lastLoginIp = context.ip || null;
+  user.lastLoginUa = context.ua || null;
+  user.loginCount = Number(user.loginCount || 0) + 1;
+  pushAudit(user, isNew ? 'register_discord' : 'login_discord', { ip: context.ip || null });
   await writeStore(store);
   return publicUser(user);
 }

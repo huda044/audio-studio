@@ -884,6 +884,27 @@ code {
 
 .google-btn-slot { display:flex; justify-content:center; }
 
+.discord-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(88, 101, 242, 0.55);
+  background: linear-gradient(180deg, #5865F2 0%, #4752c4 100%);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 120ms ease, transform 120ms ease;
+}
+.discord-button:hover { filter: brightness(1.08); }
+.discord-button:active { transform: translateY(1px); }
+.discord-button svg { flex: 0 0 auto; }
+.auth-discord-slot { margin-top: 4px; }
+
 
 /* Pricing & Payment Modals */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.78); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px; }
@@ -1813,3 +1834,178 @@ body { background: #000; }
 .app-shell { background: #000; }
 .app-sidebar { background: #060608; }
 .app-topbar { background: rgba(0, 0, 0, 0.85); }
+
+
+/* =========================================================================
+   Landing & Legal pages (publik, sebelum login)
+   ========================================================================= */
+.landing-page,
+.legal-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% -20%, rgba(124, 58, 237, 0.18), transparent 55%),
+              radial-gradient(circle at 90% 110%, rgba(6, 182, 212, 0.18), transparent 55%),
+              #0b0d18;
+  color: #e7e8ef;
+  padding: 28px 5vw 60px;
+}
+.landing-header,
+.legal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 36px;
+}
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.landing-cta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.landing-hero {
+  max-width: 880px;
+  margin: 0 auto 56px;
+  text-align: center;
+}
+.landing-hero h1 {
+  font-size: clamp(28px, 4.4vw, 48px);
+  line-height: 1.15;
+  margin: 0 0 16px;
+  background: linear-gradient(120deg, #fff 0%, #b3a3ff 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.landing-hero p {
+  font-size: 16px;
+  line-height: 1.65;
+  margin: 0 auto 24px;
+  max-width: 720px;
+  opacity: 0.85;
+}
+.landing-hero .landing-cta { justify-content: center; }
+.landing-features,
+.landing-pricing,
+.landing-security {
+  max-width: 1100px;
+  margin: 0 auto 56px;
+}
+.landing-features h2,
+.landing-pricing h2,
+.landing-security h2 {
+  text-align: center;
+  font-size: 24px;
+  margin: 0 0 24px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.92;
+}
+.landing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.landing-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 20px;
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+.landing-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(124, 58, 237, 0.45);
+}
+.landing-icon {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+.landing-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.landing-card p {
+  margin: 0;
+  line-height: 1.55;
+  font-size: 14px;
+  opacity: 0.82;
+}
+.landing-plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.landing-plan {
+  position: relative;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+.landing-plan.featured {
+  border-color: rgba(124, 58, 237, 0.6);
+  box-shadow: 0 18px 40px rgba(124, 58, 237, 0.18);
+}
+.plan-tag {
+  position: absolute;
+  top: -10px;
+  right: 16px;
+  background: linear-gradient(120deg, #7c3aed, #06b6d4);
+  color: #fff;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.landing-plan h3 { margin: 0 0 4px; font-size: 18px; }
+.plan-price { font-size: 28px; font-weight: 700; margin: 0 0 16px; }
+.landing-plan ul { margin: 0 0 20px; padding-left: 18px; line-height: 1.6; opacity: 0.88; font-size: 14px; }
+.landing-plan button { margin-top: auto; }
+.landing-free-note { text-align: center; margin-top: 14px; }
+.landing-footer {
+  text-align: center;
+  margin-top: 40px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+.landing-footer a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.3);
+}
+
+.legal-article {
+  max-width: 760px;
+  margin: 0 auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 28px 32px;
+  line-height: 1.7;
+}
+.legal-article h2 {
+  margin: 24px 0 8px;
+  font-size: 17px;
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+}
+.legal-article h2:first-of-type { margin-top: 0; }
+.legal-article p,
+.legal-article ul { margin: 0 0 12px; opacity: 0.9; font-size: 14.5px; }
+.legal-article a { color: #b3a3ff; }
+.legal-header h1 { margin: 0; flex: 1 1 auto; text-align: center; font-size: 24px; }
+@media (max-width: 640px) {
+  .landing-header,
+  .legal-header { flex-direction: column; align-items: flex-start; }
+  .legal-header h1 { text-align: left; }
+}

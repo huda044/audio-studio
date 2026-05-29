@@ -1,13 +1,16 @@
 import express from 'express';
 import {
+  buildDiscordAuthUrl,
   confirmPayment,
   confirmPasswordReset,
   createPayment,
   getUserById,
   handleMidtransWebhook,
   isAdminRequest,
+  isDiscordConfigured,
   listUserPayments,
   loginUser,
+  loginWithDiscord,
   loginWithGoogle,
   registerUser,
   requestPasswordReset,
@@ -108,6 +111,48 @@ router.post('/auth/google', authLimit, async (req, res, next) => {
   }
 });
 
+// Discord OAuth (Authorization Code flow)
+router.get('/auth/discord/url', (_req, res) => {
+  try {
+    if (!isDiscordConfigured()) {
+      return res.status(503).json({ enabled: false, error: 'Discord login belum dikonfigurasi.' });
+    }
+    res.json({ enabled: true, url: buildDiscordAuthUrl() });
+  } catch (error) {
+    res.status(error.status || 500).json({ enabled: false, error: error.message });
+  }
+});
+
+router.get('/auth/discord/callback', authLimit, async (req, res, next) => {
+  try {
+    const code = String(req.query.code || '');
+    if (!code) {
+      const target = `${process.env.APP_PUBLIC_URL || ''}/?discord_error=${encodeURIComponent('code missing')}`;
+      return res.redirect(target);
+    }
+    const user = await loginWithDiscord({ code }, ctx(req));
+    const token = signUser(user);
+    const base = (process.env.APP_PUBLIC_URL || '').replace(/\/$/, '');
+    if (!base) {
+      // Tidak ada redirect target yang aman; fallback ke JSON.
+      return res.json({ token, user });
+    }
+    const params = new URLSearchParams({ token, source: 'discord' });
+    return res.redirect(`${base}/?${params.toString()}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/auth/discord/exchange', authLimit, async (req, res, next) => {
+  try {
+    const user = await loginWithDiscord(req.body, ctx(req));
+    res.json({ token: signUser(user), user });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/auth/me', authMiddleware, async (req, res, next) => {
   try {
     const user = await getUserById(req.auth.sub);
@@ -162,6 +207,9 @@ router.get('/billing/gateway', (_req, res) => {
     },
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID || ''
+    },
+    discord: {
+      enabled: isDiscordConfigured()
     },
     admin: {
       discord: process.env.ADMIN_DISCORD || 'https://discord.com/users/lucifer404044',
