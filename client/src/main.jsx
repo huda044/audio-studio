@@ -1025,7 +1025,7 @@ function App() {
       const requestSignature = currentProcessSignature();
       const result = processed?.requestSignature === requestSignature ? processed : await processOnly();
       const robloxTarget = getRobloxUploadContext();
-      setStep(2, 'Mengirim audio ke Roblox...');
+      setStep(3, 'Mengirim audio ke Roblox...');
       const audioSource = result.audioDataUrl || `${API_BASE}${result.audioUrl}`;
       const blob = await fetch(audioSource).then((response) => response.blob());
       const form = new FormData();

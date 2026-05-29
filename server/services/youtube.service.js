@@ -466,7 +466,7 @@ function ytDlpCommonArgs(options = {}) {
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
-  const extractorArgs = String(options.extractorArgs || process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=android,web').trim();
+  const extractorArgs = String(options.extractorArgs || process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=mweb,tv_embedded,web').trim();
 
   if (cookiesFile) args.push('--cookies', cookiesFile);
   if (proxy) args.push('--proxy', proxy);

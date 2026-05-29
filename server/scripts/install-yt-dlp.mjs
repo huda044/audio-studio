@@ -55,12 +55,19 @@ const target = targetInfo();
 const outputPath = path.join(binDir, target.fileName);
 
 await fs.mkdir(binDir, { recursive: true });
-try {
-  const version = await execFileAsync(outputPath, ['--version']);
-  console.log(`yt-dlp already installed: ${version}`);
-  process.exit(0);
-} catch {
-  // Download below.
+
+const forceUpdate = String(process.env.YTDLP_FORCE_UPDATE || 'false').toLowerCase() === 'true';
+
+if (!forceUpdate) {
+  try {
+    const version = await execFileAsync(outputPath, ['--version']);
+    console.log(`yt-dlp already installed: ${version}`);
+    process.exit(0);
+  } catch {
+    // Download below.
+  }
+} else {
+  console.log('YTDLP_FORCE_UPDATE=true, downloading latest yt-dlp release.');
 }
 
 console.log(`Downloading yt-dlp from ${target.url}`);
