@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
-import { downloadYoutubeAudio, getYoutubeInfo } from '../services/youtube.service.js';
+import { downloadYoutubeAudio, getYoutubeInfo, inspectCookies } from '../services/youtube.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { assertConversionAllowed, recordConversion, verifyToken } from '../services/account.service.js';
 import { probeAudio } from '../services/ffmpeg.service.js';
@@ -169,6 +169,24 @@ function computeYoutubeSectionEnd(settings = {}, sourceDuration = 0) {
   if (sourceDuration) end = Math.min(end, Math.ceil(sourceDuration));
   return end >= 30 ? end : 0;
 }
+
+router.get('/youtube-cookies-status', infoLimit, async (_req, res, next) => {
+  try {
+    const status = inspectCookies();
+    // Jangan bocorkan path file di luar dev.
+    const safe = {
+      state: status.state,
+      validCount: status.validCount,
+      totalLines: status.totalLines,
+      reason: status.reason,
+      envSet: status.envSet,
+      hasFile: Boolean(status.file)
+    };
+    res.json(safe);
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {

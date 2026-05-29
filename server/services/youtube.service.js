@@ -22,6 +22,34 @@ let cachedYtdlOptions = null;
 let cachedYtDlpPath;
 let cachedCookiesKey = '';
 let cachedCookiesFile = '';
+let cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '' };
+let cookieLogged = false;
+
+export function getCookieStatus() {
+  return { ...cookieStatus };
+}
+
+export function inspectCookies() {
+  cookieLogged = true; // suppress duplicate console log on inspect
+  const file = resolveGeneratedCookiesFile();
+  return {
+    ...cookieStatus,
+    file: file || null,
+    envSet: hasCookieAttempt()
+  };
+}
+
+function hasCookieAttempt() {
+  return Boolean(
+    String(process.env.YTDLP_COOKIES_FILE || '').trim()
+    || String(process.env.YTDLP_COOKIES_TEXT || '').trim()
+    || String(process.env.YTDLP_COOKIES_BASE64 || '').trim()
+    || String(process.env.YOUTUBE_COOKIES_TEXT || '').trim()
+    || String(process.env.YOUTUBE_COOKIES_BASE64 || '').trim()
+    || String(process.env.YOUTUBE_COOKIES_JSON || '').trim()
+    || String(process.env.YOUTUBE_COOKIE || '').trim()
+  );
+}
 
 function httpError(message, status = 422, cause) {
   const error = new Error(message);
@@ -51,10 +79,6 @@ function isBotCheckError(error) {
 function isTimeoutError(error) {
   return Number(error?.status || 0) === 408
     || String(error?.message || '').toLowerCase().includes('timeout');
-}
-
-function botCheckMessage() {
-  return 'YouTube menolak request dari hosting ini karena bot-check. Tambahkan cookie YouTube ke secret YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE di backend, lalu restart Space. Atau upload file audio langsung.';
 }
 
 function isYoutubeHost(hostname) {
@@ -145,18 +169,135 @@ function parseCookiesJson(raw) {
   }
 }
 
-function normalizeCookieText(raw) {
-  const text = String(raw || '').replace(/\\n/g, '\n').trim();
-  if (!text) return '';
-  if (text.includes('\t') && text.includes('youtube')) return text;
-  const rows = ['# Netscape HTTP Cookie File'];
-  for (const item of text.split(';')) {
-    const [name, ...rest] = item.trim().split('=');
-    const value = rest.join('=');
-    if (!name || !value) continue;
-    rows.push(`.youtube.com\tTRUE\t/\tTRUE\t1893456000\t${name.trim()}\t${value.trim()}`);
+function looksBinary(text) {
+  if (!text) return false;
+  let bad = 0;
+  const sample = text.slice(0, 4000);
+  for (let i = 0; i < sample.length; i += 1) {
+    const code = sample.charCodeAt(i);
+    if (code === 9 || code === 10 || code === 13) continue;
+    if (code < 32 || code === 0xFFFD) bad += 1;
   }
-  return rows.length > 1 ? rows.join('\n') : text;
+  return bad > Math.max(8, sample.length * 0.01);
+}
+
+function jsonCookiesToNetscape(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return '';
+  }
+  if (!Array.isArray(parsed)) return '';
+  const lines = ['# Netscape HTTP Cookie File'];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') continue;
+    const domain = String(entry.domain || '').trim();
+    const name = String(entry.name || '').trim();
+    const value = String(entry.value ?? '').trim();
+    if (!domain || !name) continue;
+    const includeSubdomains = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+    const cookiePath = String(entry.path || '/').trim() || '/';
+    const secure = entry.secure ? 'TRUE' : 'FALSE';
+    const expires = Number(entry.expirationDate || entry.expires || 0);
+    lines.push([
+      domain,
+      includeSubdomains,
+      cookiePath,
+      secure,
+      Math.max(0, Math.floor(expires)),
+      name,
+      value
+    ].join('\t'));
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}
+
+function repairFlattenedNetscape(text) {
+  // Sisipkan newline sebelum domain berikutnya kalau seluruh isi ngumpul jadi 1 baris.
+  // Pattern entry yang valid setelah field VALUE adalah: <value>.<domain>.com<TAB>TRUE/FALSE<TAB>/<TAB>TRUE/FALSE<TAB>...
+  // Pakai lookahead ketat: setelah domain harus ada TAB + TRUE/FALSE + TAB + path.
+  // Lookbehind [^.\n\t] memastikan kita tidak split di awal file atau tengah domain.
+  return text.replace(
+    /(?<=[A-Za-z0-9_+\/=%&\-])(?=\.(?:youtube|google|googlevideo|ytimg)\.com\t(?:TRUE|FALSE)\t\/\t)/g,
+    '\n'
+  );
+}
+
+function normalizeCookieText(raw) {
+  let text = String(raw || '');
+  // Buang BOM, normalisasi newline, hapus kutip pembungkus paste env.
+  text = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').trim();
+  if (!text) return '';
+
+  if (looksBinary(text)) {
+    cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'binary-or-corrupt' };
+    return '';
+  }
+
+  if (text.startsWith('[') || text.startsWith('{')) {
+    const converted = jsonCookiesToNetscape(text);
+    if (converted) text = converted;
+  }
+
+  // Kalau seluruh cookies nempel jadi 1 baris karena env var kehilangan \n,
+  // pisahkan otomatis sebelum domain berikutnya.
+  if (!text.includes('\n')) {
+    text = repairFlattenedNetscape(text);
+  }
+
+  // Format "name=value; name2=value2" (tanpa tab) dari header Cookie.
+  if (!text.includes('\t')) {
+    const rows = ['# Netscape HTTP Cookie File'];
+    for (const item of text.split(/[;\n]/)) {
+      const [name, ...rest] = item.trim().split('=');
+      const value = rest.join('=');
+      if (!name || !value) continue;
+      rows.push(`.youtube.com\tTRUE\t/\tTRUE\t1893456000\t${name.trim()}\t${value.trim()}`);
+    }
+    text = rows.length > 1 ? rows.join('\n') : '';
+    if (!text) {
+      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'no-tabs-and-no-pairs' };
+      return '';
+    }
+  }
+
+  const validRows = [];
+  let totalLines = 0;
+  for (const original of text.split('\n')) {
+    const line = original.trim();
+    if (!line) continue;
+    if (line.startsWith('#')) {
+      validRows.push(line);
+      continue;
+    }
+    totalLines += 1;
+    const cols = line.split('\t');
+    if (cols.length < 7) continue;
+    // Buang trailing empty col (jadi 8 kalau ada tab tambahan).
+    const normalized = cols.slice(0, 7);
+    const [domain, includeSub, cookiePath, secure, expires, name] = normalized;
+    if (!domain || !name) continue;
+    if (!/^\.?[\w-]+(?:\.[\w-]+)+$/.test(domain)) continue;
+    if (!/^(TRUE|FALSE)$/i.test(includeSub)) continue;
+    if (!/^(TRUE|FALSE)$/i.test(secure)) continue;
+    if (!/^-?\d+$/.test(expires)) continue;
+    if (!cookiePath.startsWith('/')) continue;
+    validRows.push(normalized.join('\t'));
+  }
+
+  const validCount = validRows.filter((row) => !row.startsWith('#')).length;
+  if (!validCount) {
+    cookieStatus = { state: 'invalid', validCount: 0, totalLines, reason: 'no-valid-rows' };
+    return '';
+  }
+
+  if (!validRows.some((row) => row.startsWith('# Netscape HTTP Cookie File'))) {
+    validRows.unshift('# Netscape HTTP Cookie File');
+  }
+  cookieStatus = { state: 'ok', validCount, totalLines, reason: '' };
+  return `${validRows.join('\n')}\n`;
 }
 
 function envCookieText() {
@@ -167,31 +308,60 @@ function envCookieText() {
     try {
       return normalizeCookieText(Buffer.from(rawBase64, 'base64').toString('utf8'));
     } catch {
+      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'base64-decode-failed' };
       return '';
     }
   }
+  if (process.env.YOUTUBE_COOKIES_JSON) return normalizeCookieText(process.env.YOUTUBE_COOKIES_JSON);
   if (process.env.YOUTUBE_COOKIE) return normalizeCookieText(process.env.YOUTUBE_COOKIE);
   return '';
 }
 
 function resolveGeneratedCookiesFile() {
   const cookiesFile = String(process.env.YTDLP_COOKIES_FILE || '').trim();
-  if (cookiesFile) return cookiesFile;
+  if (cookiesFile) {
+    if (existsSync(cookiesFile)) {
+      cookieStatus = { state: 'ok', validCount: -1, totalLines: -1, reason: 'external-file' };
+      return cookiesFile;
+    }
+    cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'cookies-file-missing' };
+    return '';
+  }
   const text = envCookieText();
-  if (!text) return '';
+  if (!text) {
+    if (cookieStatus.state !== 'invalid' && !hasCookieAttempt()) {
+      cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '' };
+    }
+    if (!cookieLogged && cookieStatus.state === 'invalid') {
+      cookieLogged = true;
+      console.warn(`[youtube] cookie env diabaikan, format rusak (${cookieStatus.reason}). Pastikan cookies.txt Netscape disalin lengkap dengan newline.`);
+    }
+    return '';
+  }
   const key = crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
   if (cachedCookiesFile && cachedCookiesKey === key && existsSync(cachedCookiesFile)) return cachedCookiesFile;
   const dir = path.join(os.tmpdir(), 'audio-studio-cookies');
   mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `youtube-${key}.txt`);
-  writeFileSync(filePath, `${text}\n`, { mode: 0o600 });
+  writeFileSync(filePath, text, { mode: 0o600 });
   cachedCookiesKey = key;
   cachedCookiesFile = filePath;
+  if (!cookieLogged) {
+    cookieLogged = true;
+    console.log(`[youtube] cookies.txt siap (${cookieStatus.validCount} entri valid).`);
+  }
   return filePath;
 }
 
 function hasCookieSupport() {
-  return Boolean(resolveGeneratedCookiesFile() || process.env.YOUTUBE_COOKIES_JSON || process.env.YOUTUBE_COOKIE);
+  return Boolean(resolveGeneratedCookiesFile());
+}
+
+function botCheckMessage() {
+  if (cookieStatus.state === 'invalid') {
+    return `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape dari extension "Get cookies.txt LOCALLY" lengkap dengan newline antar baris, lalu restart Space.`;
+  }
+  return 'YouTube menolak request dari hosting ini karena bot-check. Tambahkan cookie YouTube ke secret YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE di backend, lalu restart Space. Atau upload file audio langsung.';
 }
 
 function getYtdlOptions() {
@@ -704,12 +874,16 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
     }
   }
 
-  const error = httpError(
-    hasCookieSupport()
-      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan Space sudah deploy versi terbaru, cookie dari akun yang bisa memutar video, dan YouTube tidak membatasi video ini.'
-      : 'Download YouTube gagal. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE lalu restart Space.',
-    422
-  );
+  let finalMessage;
+  if (cookieStatus.state === 'invalid') {
+    finalMessage = `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape lengkap dengan newline antar baris, lalu restart Space.`;
+  } else if (cookieStatus.state === 'ok') {
+    finalMessage = 'Download YouTube gagal walau cookie sudah dikonfigurasi. Pastikan Space sudah deploy versi terbaru, cookie dari akun yang bisa memutar video, dan YouTube tidak membatasi video ini.';
+  } else {
+    finalMessage = 'Download YouTube gagal. Jika hosting terkena bot-check YouTube, isi YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE lalu restart Space.';
+  }
+  const error = httpError(finalMessage, 422);
   error.details = failures;
+  error.cookieStatus = cookieStatus;
   throw error;
 }
