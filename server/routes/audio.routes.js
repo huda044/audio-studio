@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
-import { downloadYoutubeAudio, getYoutubeInfo, inspectCookies } from '../services/youtube.service.js';
+import { downloadYoutubeAudio, getYoutubeInfo, inspectCookies, normalizeYoutubeUrl } from '../services/youtube.service.js';
+import { downloadSoundCloudAudio, getSoundCloudInfo, isSoundCloudUrl, normalizeSoundCloudUrl } from '../services/soundcloud.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { assertConversionAllowed, recordConversion, verifyToken } from '../services/account.service.js';
+import { assertConversionAllowed, recordConversion, verifyToken, getServerApiKeyForUser } from '../services/account.service.js';
+import { encryptSecret, isCryptoConfigured } from '../services/crypto.service.js';
 import { probeAudio } from '../services/ffmpeg.service.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
 
@@ -170,6 +172,16 @@ function computeYoutubeSectionEnd(settings = {}, sourceDuration = 0) {
   return end >= 30 ? end : 0;
 }
 
+router.get('/security-status', infoLimit, (_req, res) => {
+  res.json({
+    cryptoConfigured: isCryptoConfigured(),
+    cipher: 'aes-256-gcm',
+    notice: isCryptoConfigured()
+      ? 'API key Roblox disimpan terenkripsi AES-256-GCM di server.'
+      : 'SECRETS_MASTER_KEY belum di-set di server. Generate 32-byte random base64 dan tambahkan ke env.'
+  });
+});
+
 router.get('/youtube-cookies-status', infoLimit, async (_req, res, next) => {
   try {
     const status = inspectCookies();
@@ -198,6 +210,33 @@ router.get('/youtube-info', infoLimit, async (req, res, next) => {
   }
 });
 
+router.get('/soundcloud-info', infoLimit, async (req, res, next) => {
+  try {
+    if (!req.query.url) return res.status(400).json({ error: 'URL SoundCloud wajib diisi.' });
+    const info = await getSoundCloudInfo(String(req.query.url));
+    res.json(info);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Helper: detect source type dari URL atau alias 'youtubeUrl' / 'sourceUrl'.
+function detectSourceUrl(body) {
+  const candidates = [body?.sourceUrl, body?.youtubeUrl, body?.soundcloudUrl];
+  for (const raw of candidates) {
+    const url = String(raw || '').trim();
+    if (!url) continue;
+    if (isSoundCloudUrl(url)) return { kind: 'soundcloud', url: normalizeSoundCloudUrl(url) };
+    try {
+      const { url: ytUrl } = normalizeYoutubeUrl(url);
+      return { kind: 'youtube', url: ytUrl };
+    } catch {
+      // Bukan YouTube; biarkan loop kepikir kandidat berikutnya
+    }
+  }
+  return { kind: '', url: '' };
+}
+
 router.post('/process', processLimit, upload.single('audio'), async (req, res, next) => {
   let sourcePath = req.file?.path;
   let downloadedPath = '';
@@ -211,25 +250,32 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       }
       const settings = parseSettings(req.body.settings);
       const requestedMaxDuration = settings.maxDuration;
-      const youtubeUrl = req.body.youtubeUrl?.trim();
+      const source = detectSourceUrl(req.body || {});
+      const sourceUrl = source.url;
+      const sourceKind = source.kind;
       const warnings = [];
       const downloadTrace = [];
-      let meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
-        title: req.file?.originalname || 'Audio Studio',
-        thumbnail: '',
-        durationSource: req.file ? 'upload' : 'unknown'
-      };
+      let meta = sourceUrl
+        ? (sourceKind === 'soundcloud' ? await getSoundCloudInfo(sourceUrl) : await getYoutubeInfo(sourceUrl))
+        : {
+          title: req.file?.originalname || 'Audio Studio',
+          thumbnail: '',
+          durationSource: req.file ? 'upload' : 'unknown'
+        };
 
-      if (!sourcePath && youtubeUrl) {
+      if (!sourcePath && sourceUrl) {
         const sectionEnd = computeYoutubeSectionEnd(settings, Number(meta.duration || 0));
-        const download = await downloadYoutubeAudio(youtubeUrl, uploadsDir, { sectionEnd });
+        const download = sourceKind === 'soundcloud'
+          ? await downloadSoundCloudAudio(sourceUrl, uploadsDir, { sectionEnd })
+          : await downloadYoutubeAudio(sourceUrl, uploadsDir, { sectionEnd });
         sourcePath = typeof download === 'string' ? download : download.path;
         downloadedPath = sourcePath;
+        const sourceLabel = sourceKind === 'soundcloud' ? 'SoundCloud' : 'YouTube';
         if (download?.method) {
           downloadTrace.push({
             step: 'Download',
             status: 'Accepted',
-            message: `YouTube berhasil diambil lewat ${download.method}${download.sectionEnd ? ` sampai ${formatSeconds(download.sectionEnd)}` : ''}.`
+            message: `${sourceLabel} berhasil diambil lewat ${download.method}${download.sectionEnd ? ` sampai ${formatSeconds(download.sectionEnd)}` : ''}.`
           });
         }
         if (download?.failures?.length) {
@@ -238,7 +284,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       }
 
       if (!sourcePath) {
-        const error = new Error('Upload file audio atau masukkan URL YouTube.');
+        const error = new Error('Upload file audio atau masukkan URL YouTube/SoundCloud.');
         error.status = 400;
         throw error;
       }
@@ -246,7 +292,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       let sourceDuration = 0;
       let sourceProbe = null;
       try {
-        if (youtubeUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
+        if (sourceUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
         sourceProbe = await probeAudio(sourcePath);
         const probedDuration = Number(sourceProbe.format.duration || 0);
         if (probedDuration) sourceDuration = probedDuration;
@@ -254,7 +300,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
         sourceDuration = 0;
       }
-      if (sourceDuration && youtubeUrl && (!meta.duration || meta.durationSource !== 'ffprobe')) {
+      if (sourceDuration && sourceUrl && (!meta.duration || meta.durationSource !== 'ffprobe')) {
         meta = { ...meta, duration: sourceDuration, durationSource: 'ffprobe' };
       }
       const account = await assertConversionAllowed(auth.sub, sourceDuration);
@@ -274,7 +320,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
 
       const user = await recordConversion(auth.sub, {
-        source: youtubeUrl ? 'youtube' : 'upload',
+        source: sourceKind || (sourceUrl ? 'url' : 'upload'),
         duration: result.duration,
         title: meta.title
       });
@@ -306,7 +352,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         },
         conversionTrace: [
           {
-            step: youtubeUrl ? 'YouTube' : 'Upload',
+            step: sourceKind === 'soundcloud' ? 'SoundCloud' : (sourceKind === 'youtube' ? 'YouTube' : 'Upload'),
             status: 'Accepted',
             message: sourceDuration
               ? `Sumber terbaca ${formatSeconds(sourceDuration)}.`
@@ -324,7 +370,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
             message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
           }
         ],
-        source: youtubeUrl ? 'youtube' : 'upload',
+        source: sourceKind || (sourceUrl ? 'url' : 'upload'),
         queue: conversionQueue.stats(),
         account: user ? { usage: user.usage, subscription: user.subscription } : null
       };
@@ -338,11 +384,32 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
   }
 });
 
+async function resolveApiKeyFromRequest(req, body = {}) {
+  const auth = readAuth(req);
+  // 1) Pakai key tersimpan server berdasarkan keyRef (groupId atau 'personal')
+  const keyRef = String(body.keyRef || '').trim();
+  if (auth?.sub && keyRef) {
+    const groupId = keyRef === 'personal' ? '' : keyRef;
+    try {
+      const apiKey = await getServerApiKeyForUser(auth.sub, { groupId });
+      if (apiKey) return { apiKey, source: 'server-stored' };
+    } catch (error) {
+      // Bubble up "legacy / decrypt error" supaya UI bisa minta user re-enter
+      throw error;
+    }
+  }
+  // 2) Klien lama kirim plaintext apiKey langsung (one-shot, tidak disimpan)
+  const plain = String(body.apiKey || '').trim();
+  if (plain) return { apiKey: plain, source: 'inline' };
+  return { apiKey: '', source: 'absent' };
+}
+
 router.post('/asset-status', infoLimit, async (req, res, next) => {
   try {
-    const { operationId, apiKey } = req.body || {};
+    const { operationId } = req.body || {};
     if (!operationId) return res.status(400).json({ error: 'operationId wajib.' });
-    if (!apiKey) return res.status(400).json({ error: 'apiKey wajib.' });
+    const { apiKey } = await resolveApiKeyFromRequest(req, req.body || {});
+    if (!apiKey) return res.status(400).json({ error: 'API key Roblox tidak tersedia. Login dan simpan key di halaman API Keys.' });
     const result = await checkAssetStatus(operationId, apiKey);
     res.json(result);
   } catch (error) {
@@ -352,8 +419,9 @@ router.post('/asset-status', infoLimit, async (req, res, next) => {
 
 router.post('/roblox-test', infoLimit, async (req, res, next) => {
   try {
-    const { apiKey, creator } = req.body || {};
-    if (!apiKey) return res.status(400).json({ error: 'API key wajib.' });
+    const { creator } = req.body || {};
+    const { apiKey } = await resolveApiKeyFromRequest(req, req.body || {});
+    if (!apiKey) return res.status(400).json({ error: 'API key Roblox wajib diisi atau disimpan dulu di halaman API Keys.' });
     const target = resolveRobloxCreator(creator, false);
     const trace = [{
       step: 'Target',
@@ -424,8 +492,9 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
         throw error;
       }
       const payload = parsePayload(req.body.payload, 'Payload upload Roblox');
-      if (!payload.apiKey) {
-        const error = new Error('API key Roblox wajib diisi.');
+      const { apiKey } = await resolveApiKeyFromRequest(req, payload);
+      if (!apiKey) {
+        const error = new Error('API key Roblox wajib disimpan dulu di halaman API Keys.');
         error.status = 400;
         throw error;
       }
@@ -441,7 +510,7 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
 
       const parts = await uploadAudioParts({
         parts: split.parts,
-        apiKey: payload.apiKey,
+        apiKey,
         creator: target.creator,
         displayName: payload.displayName || 'Audio Studio',
         description: payload.description || 'Diproses menggunakan Audio Studio'

@@ -189,7 +189,8 @@ function compactGroups(items) {
     name: group.name,
     groupId: group.groupId,
     creatorUserId: group.creatorUserId,
-    encryptedApiKey: group.encryptedApiKey
+    hasApiKey: Boolean(group.hasApiKey || group.encryptedApiKey),
+    apiKeyFormat: group.apiKeyFormat || (group.encryptedApiKey ? 'legacy' : 'empty')
   }));
 }
 
@@ -229,7 +230,8 @@ function App() {
   const [userId, setUserId] = useState('');
   const [groupId, setGroupId] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState('');
-  const [apiKey, setApiKey] = useState(() => decrypt(localStorage.getItem('audio-studio-api-key')));
+  const [apiKey, setApiKey] = useState(''); // plaintext sementara saat user input/edit; di-clear setelah save ke server
+  const [apiKeyStored, setApiKeyStored] = useState({ hasApiKey: false, format: 'empty' });
   const [history, setHistory] = useStoredState('audio-studio-history', []);
   const [queue, setQueue] = useStoredState('audio-studio-queue', []);
   const [queueInput, setQueueInput] = useState('');
@@ -278,8 +280,16 @@ function App() {
   const activeGroup = groups.find((group) => group.groupId === selectedGroupId);
 
   useEffect(() => {
-    localStorage.setItem('audio-studio-api-key', encrypt(apiKey));
-  }, [apiKey]);
+    // Hapus key lama plain/CryptoJS yang dulu pernah disimpan di localStorage.
+    // Mulai sekarang API key disimpan terenkripsi di server saja.
+    try {
+      if (localStorage.getItem('audio-studio-api-key')) {
+        localStorage.removeItem('audio-studio-api-key');
+      }
+    } catch {
+      // localStorage bisa di-block di mode privat
+    }
+  }, []);
 
   useEffect(() => {
     if (authToken) {
@@ -437,19 +447,25 @@ function App() {
 
   useEffect(() => {
     const trimmed = youtubeUrl.trim();
-    const isYoutube = (() => {
+    const detected = (() => {
       try {
         const parsed = new URL(trimmed);
         const host = parsed.hostname.replace(/^www\./, '');
-        if (host === 'youtu.be') return parsed.pathname.length > 1;
-        if (!host.endsWith('youtube.com')) return false;
-        return parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/');
+        if (host === 'youtu.be' && parsed.pathname.length > 1) return 'youtube';
+        if (host.endsWith('youtube.com')
+          && (parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/'))) {
+          return 'youtube';
+        }
+        if (host === 'soundcloud.com' || host === 'm.soundcloud.com' || host === 'on.soundcloud.com' || host === 'snd.sc') {
+          return 'soundcloud';
+        }
+        return '';
       } catch {
-        return false;
+        return '';
       }
     })();
 
-    if (!isYoutube) {
+    if (!detected) {
       setYoutubeInfo(null);
       setYoutubePreviewError('');
       return;
@@ -457,12 +473,14 @@ function App() {
     const timer = setTimeout(async () => {
       try {
         setYoutubePreviewError('');
-        const response = await fetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(trimmed)}`);
-        if (!response.ok) throw new Error('Preview YouTube gagal dimuat.');
-        setYoutubeInfo(await response.json());
+        const endpoint = detected === 'soundcloud' ? 'soundcloud-info' : 'youtube-info';
+        const response = await fetch(`${API_BASE}/api/${endpoint}?url=${encodeURIComponent(trimmed)}`);
+        if (!response.ok) throw new Error('Preview gagal dimuat.');
+        const info = await response.json();
+        setYoutubeInfo({ ...info, kind: detected });
       } catch (error) {
         setYoutubeInfo(null);
-        setYoutubePreviewError('Preview belum bisa dimuat untuk link ini. Konversi masih bisa dicoba jika videonya publik.');
+        setYoutubePreviewError('Preview belum bisa dimuat untuk link ini. Konversi masih bisa dicoba jika sumbernya publik.');
       }
     }, 550);
     return () => clearTimeout(timer);
@@ -500,13 +518,17 @@ function App() {
 
   // Auto-poll pending asset status setiap 60 detik
   useEffect(() => {
-    if (!history.length || !apiKey) return;
+    if (!history.length) return;
+    const personalReady = Boolean(apiKey?.trim() || apiKeyStored?.hasApiKey);
+    const groupReady = mode === 'group' ? Boolean(activeGroup?.hasApiKey) : true;
+    if (!personalReady && !groupReady) return;
     const hasPending = history.some((entry) => entry.parts?.some((p) => p.status === 'Pending' && p.operationId));
     if (!hasPending) return;
 
     const interval = setInterval(async () => {
-      const uploadKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
-      if (!uploadKey) return;
+      const inlineKey = apiKey?.trim();
+      const keyRef = inlineKey ? '' : (mode === 'group' && activeGroup ? activeGroup.groupId : 'personal');
+      if (!inlineKey && !keyRef) return;
       const pendingPairs = [];
       for (const entry of history) {
         for (const part of (entry.parts || [])) {
@@ -522,8 +544,12 @@ function App() {
         try {
           const r = await fetch(`${API_BASE}/api/asset-status`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ operationId: pair.operationId, apiKey: uploadKey })
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+              operationId: pair.operationId,
+              keyRef: keyRef || undefined,
+              apiKey: inlineKey || undefined
+            })
           });
           if (!r.ok) return null;
           const d = await r.json();
@@ -552,7 +578,7 @@ function App() {
       }));
     }, 60000);
     return () => clearInterval(interval);
-  }, [history, apiKey, mode, activeGroup]);
+  }, [history, apiKey, apiKeyStored, mode, activeGroup, authToken]);
 
   const linkedGroupOptions = useMemo(() => groups.map((group) => (
     <option key={group.groupId} value={group.groupId}>{group.name} ({group.groupId})</option>
@@ -596,7 +622,11 @@ function App() {
     setUserId(config.userId || '');
     setGroupId(config.groupId || '');
     setSelectedGroupId(config.selectedGroupId || '');
-    setApiKey(config.encryptedApiKey ? decrypt(config.encryptedApiKey) : '');
+    setApiKey(''); // server-side enkripsi, plaintext tidak pernah dikirim balik ke browser
+    setApiKeyStored({
+      hasApiKey: Boolean(config.hasApiKey),
+      format: config.apiKeyFormat || (config.hasApiKey ? 'aes-256-gcm' : 'empty')
+    });
     setGroups(compactGroups(profile.groups));
     setHistory(compactHistory(profile.history));
     lastProfileSyncRef.current = JSON.stringify(profile || {});
@@ -734,18 +764,35 @@ function App() {
 
   async function saveProfile() {
     if (!authToken || !currentUser) return;
+    const inlinePersonalKey = apiKey?.trim();
+    const groupsPayload = groups.map((group) => {
+      const out = {
+        id: group.id,
+        name: group.name,
+        groupId: group.groupId,
+        creatorUserId: group.creatorUserId
+      };
+      // Hanya kirim plaintext kalau user baru saja edit (key in-memory). Kalau gak, server akan keep value yang sudah tersimpan.
+      if (group.apiKey && String(group.apiKey).trim()) out.apiKey = String(group.apiKey).trim();
+      return out;
+    });
     const profile = {
       robloxConfig: {
         mode,
         userId,
         groupId,
         selectedGroupId,
-        encryptedApiKey: encrypt(apiKey)
+        ...(inlinePersonalKey ? { apiKey: inlinePersonalKey } : {})
       },
-      groups: compactGroups(groups),
+      groups: groupsPayload,
       history: compactHistory(history)
     };
-    const profileJson = JSON.stringify(profile);
+    const signaturePayload = {
+      ...profile,
+      groups: groupsPayload.map((group) => ({ ...group, apiKey: group.apiKey ? '<dirty>' : '' })),
+      robloxConfig: { ...profile.robloxConfig, apiKey: inlinePersonalKey ? '<dirty>' : '' }
+    };
+    const profileJson = JSON.stringify(signaturePayload);
     if (profileJson === lastProfileSyncRef.current) return;
 
     try {
@@ -757,7 +804,15 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal menyimpan profile.');
+      // Server hanya kirim balik metadata API key (hasApiKey, format), plaintext sekali kirim sudah dihapus dari memory di sini
+      if (inlinePersonalKey) setApiKey('');
+      if (groupsPayload.some((g) => g.apiKey)) {
+        setGroups((items) => items.map((group) => ({ ...group, apiKey: undefined })));
+      }
       setCurrentUser(data.user);
+      const newConfig = data.user?.profile?.robloxConfig || {};
+      setApiKeyStored({ hasApiKey: Boolean(newConfig.hasApiKey), format: newConfig.apiKeyFormat || 'empty' });
+      setGroups(compactGroups(data.user?.profile?.groups || []));
       lastProfileSyncRef.current = profileJson;
     } catch (error) {
       notify(error.message, 'error');
@@ -835,23 +890,30 @@ function App() {
   }
 
   function getRobloxUploadContext() {
-    const uploadApiKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
-    if (!uploadApiKey?.trim()) {
-      throw new Error('Isi Roblox Open Cloud API Key dulu.');
-    }
+    const hasInline = Boolean(apiKey?.trim());
+    const groupHasStoredKey = Boolean(activeGroup?.hasApiKey);
+    const personalHasStoredKey = Boolean(apiKeyStored?.hasApiKey);
     if (mode === 'group') {
       const targetGroupId = cleanRobloxId(activeGroup?.groupId || groupId);
       if (!targetGroupId) throw new Error('Mode Group butuh Group ID angka yang valid.');
+      if (!hasInline && !groupHasStoredKey) {
+        throw new Error('Group ini belum punya API key tersimpan. Buka Manajemen Grup, edit grup, dan tempel API key.');
+      }
       return {
-        uploadApiKey,
+        keyRef: hasInline ? '' : (activeGroup?.groupId || ''),
+        inlineApiKey: hasInline ? apiKey.trim() : '',
         creator: { groupId: targetGroupId },
         label: `Group ${targetGroupId}`
       };
     }
     const targetUserId = cleanRobloxId(userId);
     if (!targetUserId) throw new Error('Mode Personal butuh Roblox User ID angka yang valid.');
+    if (!hasInline && !personalHasStoredKey) {
+      throw new Error('Isi Roblox Open Cloud API Key di halaman API Keys dulu, lalu klik Simpan supaya tersimpan terenkripsi di server.');
+    }
     return {
-      uploadApiKey,
+      keyRef: hasInline ? '' : 'personal',
+      inlineApiKey: hasInline ? apiKey.trim() : '',
       creator: { userId: targetUserId },
       label: `User ${targetUserId}`
     };
@@ -892,13 +954,16 @@ function App() {
 
   async function processOnly() {
     if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
-    if (!audioFile && !youtubeUrl.trim()) throw new Error('Pilih file audio atau masukkan URL YouTube dulu.');
+    if (!audioFile && !youtubeUrl.trim()) throw new Error('Pilih file audio atau masukkan URL YouTube/SoundCloud dulu.');
     const requestSignature = currentProcessSignature();
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
-    if (youtubeUrl) form.append('youtubeUrl', youtubeUrl.trim());
+    if (youtubeUrl) form.append('sourceUrl', youtubeUrl.trim());
     form.append('settings', JSON.stringify(settings));
-    setStep(1, youtubeUrl ? 'Server mengambil audio YouTube dan membaca durasi...' : 'Server membaca file audio...');
+    const sourceLabel = youtubeInfo?.kind === 'soundcloud' ? 'SoundCloud' : (youtubeUrl ? 'YouTube' : '');
+    setStep(1, sourceLabel
+      ? `Server mengambil audio ${sourceLabel} dan membaca durasi...`
+      : 'Server membaca file audio...');
     const controller = new AbortController();
     abortRef.current = controller;
     setStep(2, 'FFmpeg menerapkan preset, speed, EQ, pitch, fade, trim, dan efek manual...');
@@ -937,7 +1002,8 @@ function App() {
       form.append('audio', blob, result.fileName);
       const appliedSettings = result.appliedSettings || settings;
       form.append('payload', JSON.stringify({
-        apiKey: robloxTarget.uploadApiKey,
+        keyRef: robloxTarget.keyRef || undefined,
+        apiKey: robloxTarget.inlineApiKey || undefined,
         creator: robloxTarget.creator,
         splitDuration: 180,
         maxDuration: appliedSettings.maxDuration,
@@ -951,6 +1017,7 @@ function App() {
       const response = await fetch(`${API_BASE}/api/upload-roblox`, {
         method: 'POST',
         body: form,
+        headers: { ...authHeaders() },
         signal: controller.signal
       });
       const data = await response.json();
@@ -1045,12 +1112,14 @@ function App() {
       name: `Grup ${groupForm.groupId}`,
       groupId: groupForm.groupId,
       creatorUserId: groupForm.creatorUserId,
-      encryptedApiKey: encrypt(groupForm.apiKey)
+      apiKey: groupForm.apiKey, // plaintext sementara, akan dikirim ke server saat saveProfile()
+      hasApiKey: true,
+      apiKeyFormat: 'aes-256-gcm'
     };
     setGroups((items) => [group, ...items.filter((item) => item.groupId !== group.groupId)]);
     setSelectedGroupId(group.groupId);
     setGroupForm({ groupId: '', creatorUserId: '', apiKey: '' });
-    notify('Grup tersimpan.');
+    notify('Grup tersimpan. Klik Sinkron supaya tersimpan terenkripsi di server.');
   }
 
   function copyCenz(entry) {
@@ -1142,8 +1211,12 @@ function App() {
       setRobloxCheck({ ok: null, message: 'Mengecek koneksi Roblox...', trace: [] });
       const response = await fetch(`${API_BASE}/api/roblox-test`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: target.uploadApiKey, creator: target.creator })
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          keyRef: target.keyRef || undefined,
+          apiKey: target.inlineApiKey || undefined,
+          creator: target.creator
+        })
       });
       const data = await response.json();
       setRobloxCheck(data);
@@ -1160,16 +1233,24 @@ function App() {
       notify('Part ini tidak punya operationId, tidak bisa dicek.', 'error');
       return;
     }
-    const uploadKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
-    if (!uploadKey) {
+    const inlineKey = apiKey?.trim();
+    const groupRef = mode === 'group' && activeGroup ? activeGroup.groupId : '';
+    const personalReady = apiKeyStored?.hasApiKey;
+    const groupReady = Boolean(activeGroup?.hasApiKey);
+    if (!inlineKey && !((mode === 'group' && groupReady) || (mode !== 'group' && personalReady))) {
       notify('Isi API key Roblox dulu di halaman API Keys untuk cek ulang.', 'error');
       return;
     }
+    const keyRef = inlineKey ? '' : (groupRef || 'personal');
     try {
       const response = await fetch(`${API_BASE}/api/asset-status`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: part.operationId, apiKey: uploadKey })
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          operationId: part.operationId,
+          keyRef: keyRef || undefined,
+          apiKey: inlineKey || undefined
+        })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal cek status.');
@@ -1711,11 +1792,11 @@ function App() {
               {sourceTab === 'youtube' ? (
                 <>
                   <label className="field">
-                    <span>URL YouTube</span>
+                    <span>URL YouTube / SoundCloud</span>
                     <input
                       value={youtubeUrl}
                       onChange={(e) => setYoutubeUrl(e.target.value)}
-                      placeholder="https://youtube.com/watch?v=..."
+                      placeholder="https://youtube.com/watch?v=... atau https://soundcloud.com/..."
                     />
                   </label>
                   {youtubeInfo && (
@@ -1928,7 +2009,15 @@ function App() {
               )}
               <label className="field">
                 <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
-                <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={apiKeyStored?.hasApiKey ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
+                />
+                {apiKeyStored?.hasApiKey ? (
+                  <small className="muted">Key tersimpan di server pakai AES-256-GCM. Plaintext tidak dikirim balik ke browser.</small>
+                ) : null}
               </label>
               <div className="actions tight">
                 <button className="secondary" onClick={testRobloxConnection} type="button">Test Connection</button>
@@ -2139,9 +2228,14 @@ function App() {
             )}
             <label className="field">
               <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
-              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={apiKeyStored?.hasApiKey ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
+              />
             </label>
-            <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
+            <p className="muted small">API key disimpan terenkripsi AES-256-GCM di server. Plaintext tidak pernah dikirim balik ke browser sehingga aman walau bundle JS terbongkar.</p>
             <button className="secondary" onClick={testRobloxConnection}>Test Connection</button>
             {robloxCheck && (
               <div className={`connection-card ${robloxCheck.ok ? 'ok' : robloxCheck.ok === false ? 'bad' : 'wait'}`}>

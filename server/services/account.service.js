@@ -7,6 +7,7 @@ import os from 'node:os';
 import { nanoid } from 'nanoid';
 import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, sendPasswordResetCode, isSmtpConfigured } from './email.service.js';
 import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js';
+import { encryptSecret, decryptSecret, isEncryptedSecret, isCryptoConfigured, maskSecret } from './crypto.service.js';
 
 import fsSync from 'node:fs';
 
@@ -36,6 +37,10 @@ const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '365d';
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
+const discordClientId = process.env.DISCORD_CLIENT_ID || '';
+const discordClientSecret = process.env.DISCORD_CLIENT_SECRET || '';
+const discordRedirectUri = process.env.DISCORD_REDIRECT_URI || '';
+const discordScopes = (process.env.DISCORD_SCOPES || 'identify email').split(/\s+/).filter(Boolean);
 const FREE_CONVERT_LIMIT = Number(process.env.FREE_CONVERT_LIMIT || 3);
 const FREE_DURATION_LIMIT = Number(process.env.FREE_DURATION_LIMIT_SECONDS || 600);
 const AUDIT_LOG_MAX = 80;
@@ -162,6 +167,31 @@ async function sendResetEmail(email, code) {
   }
 }
 
+function publicProfile(user) {
+  const profile = user.profile || {};
+  const robloxConfig = profile.robloxConfig || {};
+  return {
+    robloxConfig: {
+      mode: robloxConfig.mode || 'personal',
+      userId: robloxConfig.userId || '',
+      groupId: robloxConfig.groupId || '',
+      selectedGroupId: robloxConfig.selectedGroupId || '',
+      hasApiKey: Boolean(robloxConfig.encryptedApiKey),
+      apiKeyFormat: isEncryptedSecret(robloxConfig.encryptedApiKey) ? 'aes-256-gcm' : (robloxConfig.encryptedApiKey ? 'legacy' : 'empty'),
+      apiKeyHint: robloxConfig.encryptedApiKey ? maskSecret(robloxConfig.encryptedApiKey).slice(0, 12) : ''
+    },
+    groups: (profile.groups || []).map((group) => ({
+      id: group.id,
+      name: group.name,
+      groupId: group.groupId,
+      creatorUserId: group.creatorUserId,
+      hasApiKey: Boolean(group.encryptedApiKey),
+      apiKeyFormat: isEncryptedSecret(group.encryptedApiKey) ? 'aes-256-gcm' : (group.encryptedApiKey ? 'legacy' : 'empty')
+    })),
+    history: profile.history || []
+  };
+}
+
 function publicUser(user) {
   const plan = activePlan(user);
   return {
@@ -178,7 +208,7 @@ function publicUser(user) {
     },
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
-    profile: user.profile || {}
+    profile: publicProfile(user)
   };
 }
 
@@ -677,16 +707,44 @@ export async function confirmPayment(invoiceId, actor = 'admin') {
   return invoice;
 }
 
+// Helper internal: ambil key plaintext dari berbagai input (legacy ciphertext, plaintext baru, ciphertext server v1).
+function pickIncomingApiKey(plain, encrypted, fallbackEncrypted) {
+  // 1) Plaintext baru dari client → encrypt
+  if (typeof plain === 'string' && plain.trim()) {
+    if (!isCryptoConfigured()) {
+      const error = new Error('Server belum punya SECRETS_MASTER_KEY. Set env dulu sebelum simpan API key.');
+      error.status = 503;
+      throw error;
+    }
+    return encryptSecret(plain.trim());
+  }
+  // 2) Klien kirim ciphertext server v1 → simpan apa adanya kalau format valid
+  if (typeof encrypted === 'string' && encrypted) {
+    if (isEncryptedSecret(encrypted)) return encrypted;
+    // legacy CryptoJS blob, kita pertahankan supaya tidak hilang. user bisa re-enter nanti.
+    return String(encrypted).slice(0, 4096);
+  }
+  // 3) Tidak ada input → pakai value lama yang sudah tersimpan
+  return fallbackEncrypted || '';
+}
+
 export async function updateUserProfile(id, profile) {
   return mutateUser(id, (user) => {
+    const previousProfile = user.profile || { robloxConfig: {}, groups: [], history: [] };
+    const previousConfig = previousProfile.robloxConfig || {};
+    const previousGroups = Array.isArray(previousProfile.groups) ? previousProfile.groups : [];
+    const incomingConfig = profile.robloxConfig || {};
     const cleanGroups = Array.isArray(profile.groups)
-      ? profile.groups.slice(0, 30).map((group) => ({
-        id: String(group.id || '').slice(0, 80),
-        name: String(group.name || '').slice(0, 80),
-        groupId: String(group.groupId || '').slice(0, 32),
-        creatorUserId: String(group.creatorUserId || '').slice(0, 32),
-        encryptedApiKey: String(group.encryptedApiKey || '').slice(0, 4096)
-      }))
+      ? profile.groups.slice(0, 30).map((group) => {
+        const previousGroup = previousGroups.find((item) => item.id === group.id || item.groupId === group.groupId) || {};
+        return {
+          id: String(group.id || '').slice(0, 80),
+          name: String(group.name || '').slice(0, 80),
+          groupId: String(group.groupId || '').slice(0, 32),
+          creatorUserId: String(group.creatorUserId || '').slice(0, 32),
+          encryptedApiKey: pickIncomingApiKey(group.apiKey, group.encryptedApiKey, previousGroup.encryptedApiKey).slice(0, 4096)
+        };
+      })
       : [];
     const cleanHistory = Array.isArray(profile.history)
       ? profile.history.slice(0, 75).map((entry) => ({
@@ -714,14 +772,69 @@ export async function updateUserProfile(id, profile) {
       }))
       : [];
 
+    const cleanConfig = {
+      mode: incomingConfig.mode === 'group' ? 'group' : 'personal',
+      userId: String(incomingConfig.userId || '').slice(0, 32),
+      groupId: String(incomingConfig.groupId || '').slice(0, 32),
+      selectedGroupId: String(incomingConfig.selectedGroupId || '').slice(0, 32),
+      encryptedApiKey: pickIncomingApiKey(incomingConfig.apiKey, incomingConfig.encryptedApiKey, previousConfig.encryptedApiKey).slice(0, 4096)
+    };
+
     user.profile = {
-      robloxConfig: profile.robloxConfig || {},
+      robloxConfig: cleanConfig,
       groups: cleanGroups,
       history: cleanHistory
     };
+    pushAudit(user, 'profile_update', {
+      hasApiKey: Boolean(cleanConfig.encryptedApiKey),
+      groupCount: cleanGroups.length
+    });
     return publicUser(user);
   });
 }
+
+// Buka API key user untuk pemakaian server-side (upload Roblox, asset-status). Tidak pernah dikembalikan ke client.
+export function resolveServerApiKey(user, { groupId } = {}) {
+  if (!user) return '';
+  const profile = user.profile || {};
+  let encrypted = '';
+  if (groupId) {
+    const group = (profile.groups || []).find((item) => item.groupId === groupId || item.id === groupId);
+    encrypted = group?.encryptedApiKey || '';
+  } else {
+    encrypted = profile.robloxConfig?.encryptedApiKey || '';
+  }
+  if (!encrypted) return '';
+  if (!isEncryptedSecret(encrypted)) {
+    // Format lama (CryptoJS) atau ciphertext rusak, server tidak bisa decrypt.
+    const error = new Error('API key Roblox kamu masih tersimpan dalam format lama. Buka API Keys → tempel ulang key untuk migrasi ke enkripsi server.');
+    error.status = 409;
+    error.code = 'legacy_api_key';
+    throw error;
+  }
+  try {
+    return decryptSecret(encrypted);
+  } catch (error) {
+    const err = new Error('Gagal mendekripsi API key. Master key server kemungkinan berubah. Tempel ulang API key di halaman API Keys.');
+    err.status = 500;
+    err.code = 'decrypt_failed';
+    err.cause = error;
+    throw err;
+  }
+}
+
+export async function getServerApiKeyForUser(id, options = {}) {
+  const store = await readStore();
+  const user = store.users.find((item) => item.id === id);
+  if (!user) {
+    const error = new Error('User tidak ditemukan.');
+    error.status = 404;
+    throw error;
+  }
+  return resolveServerApiKey(user, options);
+}
+
+
 
 
 // ===========================================================================
@@ -746,7 +859,7 @@ function adminUser(user) {
       lastConversionAt: user.usage?.lastConversionAt || null,
       lastReason: user.usage?.lastReason || null
     },
-    profile: user.profile || { robloxConfig: {}, groups: [], history: [] },
+    profile: publicProfile(user),
     auditLog: user.auditLog || []
   };
 }
