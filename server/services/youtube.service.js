@@ -821,9 +821,14 @@ function orderedStrategies(options = {}) {
       const index = strategies.indexOf(needle);
       if (index >= 0) strategies.splice(index + 1, 0, extra);
     };
+    // Default extractor pakai android,web. Tambah variants: tv, mweb, ios untuk bypass video tertentu.
     insertAfter('yt-dlp-section', 'yt-dlp-section-default');
     insertAfter('yt-dlp', 'yt-dlp-default');
+    insertAfter('yt-dlp-default', 'yt-dlp-tv');
+    insertAfter('yt-dlp-tv', 'yt-dlp-mweb');
+    insertAfter('yt-dlp-mweb', 'yt-dlp-ios');
     insertAfter('direct-url', 'direct-url-default');
+    insertAfter('direct-url-default', 'direct-url-tv');
   }
 
   return strategies;
@@ -833,6 +838,12 @@ function strategyOptions(strategy, options = {}) {
   const next = { ...options };
   if (strategy.endsWith('-default')) {
     next.extractorArgs = 'youtube:player_client=default';
+  } else if (strategy.endsWith('-tv')) {
+    next.extractorArgs = 'youtube:player_client=tv_embedded,web';
+  } else if (strategy.endsWith('-mweb')) {
+    next.extractorArgs = 'youtube:player_client=mweb';
+  } else if (strategy.endsWith('-ios')) {
+    next.extractorArgs = 'youtube:player_client=ios';
   }
   return next;
 }
@@ -847,11 +858,11 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy, options));
         return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };
       }
-      if (strategy === 'yt-dlp' || strategy === 'yt-dlp-default') {
+      if (strategy === 'yt-dlp' || strategy === 'yt-dlp-default' || strategy === 'yt-dlp-tv' || strategy === 'yt-dlp-mweb' || strategy === 'yt-dlp-ios') {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy));
         return { path: outputPath, method: strategy, failures };
       }
-      if (strategy === 'direct-url' || strategy === 'direct-url-default') {
+      if (strategy === 'direct-url' || strategy === 'direct-url-default' || strategy === 'direct-url-tv') {
         const outputPath = await downloadDirectMedia(url, uploadsDir, strategyOptions(strategy));
         return { path: outputPath, method: strategy, failures };
       }

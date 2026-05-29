@@ -163,17 +163,20 @@ export async function downloadSoundCloudAudio(input, uploadsDir, options = {}) {
   const id = nanoid(10);
   const outputPrefix = `soundcloud-${id}.`;
   const outputTemplate = path.join(uploadsDir, `${outputPrefix}%(ext)s`);
+  // Catatan: SoundCloud umumnya pakai HLS. Section cut di sumber HLS sering bikin file rusak
+  // dan menyebabkan ffmpeg SIGSEGV saat di-encode ulang. Lebih aman download full lalu trim
+  // di pipeline ffmpeg melalui --ss/-t (sudah ditangani oleh processAudio).
   const args = [
     ...commonArgs(),
     '--format', 'bestaudio/best',
-    '--output', outputTemplate
+    // Paksa remux ke m4a supaya container nyaman (AAC). Hindari format HLS langsung.
+    '--audio-format', 'm4a',
+    '--audio-quality', '0',
+    '-x',
+    '--output', outputTemplate,
+    url
   ];
-  if (Number(options.sectionEnd || 0) >= 30 && String(process.env.YTDLP_ENABLE_SECTIONS || 'true').toLowerCase() !== 'false') {
-    args.push('--download-sections', `*0-${Math.ceil(options.sectionEnd)}`);
-    args.push('--force-keyframes-at-cuts');
-    if (ffmpegPath) args.push('--ffmpeg-location', path.dirname(ffmpegPath));
-  }
-  args.push(url);
+  if (ffmpegPath) args.push('--ffmpeg-location', path.dirname(ffmpegPath));
   try {
     await runYtDlp(args, Number(process.env.YTDLP_DOWNLOAD_TIMEOUT_MS || 60000));
   } catch (error) {
@@ -182,5 +185,5 @@ export async function downloadSoundCloudAudio(input, uploadsDir, options = {}) {
   }
   const outputPath = await findDownloadedFile(uploadsDir, outputPrefix);
   if (!outputPath) throw httpError('SoundCloud download selesai, tetapi file audio tidak ditemukan.', 422);
-  return { path: outputPath, method: 'soundcloud-yt-dlp', sectionEnd: options.sectionEnd || 0 };
+  return { path: outputPath, method: 'soundcloud-yt-dlp' };
 }

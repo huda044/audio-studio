@@ -128,8 +128,13 @@ function buildFilters(settings, sourceDuration = 0) {
     effects.push('Echo');
   }
   if (appliedSettings.normalize) {
-    filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
-    effects.push('Normalize loudness');
+    if (String(process.env.DISABLE_LOUDNORM || '').toLowerCase() === 'true') {
+      // loudnorm sering segfault di build ffmpeg-static lama; admin bisa matikan via env.
+      warnings.push('Loudnorm di-skip karena DISABLE_LOUDNORM aktif di server.');
+    } else {
+      filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+      effects.push('Normalize loudness');
+    }
   }
   if (fadeIn > 0) {
     filters.push(`afade=t=in:st=0:d=${fadeIn}`);
@@ -193,14 +198,28 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
         stderr = `${stderr}${line}\n`.slice(-4000);
       })
       .on('error', (error) => {
+        const code = typeof error?.message === 'string' && error.message.match(/code\s+(-?\d+)/)?.[1];
+        const numericCode = code ? Number(code) : null;
+        const isCrash = numericCode === -11 || numericCode === 139 || numericCode === -6 || numericCode === 134;
         const detail = stderr.trim() || error.message;
-        const next = new Error(`Konversi FFmpeg gagal: ${detail.split(/\r?\n/).slice(-2).join(' ').slice(0, 320)}`);
+        const next = new Error(isCrash
+          ? `Konversi FFmpeg crash (signal ${numericCode}). Backend akan coba fallback minimal.`
+          : `Konversi FFmpeg gagal: ${detail.split(/\r?\n/).slice(-2).join(' ').slice(0, 320)}`);
         next.status = 422;
+        next.code = isCrash ? 'ffmpeg_crash' : 'ffmpeg_error';
         next.cause = error;
+        next.stderr = detail;
         settle(next);
       })
       .save(outputPath);
   });
+}
+
+function buildMinimalFilters(settings) {
+  const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
+  const amplify = clamp(settings.amplify ?? -4, -20, 20);
+  const filters = [...atempoChain(speed), `volume=${amplify}dB`, 'aresample=44100'];
+  return filters;
 }
 
 export async function processAudio({ inputPath, outputPath, settings, sourceDuration = 0 }) {
@@ -214,35 +233,62 @@ export async function processAudio({ inputPath, outputPath, settings, sourceDura
   const primary = buildFilters(settings, detectedSourceDuration);
   let { filters, appliedSettings, effects, warnings, effectiveDuration } = primary;
   const trimStart = appliedSettings.trimStart;
+  const fallbackDisabled = String(process.env.DISABLE_AUDIO_FALLBACK || '').toLowerCase() === 'true';
 
   try {
     await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration });
   } catch (error) {
-    const fallbackSettings = {
-      ...settings,
-      normalize: false,
-      reverb: false,
-      echo: false
-    };
-    const fallback = buildFilters(fallbackSettings, detectedSourceDuration);
-    if (
-      fallback.filters.join('|') === filters.join('|')
-      || String(process.env.DISABLE_AUDIO_FALLBACK || '').toLowerCase() === 'true'
-    ) {
-      throw error;
+    if (fallbackDisabled) throw error;
+
+    // Fallback level 1: matikan filter berat (loudnorm/reverb/echo) tapi pertahankan EQ + pitch
+    const level1Settings = { ...settings, normalize: false, reverb: false, echo: false };
+    const level1 = buildFilters(level1Settings, detectedSourceDuration);
+    const level1Same = level1.filters.join('|') === filters.join('|');
+
+    let level1Error = null;
+    if (!level1Same) {
+      try {
+        await runFfmpegConversion({
+          inputPath,
+          outputPath,
+          filters: level1.filters,
+          trimStart: level1.appliedSettings.trimStart,
+          effectiveDuration: level1.effectiveDuration
+        });
+        warnings = [
+          ...warnings,
+          'Konversi utama gagal, backend memakai fallback aman tanpa normalize/reverb/echo.'
+        ];
+        ({ filters, appliedSettings, effects, effectiveDuration } = level1);
+      } catch (innerError) {
+        level1Error = innerError;
+      }
     }
-    warnings = [
-      ...warnings,
-      'Konversi utama gagal, backend otomatis memakai fallback aman tanpa normalize/reverb/echo.'
-    ];
-    ({ filters, appliedSettings, effects, effectiveDuration } = fallback);
-    await runFfmpegConversion({
-      inputPath,
-      outputPath,
-      filters,
-      trimStart: appliedSettings.trimStart,
-      effectiveDuration
-    });
+
+    if (level1Same || level1Error) {
+      // Fallback level 2: minimal — tempo + volume saja, tanpa pitch, EQ, efek apapun.
+      // Khusus untuk handle ffmpeg crash (SIGSEGV) yang dipicu filter chain berat di ffmpeg-static.
+      const minimalFilters = buildMinimalFilters(settings);
+      try {
+        await runFfmpegConversion({
+          inputPath,
+          outputPath,
+          filters: minimalFilters,
+          trimStart: appliedSettings.trimStart,
+          effectiveDuration
+        });
+        warnings = [
+          ...warnings,
+          'Filter chain penuh menyebabkan FFmpeg crash. Backend memakai pipeline minimal (hanya tempo + volume). Coba kurangi efek atau coba sumber lain.'
+        ];
+        // Effect list disederhanakan supaya laporan akurat dengan apa yang benar-benar dipakai.
+        effects = [`Tempo ${appliedSettings.speed}x`, `Volume ${appliedSettings.amplify} dB`, 'Filter berat dilewati (fallback)'];
+        filters = minimalFilters;
+      } catch (innerError) {
+        // Sudah minimal masih gagal → throw error pertama (paling deskriptif).
+        throw error;
+      }
+    }
   }
 
   const [stat, probe] = await Promise.all([fs.stat(outputPath), probeAudio(outputPath)]);
