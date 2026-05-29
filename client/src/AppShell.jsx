@@ -11,20 +11,26 @@ import {
   LogOut,
   Menu,
   X,
-  User
+  User,
+  ListMusic,
+  Library,
+  Receipt
 } from 'lucide-react';
 
 const NAV = [
   { section: 'PIPELINE', items: [
     { id: 'pipeline', label: 'Konversi Audio', icon: Music2 },
+    { id: 'queue', label: 'YouTube Queue', icon: ListMusic },
     { id: 'history', label: 'Riwayat Upload', icon: History },
   ]},
   { section: 'ROBLOX', items: [
+    { id: 'library', label: 'Asset Library', icon: Library },
     { id: 'keys', label: 'API Keys', icon: KeyRound },
     { id: 'groups', label: 'Manajemen Grup', icon: Users },
   ]},
   { section: 'AKUN', items: [
     { id: 'billing', label: 'Langganan', icon: CreditCard },
+    { id: 'invoice', label: 'Invoice', icon: Receipt },
     { id: 'settings', label: 'Pengaturan', icon: Settings },
   ]}
 ];
@@ -39,7 +45,9 @@ export default function AppShell({
   pageActions,
   children,
   invoicePending = 0,
-  historyCount = 0
+  historyCount = 0,
+  queueCount = 0,
+  libraryCount = 0
 }) {
   const isAdmin = currentUser?.role === 'admin';
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -67,11 +75,12 @@ export default function AppShell({
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = activePage === item.id;
-                const badge = item.id === 'history' && historyCount > 0
-                  ? historyCount
-                  : item.id === 'billing' && invoicePending > 0
-                    ? invoicePending
-                    : null;
+                let badge = null;
+                if (item.id === 'history' && historyCount > 0) badge = historyCount;
+                else if (item.id === 'billing' && invoicePending > 0) badge = invoicePending;
+                else if (item.id === 'invoice' && invoicePending > 0) badge = invoicePending;
+                else if (item.id === 'queue' && queueCount > 0) badge = queueCount;
+                else if (item.id === 'library' && libraryCount > 0) badge = libraryCount;
                 return (
                   <button
                     key={item.id}

@@ -12,7 +12,13 @@ import {
   Youtube,
   User,
   Link as LinkIcon,
-  Crown
+  Crown,
+  ListMusic,
+  Library,
+  Receipt,
+  Plus,
+  Play,
+  Search
 } from 'lucide-react';
 import './styles.css';
 import AdminPanel from './AdminPanel.jsx';
@@ -203,6 +209,9 @@ function App() {
   const [selectedGroupId, setSelectedGroupId] = useState('');
   const [apiKey, setApiKey] = useState(() => decrypt(localStorage.getItem('audio-studio-api-key')));
   const [history, setHistory] = useStoredState('audio-studio-history', []);
+  const [queue, setQueue] = useStoredState('audio-studio-queue', []);
+  const [queueInput, setQueueInput] = useState('');
+  const [librarySearch, setLibrarySearch] = useState('');
   const [groups, setGroups] = useStoredState('audio-studio-groups', []);
   const [groupForm, setGroupForm] = useState({ groupId: '', creatorUserId: '', apiKey: '' });
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('audio-studio-token') || '');
@@ -892,6 +901,70 @@ function App() {
     notify('Settings dimuat dari riwayat. Klik Convert untuk ulang.');
   }
 
+  // === YouTube Queue helpers ===
+  function addToQueue(url) {
+    const trimmed = (url ?? queueInput).trim();
+    if (!trimmed) {
+      notify('URL kosong.', 'error');
+      return;
+    }
+    const id = extractYoutubeId(trimmed);
+    if (!id) {
+      notify('URL bukan link YouTube valid.', 'error');
+      return;
+    }
+    if (queue.some((q) => q.id === id)) {
+      notify('Sudah ada di queue.', 'info');
+      return;
+    }
+    setQueue((items) => [
+      { id, url: trimmed, addedAt: new Date().toISOString() },
+      ...items
+    ].slice(0, 50));
+    setQueueInput('');
+    notify('Ditambah ke queue.');
+  }
+
+  function loadFromQueue(item) {
+    setSourceTab('youtube');
+    setYoutubeUrl(item.url);
+    setAudioFile(null);
+    setProcessed(null);
+    setActivePage('pipeline');
+    notify('Dimuat ke pipeline. Klik Konversi.');
+  }
+
+  function removeFromQueue(id) {
+    setQueue((items) => items.filter((q) => q.id !== id));
+  }
+
+  // === Asset Library: kumpulkan parts dari history yang sudah Accepted ===
+  const libraryAssets = useMemo(() => {
+    const list = [];
+    for (const entry of history) {
+      for (const part of (entry.parts || [])) {
+        if (part.status === 'Accepted' && part.rbxassetid) {
+          list.push({
+            entryId: entry.id,
+            partKey: `${entry.id}-${part.part}`,
+            title: entry.title,
+            thumbnail: entry.thumbnail,
+            createdAt: entry.createdAt,
+            partNum: part.part,
+            assetId: part.assetId,
+            rbxassetid: part.rbxassetid
+          });
+        }
+      }
+    }
+    if (!librarySearch.trim()) return list;
+    const term = librarySearch.trim().toLowerCase();
+    return list.filter((item) =>
+      String(item.title || '').toLowerCase().includes(term) ||
+      String(item.rbxassetid || '').toLowerCase().includes(term)
+    );
+  }, [history, librarySearch]);
+
   async function testRobloxConnection() {
     const key = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
     if (!key) {
@@ -1052,6 +1125,8 @@ function App() {
         pageTitle={PAGE_TITLES[activePage] || 'Audio Studio'}
         invoicePending={payments.filter((p) => p.status === 'Pending').length}
         historyCount={history.length}
+        queueCount={queue.length}
+        libraryCount={libraryAssets.length}
         pageActions={<div className="summary">{summary}</div>}
       >
 
@@ -1180,14 +1255,9 @@ function App() {
 
                 {!!payments.length && (
                   <div className="invoice-list">
-                    <b>Riwayat Invoice</b>
-                    {payments.map((payment) => (
-                      <div key={payment.id}>
-                        <StatusBadge status={payment.status === 'Accepted' ? 'Accepted' : payment.status === 'Rejected' ? 'Failed' : 'Pending'} />
-                        <span>{payment.id}</span>
-                        <p>{payment.label} | {payment.method.toUpperCase()} | Rp{payment.amount?.toLocaleString('id-ID')}</p>
-                      </div>
-                    ))}
+                    <p className="muted small">
+                      {payments.length} invoice tersimpan. Lihat detail di halaman <b>Invoice</b>.
+                    </p>
                   </div>
                 )}
               </div>
@@ -1676,6 +1746,133 @@ function App() {
           </section>
         )}
 
+        {activePage === 'queue' && (
+          <section className="panel">
+            <h2><ListMusic size={20} /> YouTube Queue</h2>
+            <p className="muted small">Simpan URL YouTube untuk diproses nanti. Klik Load untuk pindah ke pipeline.</p>
+            <div className="queue-input">
+              <input
+                value={queueInput}
+                onChange={(e) => setQueueInput(e.target.value)}
+                placeholder="https://youtube.com/watch?v=..."
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addToQueue(); } }}
+              />
+              <button className="primary" onClick={() => addToQueue()}>
+                <Plus size={16} /> Tambah
+              </button>
+            </div>
+            {queue.length === 0 ? (
+              <p className="muted">Queue kosong.</p>
+            ) : (
+              <div className="queue-list">
+                {queue.map((item) => (
+                  <article className="queue-card" key={item.id}>
+                    <img
+                      src={`https://img.youtube.com/vi/${item.id}/mqdefault.jpg`}
+                      alt=""
+                      className="queue-thumb"
+                    />
+                    <div className="queue-meta">
+                      <code className="queue-url">{item.url}</code>
+                      <p className="muted small">
+                        Ditambah {new Date(item.addedAt).toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <div className="queue-actions">
+                      <button className="secondary" onClick={() => loadFromQueue(item)}>
+                        <Play size={14} /> Load
+                      </button>
+                      <button className="icon" onClick={() => removeFromQueue(item.id)}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activePage === 'library' && (
+          <section className="panel">
+            <h2><Library size={20} /> Asset Library</h2>
+            <p className="muted small">Semua asset Roblox yang sudah berhasil diunggah, siap copy ke project Studio.</p>
+            <div className="library-toolbar">
+              <div className="search-box">
+                <Search size={15} />
+                <input
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  placeholder="Cari judul atau asset id"
+                />
+              </div>
+              <span className="muted small">{libraryAssets.length} asset</span>
+            </div>
+            {libraryAssets.length === 0 ? (
+              <p className="muted">Belum ada asset yang Accepted. Selesaikan upload dulu.</p>
+            ) : (
+              <div className="library-grid">
+                {libraryAssets.map((asset) => (
+                  <article className="library-card" key={asset.partKey}>
+                    {asset.thumbnail
+                      ? <img src={asset.thumbnail} alt="" />
+                      : <div className="thumb-fallback"><Music2 size={20} /></div>
+                    }
+                    <div className="library-body">
+                      <b>{asset.title}</b>
+                      <p className="muted small">Part {asset.partNum} · {new Date(asset.createdAt).toLocaleDateString('id-ID')}</p>
+                      <code className="result-id">{asset.rbxassetid}</code>
+                      <button
+                        className="icon-wide tiny"
+                        onClick={() => {
+                          navigator.clipboard.writeText(asset.rbxassetid);
+                          notify('rbxassetid disalin.');
+                        }}
+                      >
+                        <Copy size={12} /> Copy
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activePage === 'invoice' && (
+          <section className="panel">
+            <h2><Receipt size={20} /> Invoice</h2>
+            {!currentUser ? (
+              <p className="muted">Login dulu untuk lihat invoice.</p>
+            ) : payments.length === 0 ? (
+              <p className="muted">Belum ada invoice.</p>
+            ) : (
+              <div className="invoice-table">
+                {payments.map((payment) => (
+                  <article className="invoice-row" key={payment.id}>
+                    <div className="invoice-row-left">
+                      <StatusBadge status={payment.status === 'Accepted' ? 'Accepted' : payment.status === 'Rejected' ? 'Failed' : 'Pending'} />
+                      <code>{payment.id}</code>
+                    </div>
+                    <div className="invoice-row-mid">
+                      <b>{payment.label}</b>
+                      <p className="muted small">
+                        {payment.method?.toUpperCase()}
+                        {payment.gateway ? ` · ${payment.gateway}` : ''}
+                        {' · '}
+                        {new Date(payment.createdAt).toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <div className="invoice-row-right">
+                      <b>Rp{Number(payment.amount || 0).toLocaleString('id-ID')}</b>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         {activePage === 'history' && (
         <section className="panel">
           <div className="history-toolbar">
@@ -1759,10 +1956,13 @@ function App() {
 
 const PAGE_TITLES = {
   pipeline: 'Konversi Audio',
+  queue: 'YouTube Queue',
   history: 'Riwayat Upload',
+  library: 'Asset Library',
   keys: 'API Keys & Konfigurasi Roblox',
   groups: 'Manajemen Grup',
-  billing: 'Langganan & Invoice',
+  billing: 'Langganan',
+  invoice: 'Invoice',
   settings: 'Pengaturan Akun'
 };
 
