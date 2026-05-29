@@ -272,13 +272,27 @@ async function resolveYtDlpPath() {
   return cachedYtDlpPath;
 }
 
+function jsRuntimeArgs() {
+  if (String(process.env.YTDLP_DISABLE_JS_RUNTIME || '').toLowerCase() === 'true') {
+    return [];
+  }
+
+  const configured = String(process.env.YTDLP_JS_RUNTIMES || process.env.YTDLP_JS_RUNTIME || '').trim();
+  const runtimes = configured
+    ? configured.split(',').map((item) => item.trim()).filter(Boolean)
+    : (process.execPath ? [`node:${process.execPath}`] : ['node']);
+
+  return runtimes.flatMap((runtime) => ['--js-runtimes', runtime]);
+}
+
 function ytDlpCommonArgs() {
   const args = [
     '--no-playlist',
     '--no-warnings',
     '--socket-timeout', String(process.env.YTDLP_SOCKET_TIMEOUT || 10),
     '--retries', String(process.env.YTDLP_RETRIES || 1),
-    '--fragment-retries', String(process.env.YTDLP_RETRIES || 1)
+    '--fragment-retries', String(process.env.YTDLP_RETRIES || 1),
+    ...jsRuntimeArgs()
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();

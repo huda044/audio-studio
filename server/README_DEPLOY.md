@@ -58,4 +58,6 @@ YTDLP_COOKIES_BASE64=base64_dari_file_cookies_txt
 
 Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panjang tidak selalu diunduh penuh. Timeout default juga dibuat lebih pendek supaya proses tidak menggantung lama.
 
+Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.
+
 Render Free tetap punya batasan: service bisa sleep saat idle, filesystem tidak permanen, dan resource bukan untuk traffic besar terus-menerus. Tetapi untuk backend FFmpeg gratis, ini lebih kuat daripada Vercel serverless.
