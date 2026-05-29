@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
+  Activity,
   ArrowLeft,
+  CheckCircle2,
   Crown,
+  Database,
   Loader2,
+  LogOut,
   Mail,
   RefreshCw,
   Search,
+  Settings,
   ShieldCheck,
   Trash2,
   UserCog,
@@ -31,16 +36,16 @@ function badgeColor(status) {
   return 'wait';
 }
 
-export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
+export default function AdminPanel({ apiBase, token, currentUser, onExit, onLogout, notify }) {
   const headers = useMemo(() => {
     const value = { 'Content-Type': 'application/json' };
-    if (secret) value['x-admin-secret'] = secret;
-    else if (token) value.Authorization = `Bearer ${token}`;
+    if (token) value.Authorization = `Bearer ${token}`;
     return value;
-  }, [secret, token]);
+  }, [token]);
 
   const [tab, setTab] = useState('overview');
   const [stats, setStats] = useState(null);
+  const [cmsConfig, setCmsConfig] = useState(null);
   const [activity, setActivity] = useState([]);
   const [users, setUsers] = useState([]);
   const [usersTotal, setUsersTotal] = useState(0);
@@ -73,17 +78,19 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
     if (rejected) return;
     try {
       setLoading(true);
-      const [statsData, usersData, paymentsData, activityData] = await Promise.all([
+      const [statsData, usersData, paymentsData, activityData, configData] = await Promise.all([
         call('/stats'),
         call(`/users?search=${encodeURIComponent(search)}&limit=200`),
         call(`/payments?status=${encodeURIComponent(paymentFilter)}&limit=200`),
-        call('/activity?limit=30').catch(() => ({ events: [] }))
+        call('/activity?limit=80').catch(() => ({ events: [] })),
+        call('/cms/config').catch(() => null)
       ]);
       setStats(statsData);
       setUsers(usersData.users || []);
       setUsersTotal(usersData.total || 0);
       setPayments(paymentsData.payments || []);
       setActivity(activityData.events || []);
+      setCmsConfig(configData);
     } catch (error) {
       if (error.status === 403 || error.message?.includes('ditolak')) {
         setRejected(true);
@@ -246,16 +253,20 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
       <header className="admin-topbar">
         <div className="brand">
           <Crown size={18} /> <span>CMS Admin</span>
+          {currentUser?.username && <small className="admin-actor">login: {currentUser.username}</small>}
         </div>
         <div className="admin-tabs">
           <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><ShieldCheck size={15} /> Overview</button>
           <button className={tab === 'users' || tab === 'user-detail' ? 'active' : ''} onClick={() => setTab('users')}><UserCog size={15} /> Users</button>
           <button className={tab === 'invoices' ? 'active' : ''} onClick={() => setTab('invoices')}><Wallet size={15} /> Invoices</button>
+          <button className={tab === 'activity' ? 'active' : ''} onClick={() => setTab('activity')}><Activity size={15} /> Activity</button>
+          <button className={tab === 'system' ? 'active' : ''} onClick={() => setTab('system')}><Settings size={15} /> System</button>
           <button className={tab === 'email' ? 'active' : ''} onClick={() => setTab('email')}><Mail size={15} /> Email Test</button>
         </div>
         <div className="admin-actions">
           <button className="secondary" onClick={refresh} disabled={loading}>{loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} Refresh</button>
           <button className="icon-wide" onClick={onExit}><ArrowLeft size={15} /> Keluar</button>
+          <button className="icon-wide bad" onClick={onLogout}><LogOut size={15} /> Logout</button>
         </div>
       </header>
 
@@ -314,6 +325,88 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
 {JSON.stringify(emailTest.result.env, null, 2)}
                 </pre>
               )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === 'activity' && (
+        <section className="admin-block">
+          <div className="admin-toolbar">
+            <h3 className="admin-section-title">Audit Activity</h3>
+            <span className="muted">{activity.length} aktivitas terakhir</span>
+          </div>
+          <div className="audit-log cms-audit-feed">
+            {activity.length === 0 && <p className="muted">Belum ada aktivitas.</p>}
+            {activity.map((event) => (
+              <div key={`${event.userId}-${event.id}`}>
+                <b>{event.event}</b>
+                <span>@{event.username}</span>
+                <span>{event.userEmail}</span>
+                <span className="muted">{fmtDate(event.at)}</span>
+                {event.by && <span className="muted small">by {event.by}</span>}
+                {event.invoiceId && <span className="muted small">{event.invoiceId}</span>}
+                {event.changed?.length ? <span className="muted small">{event.changed.join(', ')}</span> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tab === 'system' && (
+        <section className="admin-block">
+          <div className="admin-toolbar">
+            <h3 className="admin-section-title"><Database size={16} /> CMS System Configuration</h3>
+            <span className="muted small">Read-only dari environment backend</span>
+          </div>
+          {!cmsConfig ? (
+            <p className="muted">Konfigurasi belum termuat. Klik Refresh.</p>
+          ) : (
+            <div className="cms-config-grid">
+              <article className="admin-card">
+                <h3>Application</h3>
+                <p><b>{cmsConfig.app?.name}</b></p>
+                <p className="muted small">Origin: {cmsConfig.app?.clientOrigin || '-'}</p>
+                <p className="muted small">Public URL: {cmsConfig.app?.publicUrl || '-'}</p>
+                <p className="muted small">JWT: {cmsConfig.app?.jwtExpiresIn || '-'}</p>
+              </article>
+              <article className="admin-card">
+                <h3>Auth</h3>
+                <p><CheckCircle2 size={14} /> Google: {cmsConfig.auth?.googleConfigured ? 'configured' : 'not configured'}</p>
+                <p><CheckCircle2 size={14} /> Email: {cmsConfig.auth?.smtpConfigured ? 'configured' : 'dev mode'}</p>
+                <p><CheckCircle2 size={14} /> Admin bootstrap: {cmsConfig.auth?.adminBootstrapConfigured ? 'configured' : 'not configured'}</p>
+              </article>
+              <article className="admin-card">
+                <h3>Conversion</h3>
+                <p className="muted small">Free limit: {cmsConfig.conversion?.freeConvertLimit} convert</p>
+                <p className="muted small">Free duration: {cmsConfig.conversion?.freeDurationLimitSeconds}s</p>
+                <p className="muted small">Upload max: {cmsConfig.conversion?.maxUploadMb} MB</p>
+                <p className="muted small">Queue: {cmsConfig.conversion?.conversionConcurrency} active / {cmsConfig.conversion?.conversionQueueLimit} waiting</p>
+              </article>
+              <article className="admin-card">
+                <h3>Roblox</h3>
+                <p className="muted small">Max duration: {cmsConfig.roblox?.maxAudioDurationSeconds}s</p>
+                <p className="muted small">Max bytes: {Math.round((cmsConfig.roblox?.maxAudioBytes || 0) / 1024 / 1024)} MB</p>
+                <p className="muted small">Upload queue: {cmsConfig.roblox?.uploadConcurrency} active / {cmsConfig.roblox?.uploadQueueLimit} waiting</p>
+              </article>
+              <article className="admin-card">
+                <h3>Billing</h3>
+                <p className="muted small">Midtrans: {cmsConfig.billing?.midtransConfigured ? 'configured' : 'manual only'}</p>
+                <p className="muted small">Pending invoice: {cmsConfig.billing?.pendingInvoices || 0}</p>
+              </article>
+              <article className="admin-card">
+                <h3>Admin Accounts</h3>
+                <div className="audit-log">
+                  {(cmsConfig.admins || []).map((admin) => (
+                    <div key={admin.id}>
+                      <b>{admin.username}</b>
+                      <span>{admin.email}</span>
+                      <span className="muted">{admin.status}</span>
+                    </div>
+                  ))}
+                  {!cmsConfig.admins?.length && <p className="muted">Belum ada akun admin.</p>}
+                </div>
+              </article>
             </div>
           )}
         </section>
@@ -461,7 +554,10 @@ export default function AdminPanel({ apiBase, secret, token, onExit, notify }) {
                 {payments.map((payment) => (
                   <tr key={payment.id}>
                     <td><code>{payment.id}</code></td>
-                    <td>{payment.userId}</td>
+                    <td>
+                      {payment.user?.username || payment.userId}
+                      {payment.user?.email && <div className="muted small">{payment.user.email}</div>}
+                    </td>
                     <td>{payment.label}</td>
                     <td>{payment.method?.toUpperCase()}{payment.gateway ? ` (${payment.gateway})` : ''}</td>
                     <td>{fmtMoney(payment.amount)}</td>

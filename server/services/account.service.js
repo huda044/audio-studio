@@ -128,6 +128,7 @@ function pushAudit(user, event, detail = {}) {
 }
 
 function activePlan(user) {
+  if (user?.role === 'admin') return { plan: 'paid', label: 'Admin', expiresAt: null };
   const subscription = user.subscription || { plan: 'free' };
   if (subscription.plan === 'paid' && subscription.expiresAt && new Date(subscription.expiresAt).getTime() > Date.now()) {
     return { plan: 'paid', label: subscription.label || 'Paid', expiresAt: subscription.expiresAt };
@@ -191,6 +192,73 @@ export function signUser(user) {
 
 export function verifyToken(token) {
   return jwt.verify(token, jwtSecret);
+}
+
+export async function ensureBootstrapAdmin() {
+  const username = String(process.env.ADMIN_BOOTSTRAP_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+  const email = String(process.env.ADMIN_BOOTSTRAP_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || process.env.ADMIN_PASSWORD || '');
+  const resetPassword = String(process.env.ADMIN_BOOTSTRAP_RESET_PASSWORD || '').toLowerCase() === 'true';
+
+  if (!username || !email || !password) {
+    return { configured: false, created: false, updated: false, reason: 'missing_admin_bootstrap_env' };
+  }
+  if (username.length < 3 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 6) {
+    return { configured: true, created: false, updated: false, reason: 'invalid_admin_bootstrap_env' };
+  }
+
+  const store = await readStore();
+  let user = store.users.find((item) => item.email === email || item.username === username);
+  if (user) {
+    const changed = [];
+    if (user.username !== username) {
+      user.username = username;
+      changed.push('username');
+    }
+    if (user.email !== email) {
+      user.email = email;
+      changed.push('email');
+    }
+    if (user.role !== 'admin') {
+      user.role = 'admin';
+      changed.push('role');
+    }
+    if (user.status !== 'active') {
+      user.status = 'active';
+      changed.push('status');
+    }
+    if (!user.emailVerified) {
+      user.emailVerified = true;
+      changed.push('emailVerified');
+    }
+    if (resetPassword || !user.passwordHash) {
+      user.passwordHash = await bcrypt.hash(password, 10);
+      changed.push('password');
+    }
+    if (changed.length) {
+      pushAudit(user, 'admin_bootstrap_update', { changed });
+      await writeStore(store);
+    }
+    return { configured: true, created: false, updated: changed.length > 0, user: publicUser(user) };
+  }
+
+  user = migrateUser({
+    id: nanoid(12),
+    username,
+    email,
+    emailVerified: true,
+    passwordHash: await bcrypt.hash(password, 10),
+    role: 'admin',
+    status: 'active',
+    createdAt: nowIso(),
+    subscription: { plan: 'paid', label: 'Admin', expiresAt: null, history: [] },
+    usage: { conversions: 0, lastConversionAt: null, lastReason: null },
+    profile: { robloxConfig: {}, groups: [], history: [] }
+  });
+  pushAudit(user, 'admin_bootstrap_create');
+  store.users.push(user);
+  await writeStore(store);
+  return { configured: true, created: true, updated: false, user: publicUser(user) };
 }
 
 async function mutateUser(id, mutator) {
@@ -720,7 +788,7 @@ export async function adminGetUser(id) {
 }
 
 export async function adminUpdateUser(id, patch = {}, actor = 'admin') {
-  return mutateUser(id, async (user) => {
+  return mutateUser(id, async (user, store) => {
     const changed = [];
     if (typeof patch.username === 'string') {
       const next = patch.username.trim().toLowerCase();
@@ -730,7 +798,6 @@ export async function adminUpdateUser(id, patch = {}, actor = 'admin') {
         throw error;
       }
       if (next !== user.username) {
-        const store = await readStore();
         if (store.users.some((item) => item.id !== id && item.username === next)) {
           const error = new Error('Username sudah dipakai.');
           error.status = 409;
@@ -748,7 +815,6 @@ export async function adminUpdateUser(id, patch = {}, actor = 'admin') {
         throw error;
       }
       if (next !== user.email) {
-        const store = await readStore();
         if (store.users.some((item) => item.id !== id && item.email === next)) {
           const error = new Error('Email sudah dipakai.');
           error.status = 409;
@@ -759,10 +825,26 @@ export async function adminUpdateUser(id, patch = {}, actor = 'admin') {
       }
     }
     if (typeof patch.role === 'string' && ['user', 'admin'].includes(patch.role) && patch.role !== user.role) {
+      if (user.role === 'admin' && patch.role !== 'admin') {
+        const activeAdmins = store.users.filter((item) => item.id !== id && item.role === 'admin' && item.status === 'active').length;
+        if (activeAdmins === 0) {
+          const error = new Error('Tidak bisa menurunkan role admin terakhir.');
+          error.status = 400;
+          throw error;
+        }
+      }
       user.role = patch.role;
       changed.push('role');
     }
     if (typeof patch.status === 'string' && ['active', 'suspended', 'banned'].includes(patch.status) && patch.status !== user.status) {
+      if (user.role === 'admin' && patch.status !== 'active') {
+        const activeAdmins = store.users.filter((item) => item.id !== id && item.role === 'admin' && item.status === 'active').length;
+        if (activeAdmins === 0) {
+          const error = new Error('Tidak bisa menonaktifkan admin aktif terakhir.');
+          error.status = 400;
+          throw error;
+        }
+      }
       user.status = patch.status;
       changed.push('status');
     }
@@ -847,6 +929,15 @@ export async function adminDeleteUser(id, actor = 'admin') {
     error.status = 404;
     throw error;
   }
+  const target = store.users[index];
+  if (target.role === 'admin') {
+    const activeAdmins = store.users.filter((item) => item.id !== id && item.role === 'admin' && item.status === 'active').length;
+    if (activeAdmins === 0) {
+      const error = new Error('Tidak bisa menghapus admin aktif terakhir.');
+      error.status = 400;
+      throw error;
+    }
+  }
   store.users.splice(index, 1);
   await writeStore(store);
   const paymentStore = await readPayments();
@@ -857,9 +948,20 @@ export async function adminDeleteUser(id, actor = 'admin') {
 
 export async function adminListPayments({ status = '', limit = 100, offset = 0 } = {}) {
   const paymentStore = await readPayments();
+  const store = await readStore();
+  const usersById = new Map(store.users.map((user) => [user.id, user]));
   const filtered = status ? paymentStore.payments.filter((payment) => payment.status === status) : paymentStore.payments;
   const total = filtered.length;
-  return { payments: filtered.slice(offset, offset + limit), total };
+  return {
+    payments: filtered.slice(offset, offset + limit).map((payment) => {
+      const user = usersById.get(payment.userId);
+      return {
+        ...payment,
+        user: user ? { id: user.id, username: user.username, email: user.email } : null
+      };
+    }),
+    total
+  };
 }
 
 export async function adminRejectPayment(invoiceId, actor = 'admin') {
@@ -902,6 +1004,67 @@ export async function adminStats() {
       total: paymentStore.payments.length,
       revenue
     },
+    generatedAt: nowIso()
+  };
+}
+
+export async function adminCmsConfig() {
+  const store = await readStore();
+  const paymentStore = await readPayments();
+  const admins = store.users
+    .filter((user) => user.role === 'admin')
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      status: user.status,
+      lastLoginAt: user.lastLoginAt || null
+    }));
+  const recentPayments = paymentStore.payments.slice(0, 8).map((payment) => ({
+    id: payment.id,
+    status: payment.status,
+    amount: payment.amount,
+    method: payment.method,
+    createdAt: payment.createdAt
+  }));
+  return {
+    app: {
+      name: process.env.APP_NAME || 'Audio Studio',
+      publicUrl: process.env.APP_PUBLIC_URL || '',
+      clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+      nodeEnv: process.env.NODE_ENV || 'development',
+      jwtExpiresIn
+    },
+    auth: {
+      googleConfigured: Boolean(googleClientId),
+      smtpConfigured: isSmtpConfigured(),
+      adminBootstrapConfigured: Boolean(
+        (process.env.ADMIN_BOOTSTRAP_USERNAME || process.env.ADMIN_USERNAME)
+        && (process.env.ADMIN_BOOTSTRAP_EMAIL || process.env.ADMIN_EMAIL)
+        && (process.env.ADMIN_BOOTSTRAP_PASSWORD || process.env.ADMIN_PASSWORD)
+      )
+    },
+    conversion: {
+      freeConvertLimit: FREE_CONVERT_LIMIT,
+      freeDurationLimitSeconds: FREE_DURATION_LIMIT,
+      maxUploadMb: Number(process.env.MAX_UPLOAD_MB || 250),
+      inlineAudioLimitMb: Number(process.env.INLINE_AUDIO_LIMIT_MB || 8),
+      conversionConcurrency: Number(process.env.CONVERSION_CONCURRENCY || 2),
+      conversionQueueLimit: Number(process.env.CONVERSION_QUEUE_LIMIT || 20),
+      ffmpegTimeoutMs: Number(process.env.FFMPEG_TIMEOUT_MS || 300000)
+    },
+    roblox: {
+      maxAudioDurationSeconds: Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420),
+      maxAudioBytes: Number(process.env.ROBLOX_AUDIO_MAX_BYTES || (19 * 1024 * 1024)),
+      uploadConcurrency: Number(process.env.ROBLOX_UPLOAD_CONCURRENCY || 1),
+      uploadQueueLimit: Number(process.env.ROBLOX_UPLOAD_QUEUE_LIMIT || 15)
+    },
+    billing: {
+      midtransConfigured: isMidtransConfigured(),
+      pendingInvoices: paymentStore.payments.filter((payment) => payment.status === 'Pending').length,
+      recentPayments
+    },
+    admins,
     generatedAt: nowIso()
   };
 }
@@ -957,15 +1120,18 @@ export async function handleMidtransWebhook(payload) {
 }
 
 
-export function isAdminRequest(req) {
-  const secret = process.env.ADMIN_SECRET;
-  if (secret && req.headers['x-admin-secret'] === secret) return { ok: true, actor: 'secret' };
+export async function isAdminRequest(req) {
   try {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     if (!token) return { ok: false };
     const decoded = verifyToken(token);
-    if (decoded?.role === 'admin') return { ok: true, actor: decoded.username || decoded.sub };
+    if (decoded?.role !== 'admin') return { ok: false };
+    const store = await readStore();
+    const user = store.users.find((item) => item.id === decoded.sub);
+    if (user?.role === 'admin' && user.status === 'active') {
+      return { ok: true, actor: user.username || decoded.username || decoded.sub, userId: user.id };
+    }
   } catch {
     // ignore invalid tokens
   }

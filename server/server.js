@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import audioRoutes from './routes/audio.routes.js';
 import accountRoutes from './routes/account.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import { ensureBootstrapAdmin } from './services/account.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +37,14 @@ async function resolveUploadsDir() {
 
 const uploadsDir = await resolveUploadsDir();
 const port = process.env.PORT || 4000;
+try {
+  const bootstrap = await ensureBootstrapAdmin();
+  if (bootstrap.created) console.log(`[admin-bootstrap] admin account created: ${bootstrap.user.username}`);
+  else if (bootstrap.updated) console.log(`[admin-bootstrap] admin account updated: ${bootstrap.user.username}`);
+  else if (bootstrap.configured && bootstrap.reason) console.warn(`[admin-bootstrap] skipped: ${bootstrap.reason}`);
+} catch (error) {
+  console.error('[admin-bootstrap-error]', error.message);
+}
 
 const configuredOrigins = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const allowedOrigins = configuredOrigins

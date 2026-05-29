@@ -9,6 +9,7 @@ import {
   adminListPayments,
   adminRejectPayment,
   adminStats,
+  adminCmsConfig,
   adminActivityFeed,
   confirmPayment,
   isAdminRequest
@@ -23,11 +24,15 @@ const adminLimit = rateLimit({
   message: 'Terlalu banyak request admin. Tunggu sebentar.'
 });
 
-function adminGuard(req, res, next) {
-  const result = isAdminRequest(req);
-  if (!result.ok) return res.status(403).json({ error: 'Akses admin ditolak.' });
-  req.admin = { actor: result.actor || 'admin' };
-  next();
+async function adminGuard(req, res, next) {
+  try {
+    const result = await isAdminRequest(req);
+    if (!result.ok) return res.status(403).json({ error: 'Akses admin ditolak.' });
+    req.admin = { actor: result.actor || 'admin', userId: result.userId || null };
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 router.use(adminLimit, adminGuard);
@@ -73,6 +78,14 @@ router.get('/activity', async (req, res, next) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     res.json({ events: await adminActivityFeed(limit) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/cms/config', async (_req, res, next) => {
+  try {
+    res.json(await adminCmsConfig());
   } catch (error) {
     next(error);
   }

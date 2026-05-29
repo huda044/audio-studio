@@ -102,7 +102,7 @@ export default function AppShell({
               <p className="sidebar-section">ADMIN</p>
               <button className="sidebar-item admin" onClick={onOpenAdmin} type="button">
                 <Crown size={16} />
-                <span>Admin Panel</span>
+                <span>CMS Admin</span>
               </button>
             </div>
           )}

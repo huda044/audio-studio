@@ -32,4 +32,18 @@ VITE_API_BASE=https://audio-studio-api.onrender.com
 - Upload Roblox otomatis dipotong per part mengikuti limit Open Cloud audio: maksimal 7 menit dan di bawah 20MB per asset
 - Endpoint mengembalikan `requestId`, `conversionTrace`, `warnings`, dan `uploadSummary` agar status berhasil/gagal/pending bisa dilacak jelas
 
+## Akun Admin CMS
+
+Admin panel sekarang memakai akun login biasa dengan role `admin`, bukan `ADMIN_SECRET`.
+Saat deploy, isi env berikut untuk membuat/mengaktifkan akun admin otomatis:
+
+```env
+ADMIN_BOOTSTRAP_USERNAME=admin
+ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+ADMIN_BOOTSTRAP_PASSWORD=ganti-password-admin-kuat
+ADMIN_BOOTSTRAP_RESET_PASSWORD=false
+```
+
+Setelah login dengan akun itu, menu **CMS Admin** muncul otomatis untuk kelola user, invoice, audit activity, email test, dan konfigurasi sistem.
+
 Render Free tetap punya batasan: service bisa sleep saat idle, filesystem tidak permanen, dan resource bukan untuk traffic besar terus-menerus. Tetapi untuk backend FFmpeg gratis, ini lebih kuat daripada Vercel serverless.

@@ -5,6 +5,7 @@ import {
   createPayment,
   getUserById,
   handleMidtransWebhook,
+  isAdminRequest,
   listUserPayments,
   loginUser,
   loginWithGoogle,
@@ -144,10 +145,9 @@ router.post('/billing/create', authMiddleware, async (req, res, next) => {
 
 router.post('/billing/admin/confirm', async (req, res, next) => {
   try {
-    if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
-      return res.status(403).json({ error: 'Admin secret tidak valid.' });
-    }
-    res.json({ payment: await confirmPayment(req.body.invoiceId, 'admin-secret') });
+    const result = await isAdminRequest(req);
+    if (!result.ok) return res.status(403).json({ error: 'Akses admin ditolak.' });
+    res.json({ payment: await confirmPayment(req.body.invoiceId, result.actor || 'admin') });
   } catch (error) {
     next(error);
   }

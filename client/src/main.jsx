@@ -256,8 +256,6 @@ function App() {
   const [robloxCheck, setRobloxCheck] = useState(null);
   const [toast, setToast] = useState(null);
   const [adminMode, setAdminMode] = useState(false);
-  const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
-  const [adminPromptOpen, setAdminPromptOpen] = useState(false);
   const [activePage, setActivePage] = useState('pipeline');
   const [historyFilter, setHistoryFilter] = useState('all');
   const [historySearch, setHistorySearch] = useState('');
@@ -286,7 +284,7 @@ function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('admin') === '1') setAdminPromptOpen(true);
+    if (params.get('admin') === '1') setActivePage('settings');
     fetch(`${API_BASE}/api/billing/gateway`).then(async (response) => {
       if (response.ok) {
         const data = await response.json();
@@ -1189,35 +1187,11 @@ function App() {
       setAdminMode(true);
       return;
     }
-    setAdminPromptOpen(true);
-  }
-
-  function submitAdminSecret(event) {
-    event.preventDefault();
-    if (!adminSecret.trim()) {
-      notify('Masukkan ADMIN_SECRET.', 'error');
-      return;
-    }
-    sessionStorage.setItem('audio-studio-admin-secret', adminSecret.trim());
-    setAdminPromptOpen(false);
-    setAdminMode(true);
+    notify('Akses CMS hanya untuk akun admin. Login memakai akun admin dulu.', 'error');
   }
 
   function exitAdmin() {
     setAdminMode(false);
-    setAdminPromptOpen(false);
-    if (currentUser?.role !== 'admin') {
-      setAdminSecret('');
-      sessionStorage.removeItem('audio-studio-admin-secret');
-    }
-  }
-
-  function exitAdminAndLogout() {
-    setAdminMode(false);
-    setAdminSecret('');
-    sessionStorage.removeItem('audio-studio-admin-secret');
-    logout();
-    notify('Logout untuk refresh role admin. Login ulang.');
   }
 
   function renderAuthCard() {
@@ -1462,9 +1436,10 @@ function App() {
         <Toast toast={toast} />
         <AdminPanel
           apiBase={API_BASE}
-          secret={currentUser?.role === 'admin' ? '' : adminSecret}
-          token={currentUser?.role === 'admin' ? authToken : ''}
+          token={authToken}
+          currentUser={currentUser}
           onExit={exitAdmin}
+          onLogout={logout}
           notify={notify}
         />
       </>
@@ -1525,20 +1500,6 @@ function App() {
         libraryCount={libraryAssets.length}
         pageActions={<div className="summary">{summary}</div>}
       >
-
-        {adminPromptOpen && (
-          <section className="panel admin-prompt">
-            <h2><Crown size={18} /> Masuk Mode Admin</h2>
-            <p className="muted">Pakai ADMIN_SECRET dari env server, atau login dengan akun yang role-nya admin.</p>
-            <form onSubmit={submitAdminSecret} className="auth-form">
-              <label className="field"><span>ADMIN_SECRET</span><input type="password" value={adminSecret} onChange={(e) => setAdminSecret(e.target.value)} /></label>
-              <div className="actions">
-                <button type="submit" className="primary">Masuk</button>
-                <button type="button" className="icon-wide" onClick={() => setAdminPromptOpen(false)}>Batal</button>
-              </div>
-            </form>
-          </section>
-        )}
 
         {(!currentUser || activePage === 'settings' || activePage === 'billing') && (
         <section className="panel">
