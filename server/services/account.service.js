@@ -33,6 +33,7 @@ const dataDir = resolveDataDir();
 const usersPath = path.join(dataDir, 'users.json');
 const paymentsPath = path.join(dataDir, 'payments.json');
 const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
+const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '365d';
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 const FREE_CONVERT_LIMIT = Number(process.env.FREE_CONVERT_LIMIT || 3);
@@ -184,7 +185,7 @@ export function signUser(user) {
   return jwt.sign(
     { sub: user.id, username: user.username, role: user.role || 'user' },
     jwtSecret,
-    { expiresIn: '30d' }
+    { expiresIn: jwtExpiresIn }
   );
 }
 

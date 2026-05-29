@@ -3,10 +3,17 @@ import { createRoot } from 'react-dom/client';
 import WaveSurfer from 'wavesurfer.js';
 import CryptoJS from 'crypto-js';
 import {
+  ArrowRight,
+  CheckCircle2,
   Copy,
   HelpCircle,
+  KeyRound,
   Loader2,
+  LockKeyhole,
+  LogIn,
+  Mail,
   Music2,
+  ShieldCheck,
   Trash2,
   Upload,
   Youtube,
@@ -223,6 +230,7 @@ function App() {
   const [groupForm, setGroupForm] = useState({ groupId: '', creatorUserId: '', apiKey: '' });
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('audio-studio-token') || '');
   const [currentUser, setCurrentUser] = useState(null);
+  const [sessionStatus, setSessionStatus] = useState(() => (localStorage.getItem('audio-studio-token') ? 'checking' : 'guest'));
   const [authMode, setAuthMode] = useState('login');
   const [authForm, setAuthForm] = useState({ username: '', email: '', password: '', code: '', newPassword: '' });
   const [pendingEmail, setPendingEmail] = useState('');
@@ -267,8 +275,12 @@ function App() {
   }, [apiKey]);
 
   useEffect(() => {
-    if (authToken) localStorage.setItem('audio-studio-token', authToken);
-    else localStorage.removeItem('audio-studio-token');
+    if (authToken) {
+      localStorage.setItem('audio-studio-token', authToken);
+    } else {
+      localStorage.removeItem('audio-studio-token');
+      setSessionStatus('guest');
+    }
   }, [authToken]);
 
   useEffect(() => {
@@ -308,20 +320,31 @@ function App() {
   }, [currentUser, authToken]);
 
   useEffect(() => {
-    if (!authToken) return;
+    if (!authToken) {
+      setCurrentUser(null);
+      setSessionStatus('guest');
+      return;
+    }
+    let cancelled = false;
+    setSessionStatus('checking');
     fetch(`${API_BASE}/api/auth/me`, {
       headers: { Authorization: `Bearer ${authToken}` }
     })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Sesi login gagal dimuat.');
+        if (cancelled) return;
         applyUserProfile(data.user);
+        setSessionStatus('authenticated');
       })
       .catch((error) => {
+        if (cancelled) return;
         setAuthToken('');
-        notify(error.message, 'error');
+        setSessionStatus('guest');
+        if (localStorage.getItem('audio-studio-token')) notify(error.message, 'error');
       });
-  }, []);
+    return () => { cancelled = true; };
+  }, [authToken]);
 
   useEffect(() => {
     if (!googleClientId) return;
@@ -348,6 +371,7 @@ function App() {
         client_id: googleClientId,
         callback: async (result) => {
           try {
+            setSyncingProfile(true);
             const response = await fetch(`${API_BASE}/api/auth/google`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -357,18 +381,22 @@ function App() {
             if (!response.ok) throw new Error(data.error || 'Login Google gagal.');
             setAuthToken(data.token);
             applyUserProfile(data.user);
+            setSessionStatus('authenticated');
             notify('Login Google berhasil.');
           } catch (error) {
             notify(error.message, 'error');
+          } finally {
+            setSyncingProfile(false);
           }
         }
       });
+      googleButtonRef.current.innerHTML = '';
       window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: 'filled_black',
+        theme: 'outline',
         size: 'large',
         shape: 'rectangular',
-        text: 'continue_with',
-        width: 280
+        text: 'signin_with',
+        width: 320
       });
     };
     tryRender();
@@ -569,6 +597,14 @@ function App() {
 
   async function handleAuth(event) {
     event.preventDefault();
+    if (!authForm.username.trim() || !authForm.password) {
+      notify('Username/email dan password wajib diisi.', 'error');
+      return;
+    }
+    if (authMode === 'register' && !authForm.email.trim()) {
+      notify('Email wajib diisi untuk daftar akun.', 'error');
+      return;
+    }
     try {
       setSyncingProfile(true);
       const response = await fetch(`${API_BASE}/api/auth/${authMode}`, {
@@ -585,6 +621,8 @@ function App() {
       }
       setAuthToken(data.token);
       applyUserProfile(data.user);
+      setSessionStatus('authenticated');
+      setActivePage('pipeline');
       notify(authMode === 'login' ? 'Login berhasil.' : 'Akun berhasil dibuat.');
     } catch (error) {
       notify(error.message, 'error');
@@ -605,6 +643,8 @@ function App() {
       if (!response.ok) throw new Error(data.error || 'Verifikasi gagal.');
       setAuthToken(data.token);
       applyUserProfile(data.user);
+      setSessionStatus('authenticated');
+      setActivePage('pipeline');
       setPendingEmail('');
       notify('Email berhasil diverifikasi.');
     } catch (error) {
@@ -674,6 +714,8 @@ function App() {
       if (!response.ok) throw new Error(data.error || 'Reset password gagal.');
       setAuthToken(data.token);
       applyUserProfile(data.user);
+      setSessionStatus('authenticated');
+      setActivePage('pipeline');
       setResetMode(false);
       setResetStep('request');
       setPendingEmail('');
@@ -720,6 +762,11 @@ function App() {
   function logout() {
     setAuthToken('');
     setCurrentUser(null);
+    setSessionStatus('guest');
+    setActivePage('pipeline');
+    setAuthMode('login');
+    setResetMode(false);
+    setPendingEmail('');
     notify('Logout berhasil.');
   }
 
@@ -1173,6 +1220,219 @@ function App() {
     notify('Logout untuk refresh role admin. Login ulang.');
   }
 
+  function renderAuthCard() {
+    if (resetMode) {
+      return resetStep === 'request' ? (
+        <form className="auth-card-form" onSubmit={handleForgotPassword}>
+          <div className="auth-card-heading">
+            <KeyRound size={20} />
+            <div>
+              <h2>Reset Password</h2>
+              <p>Masukkan email akunmu.</p>
+            </div>
+          </div>
+          <label className="auth-field">
+            <span>Email</span>
+            <div>
+              <Mail size={17} />
+              <input
+                type="email"
+                value={authForm.email || authForm.username}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value, username: e.target.value })}
+                autoComplete="email"
+                placeholder="nama@email.com"
+              />
+            </div>
+          </label>
+          <button className="primary auth-main-button" disabled={syncingProfile}>
+            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+            Kirim Kode Reset
+          </button>
+          <button type="button" className="auth-link-button" onClick={() => { setResetMode(false); setResetStep('request'); }}>
+            Kembali ke Login
+          </button>
+        </form>
+      ) : (
+        <form className="auth-card-form" onSubmit={handleResetPassword}>
+          <div className="auth-card-heading">
+            <KeyRound size={20} />
+            <div>
+              <h2>Password Baru</h2>
+              <p>Kode reset untuk {pendingEmail || authForm.email || authForm.username}.</p>
+            </div>
+          </div>
+          <label className="auth-field">
+            <span>Kode Reset</span>
+            <div>
+              <ShieldCheck size={17} />
+              <input
+                value={authForm.code}
+                onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })}
+                autoComplete="one-time-code"
+                placeholder="6 digit kode"
+              />
+            </div>
+          </label>
+          <label className="auth-field">
+            <span>Password Baru</span>
+            <div>
+              <LockKeyhole size={17} />
+              <input
+                type="password"
+                value={authForm.newPassword}
+                onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
+                autoComplete="new-password"
+                placeholder="Minimal 6 karakter"
+              />
+            </div>
+          </label>
+          <button className="primary auth-main-button" disabled={syncingProfile}>
+            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+            Reset Password
+          </button>
+          <button type="button" className="auth-link-button" onClick={() => { setResetMode(false); setResetStep('request'); setPendingEmail(''); }}>
+            Kembali ke Login
+          </button>
+        </form>
+      );
+    }
+
+    if (pendingEmail) {
+      return (
+        <form className="auth-card-form" onSubmit={verifyEmail}>
+          <div className="auth-card-heading">
+            <ShieldCheck size={20} />
+            <div>
+              <h2>Verifikasi Email</h2>
+              <p>{pendingEmail}</p>
+            </div>
+          </div>
+          <label className="auth-field">
+            <span>Kode Verifikasi</span>
+            <div>
+              <ShieldCheck size={17} />
+              <input
+                value={authForm.code}
+                onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })}
+                autoComplete="one-time-code"
+                placeholder="6 digit kode"
+              />
+            </div>
+          </label>
+          <button className="primary auth-main-button" disabled={syncingProfile}>
+            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+            Verifikasi Email
+          </button>
+          <button type="button" className="secondary auth-secondary-button" onClick={resendCode}>Kirim Ulang Kode</button>
+          <button type="button" className="auth-link-button" onClick={() => { setPendingEmail(''); setAuthMode('login'); }}>
+            Kembali ke Login
+          </button>
+        </form>
+      );
+    }
+
+    return (
+      <form className="auth-card-form" onSubmit={handleAuth}>
+        <div className="auth-card-heading">
+          <LogIn size={20} />
+          <div>
+            <h2>{authMode === 'login' ? 'Masuk ke Audio Studio' : 'Buat Akun'}</h2>
+            <p>{authMode === 'login' ? 'Sesi tersimpan otomatis di browser ini.' : 'Akun baru perlu verifikasi email.'}</p>
+          </div>
+        </div>
+        <div className="auth-toggle" role="tablist" aria-label="Mode autentikasi">
+          <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Login</button>
+          <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Daftar</button>
+        </div>
+        <label className="auth-field">
+          <span>Username / Email</span>
+          <div>
+            <User size={17} />
+            <input
+              value={authForm.username}
+              onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+              autoComplete="username"
+              placeholder="username atau email"
+            />
+          </div>
+        </label>
+        {authMode === 'register' && (
+          <label className="auth-field">
+            <span>Email</span>
+            <div>
+              <Mail size={17} />
+              <input
+                type="email"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                autoComplete="email"
+                placeholder="nama@email.com"
+              />
+            </div>
+          </label>
+        )}
+        <label className="auth-field">
+          <span>Password</span>
+          <div>
+            <LockKeyhole size={17} />
+            <input
+              type="password"
+              value={authForm.password}
+              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+              placeholder="Password"
+            />
+          </div>
+        </label>
+        <button className="primary auth-main-button" disabled={syncingProfile}>
+          {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+          {authMode === 'login' ? 'Login' : 'Buat Akun'}
+        </button>
+        {authMode === 'login' && (
+          <button type="button" className="auth-link-button" onClick={() => setResetMode(true)}>
+            Lupa Password?
+          </button>
+        )}
+        {googleClientId && (
+          <>
+            <div className="auth-divider"><span>atau</span></div>
+            <div ref={googleButtonRef} className="google-btn-slot auth-google-slot" />
+          </>
+        )}
+      </form>
+    );
+  }
+
+  function renderAuthScreen() {
+    const checking = sessionStatus === 'checking' || sessionStatus === 'authenticated';
+    return (
+      <main className="auth-page">
+        <Toast toast={toast} />
+        <section className="auth-layout" aria-busy={checking}>
+          <div className="auth-brand-panel">
+            <div className="auth-logo-mark">L</div>
+            <p className="auth-kicker">LuciVoid Audio Studio</p>
+            <h1>Konversi audio dan upload Roblox dalam satu dashboard.</h1>
+            <div className="auth-benefits">
+              <span><CheckCircle2 size={16} /> Preset tersimpan</span>
+              <span><CheckCircle2 size={16} /> Riwayat browser & akun</span>
+              <span><CheckCircle2 size={16} /> Roblox Open Cloud</span>
+            </div>
+          </div>
+          <div className="auth-card">
+            {checking ? (
+              <div className="auth-checking">
+                <Loader2 className="spin" size={32} />
+                <h2>Memuat sesi</h2>
+                <p>Login otomatis dari browser sedang dicek.</p>
+              </div>
+            ) : renderAuthCard()}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   function pipelineStepStatus(idx) {
     if (loading) {
       if (idx < loadingStepIndex) return 'done';
@@ -1190,6 +1450,10 @@ function App() {
       return 'pending';
     }
     return 'pending';
+  }
+
+  if (!currentUser) {
+    return renderAuthScreen();
   }
 
   if (adminMode) {
