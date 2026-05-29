@@ -66,7 +66,7 @@ async function readStore() {
 
 async function writeStore(store) {
   await ensureStore();
-  writeQueue = writeQueue.then(() => fs.writeFile(usersPath, JSON.stringify(store)));
+  writeQueue = writeQueue.then(() => atomicWriteJson(usersPath, store));
   await writeQueue;
 }
 
@@ -78,8 +78,14 @@ async function readPayments() {
 
 async function writePayments(store) {
   await ensureStore();
-  writeQueue = writeQueue.then(() => fs.writeFile(paymentsPath, JSON.stringify(store)));
+  writeQueue = writeQueue.then(() => atomicWriteJson(paymentsPath, store));
   await writeQueue;
+}
+
+async function atomicWriteJson(filePath, value) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(value));
+  await fs.rename(tmpPath, filePath);
 }
 
 function nowIso() {

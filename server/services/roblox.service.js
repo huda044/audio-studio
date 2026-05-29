@@ -5,23 +5,107 @@ import path from 'node:path';
 
 const ASSET_URL = 'https://apis.roblox.com/assets/v1/assets';
 const OPERATION_URL = 'https://apis.roblox.com/assets/v1/operations';
+const DEFAULT_MAX_AUDIO_SECONDS = 420;
+const DEFAULT_MAX_AUDIO_BYTES = 19 * 1024 * 1024;
+const ROBLOX_MAX_AUDIO_SECONDS = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || DEFAULT_MAX_AUDIO_SECONDS);
+const ROBLOX_MAX_AUDIO_BYTES = Number(process.env.ROBLOX_AUDIO_MAX_BYTES || DEFAULT_MAX_AUDIO_BYTES);
+const ROBLOX_UPLOAD_TIMEOUT_MS = Number(process.env.ROBLOX_UPLOAD_TIMEOUT_MS || 60000);
+const ROBLOX_POLL_TIMEOUT_MS = Number(process.env.ROBLOX_POLL_TIMEOUT_MS || 240000);
+const ROBLOX_POLL_INTERVAL_MS = Number(process.env.ROBLOX_POLL_INTERVAL_MS || 2500);
 
 function creationContext(creator) {
   if (creator?.groupId) return { creator: { groupId: String(creator.groupId) } };
   return { creator: { userId: String(creator?.userId || '') } };
 }
 
+function truncate(value, max) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatRobloxError(errorOrData, fallback = 'Roblox menolak request.') {
+  const response = errorOrData?.response;
+  const data = response?.data || errorOrData || {};
+  const raw = data.errors?.[0]?.message
+    || data.message
+    || data.error?.message
+    || data.error
+    || errorOrData?.message
+    || fallback;
+  const message = String(raw).slice(0, 500);
+  const status = response?.status || data.status || errorOrData?.status || 0;
+
+  if (status === 401 || status === 403) {
+    return {
+      message: 'API key ditolak Roblox atau belum punya permission asset:read/asset:write untuk creator ini.',
+      status
+    };
+  }
+  if (status === 413) return { message: 'File audio terlalu besar untuk Assets API Roblox.', status };
+  if (status === 429) return { message: 'Roblox membatasi request upload. Coba lagi setelah beberapa saat.', status };
+  if (status >= 500) return { message: 'Roblox API sedang bermasalah. Coba ulang nanti.', status };
+  return { message, status };
+}
+
+function extractOperationId(data = {}) {
+  return data.operationId || data.path?.split('/').pop() || '';
+}
+
+function cleanOperationId(operationId) {
+  return String(operationId || '').trim().split('/').filter(Boolean).pop() || '';
+}
+
+async function requestWithRetry(fn, { retries = 2, retryDelayMs = 1200 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fn();
+      if (response.status !== 429 && response.status < 500) return response;
+      lastError = { response };
+    } catch (error) {
+      lastError = error;
+      const status = error.response?.status || 0;
+      if (status && status !== 429 && status < 500) throw error;
+    }
+    if (attempt < retries) await sleep(retryDelayMs * (attempt + 1));
+  }
+  if (lastError?.response) return lastError.response;
+  throw lastError;
+}
+
 async function pollOperation(operationId, apiKey) {
+  const cleanId = cleanOperationId(operationId);
   const trace = [{
     step: 'Polling',
     status: 'Pending',
-    message: `Memantau operasi Roblox ${operationId}.`
+    message: `Memantau operasi Roblox ${cleanId}.`
   }];
-  const deadline = Date.now() + 1000 * 60 * 4;
+  const deadline = Date.now() + ROBLOX_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const { data } = await axios.get(`${OPERATION_URL}/${operationId}`, {
-      headers: { 'x-api-key': apiKey }
+    const response = await requestWithRetry(() => axios.get(`${OPERATION_URL}/${encodeURIComponent(cleanId)}`, {
+      headers: { 'x-api-key': apiKey },
+      timeout: 10000,
+      validateStatus: () => true
+    }), {
+      retries: 2,
+      retryDelayMs: 1200
     });
+    const { data } = response;
+
+    if (response.status >= 400) {
+      const formatted = formatRobloxError({ status: response.status, ...data });
+      trace.push({
+        step: 'Polling',
+        status: response.status >= 500 || response.status === 429 ? 'Pending' : 'Failed',
+        message: formatted.message
+      });
+      if (response.status < 500 && response.status !== 429) {
+        return { status: 'Failed', error: formatted.message, raw: data, trace, httpStatus: response.status };
+      }
+    }
 
     if (data.done) {
       const assetId = data.response?.assetId || data.response?.asset?.assetId || data.metadata?.assetId;
@@ -49,7 +133,7 @@ async function pollOperation(operationId, apiKey) {
       return { status: 'Accepted', raw: data, trace };
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await sleep(ROBLOX_POLL_INTERVAL_MS);
   }
   trace.push({
     step: 'Polling',
@@ -61,10 +145,22 @@ async function pollOperation(operationId, apiKey) {
 
 export async function checkAssetStatus(operationId, apiKey) {
   try {
-    const { data } = await axios.get(`${OPERATION_URL}/${operationId}`, {
+    const cleanId = cleanOperationId(operationId);
+    if (!cleanId) return { status: 'Failed', error: 'operationId tidak valid.' };
+    const response = await axios.get(`${OPERATION_URL}/${encodeURIComponent(cleanId)}`, {
       headers: { 'x-api-key': apiKey },
-      timeout: 10000
+      timeout: 10000,
+      validateStatus: () => true
     });
+    const { data } = response;
+    if (response.status >= 400) {
+      const formatted = formatRobloxError({ status: response.status, ...data });
+      return {
+        status: response.status === 429 || response.status >= 500 ? 'Pending' : 'Failed',
+        error: formatted.message,
+        httpStatus: response.status
+      };
+    }
     if (data.done) {
       const assetId = data.response?.assetId || data.response?.asset?.assetId || data.metadata?.assetId;
       if (assetId) return { status: 'Accepted', assetId, rbxassetid: `rbxassetid://${assetId}` };
@@ -73,7 +169,8 @@ export async function checkAssetStatus(operationId, apiKey) {
     }
     return { status: 'Pending' };
   } catch (error) {
-    return { status: 'Pending', error: error.response?.data?.message || error.message };
+    const formatted = formatRobloxError(error);
+    return { status: 'Pending', error: formatted.message, httpStatus: formatted.status };
   }
 }
 
@@ -86,19 +183,29 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
       status: 'Pending',
       message: `Part ${part.index} siap dikirim (${Math.round(part.sizeBytes / 1024)} KB).`
     }];
+    if (part.sizeBytes > ROBLOX_MAX_AUDIO_BYTES || part.duration > ROBLOX_MAX_AUDIO_SECONDS) {
+      const message = part.sizeBytes > ROBLOX_MAX_AUDIO_BYTES
+        ? `Part ${part.index} melebihi limit ukuran Roblox (${Math.round(ROBLOX_MAX_AUDIO_BYTES / 1024 / 1024)} MB).`
+        : `Part ${part.index} melebihi limit durasi Roblox (${Math.round(ROBLOX_MAX_AUDIO_SECONDS)} detik).`;
+      trace.push({ step: 'Validasi Roblox', status: 'Failed', message });
+      results.push({
+        part: part.index,
+        status: 'Failed',
+        assetId: null,
+        rbxassetid: '',
+        operationId: '',
+        error: message,
+        trace
+      });
+      continue;
+    }
+
     const request = {
       assetType: 'Audio',
-      displayName: parts.length > 1 ? `${displayName} - Part ${part.index}` : displayName,
-      description,
+      displayName: truncate(parts.length > 1 ? `${displayName} - Part ${part.index}` : displayName, 50) || `Audio Part ${part.index}`,
+      description: truncate(description, 1000),
       creationContext: creationContext(creator)
     };
-
-    const form = new FormData();
-    form.append('request', JSON.stringify(request));
-    form.append('file', fs.createReadStream(part.path), {
-      filename: path.basename(part.path),
-      contentType: 'audio/ogg'
-    });
 
     try {
       trace.push({
@@ -106,11 +213,46 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
         status: 'Pending',
         message: 'Mengirim audio ke Roblox Assets API.'
       });
-      const { data } = await axios.post(ASSET_URL, form, {
-        headers: { ...form.getHeaders(), 'x-api-key': apiKey },
-        maxBodyLength: Infinity
+      const response = await requestWithRetry(() => {
+        const form = new FormData();
+        form.append('request', JSON.stringify(request));
+        form.append('fileContent', fs.createReadStream(part.path), {
+          filename: path.basename(part.path),
+          contentType: 'audio/ogg'
+        });
+        return axios.post(ASSET_URL, form, {
+          headers: { ...form.getHeaders(), 'x-api-key': apiKey },
+          maxBodyLength: ROBLOX_MAX_AUDIO_BYTES + 1024 * 1024,
+          maxContentLength: ROBLOX_MAX_AUDIO_BYTES + 1024 * 1024,
+          timeout: ROBLOX_UPLOAD_TIMEOUT_MS,
+          validateStatus: () => true
+        });
+      }, {
+        retries: 2,
+        retryDelayMs: 1500
       });
-      const operationId = data.operationId || data.path?.split('/').pop();
+      const { data } = response;
+      if (response.status >= 400) {
+        const formatted = formatRobloxError({ status: response.status, ...data });
+        trace.push({
+          step: 'Submit Open Cloud',
+          status: 'Failed',
+          message: formatted.message
+        });
+        results.push({
+          part: part.index,
+          status: 'Failed',
+          assetId: null,
+          rbxassetid: '',
+          operationId: '',
+          httpStatus: response.status,
+          error: formatted.message,
+          trace
+        });
+        continue;
+      }
+
+      const operationId = extractOperationId(data);
       trace.push({
         step: 'Submit Open Cloud',
         status: operationId ? 'Accepted' : 'Pending',
@@ -127,25 +269,24 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
         assetId: polled.assetId || null,
         rbxassetid: polled.assetId ? `rbxassetid://${polled.assetId}` : '',
         operationId,
+        httpStatus: polled.httpStatus || response.status,
         error: polled.error || null,
         trace
       });
     } catch (error) {
-      const robloxError = error.response?.data;
-      const message = robloxError?.message
-        || robloxError?.error?.message
-        || error.message;
+      const formatted = formatRobloxError(error);
       trace.push({
         step: 'Submit Open Cloud',
         status: 'Failed',
-        message
+        message: formatted.message
       });
       results.push({
         part: part.index,
         status: 'Failed',
         assetId: null,
         rbxassetid: '',
-        error: message,
+        httpStatus: formatted.status,
+        error: formatted.message,
         trace
       });
     }

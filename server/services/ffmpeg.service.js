@@ -19,6 +19,13 @@ function round(value, digits = 2) {
   return Math.round(Number(value || 0) * factor) / factor;
 }
 
+function httpError(message, status = 422, details = []) {
+  const error = new Error(message);
+  error.status = status;
+  if (details.length) error.details = details;
+  return error;
+}
+
 function atempoChain(speed) {
   let value = clamp(speed, 0.5, 3);
   const filters = [];
@@ -34,7 +41,23 @@ function atempoChain(speed) {
   return filters;
 }
 
-function buildFilters(settings) {
+function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxDuration }) {
+  const source = Number(sourceDuration || 0);
+  if (!source) return maxDuration;
+  if (trimStart >= source - 0.05) {
+    throw httpError('Trim start melebihi durasi sumber audio.', 400);
+  }
+  const inputDuration = trimEnd > trimStart
+    ? Math.max(0, Math.min(trimEnd, source) - trimStart)
+    : Math.max(0, source - trimStart);
+  if (inputDuration <= 0.05) {
+    throw httpError('Range trim terlalu pendek atau tidak valid.', 400);
+  }
+  const naturalOutputDuration = inputDuration / Math.max(speed, 0.01);
+  return Math.max(0.25, Math.min(maxDuration, naturalOutputDuration));
+}
+
+function buildFilters(settings, sourceDuration = 0) {
   const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
   const amplify = clamp(settings.amplify ?? -4, -20, 20);
   const maxDurationLimit = clamp(settings.maxDurationLimit ?? 600, 30, 14400);
@@ -44,6 +67,11 @@ function buildFilters(settings) {
   const fadeOut = clamp(settings.fadeOut ?? 0, 0, 30);
   const trimStart = Math.max(0, Number(settings.trimStart || 0));
   const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
+  const effectiveDuration = computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxDuration });
+  const warnings = [];
+  if (sourceDuration && trimEnd > sourceDuration) {
+    warnings.push('Trim end lebih panjang dari sumber, otomatis dipotong ke akhir audio.');
+  }
   const appliedSettings = {
     speed: round(speed, 4),
     amplify,
@@ -108,7 +136,7 @@ function buildFilters(settings) {
     effects.push(`Fade in ${fadeIn}s`);
   }
   if (fadeOut > 0) {
-    const start = Math.max(0, maxDuration - fadeOut);
+    const start = Math.max(0, effectiveDuration - fadeOut);
     filters.push(`afade=t=out:st=${start}:d=${fadeOut}`);
     effects.push(`Fade out ${fadeOut}s`);
   }
@@ -116,7 +144,7 @@ function buildFilters(settings) {
   if (trimEnd > 0) effects.push(`Trim end ${trimEnd}s`);
   filters.push('aresample=44100');
 
-  return { filters, maxDuration, appliedSettings, effects };
+  return { filters, maxDuration, appliedSettings, effects, warnings, effectiveDuration };
 }
 
 export function probeAudio(inputPath) {
@@ -128,25 +156,39 @@ export function probeAudio(inputPath) {
   });
 }
 
-export async function processAudio({ inputPath, outputPath, settings }) {
-  const { filters, maxDuration, appliedSettings, effects } = buildFilters(settings);
-  const trimStart = appliedSettings.trimStart;
-  const trimEnd = appliedSettings.trimEnd;
-  const effectiveDuration = trimEnd > 0 && trimEnd > trimStart
-    ? Math.min(trimEnd - trimStart, maxDuration)
-    : maxDuration;
+function hasAudioStream(probe) {
+  return Array.isArray(probe.streams) && probe.streams.some((stream) => stream.codec_type === 'audio');
+}
+
+async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration }) {
+  await fs.unlink(outputPath).catch(() => {});
   await new Promise((resolve, reject) => {
     let cmd = ffmpeg(inputPath);
     let stderr = '';
+    let settled = false;
+    const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 300000);
+    const settle = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      cmd.kill('SIGKILL');
+      settle(httpError('Konversi FFmpeg melewati batas waktu server.', 408));
+    }, timeoutMs);
     if (trimStart > 0) cmd = cmd.seekInput(trimStart);
     cmd
       .audioFilters(filters)
       .audioCodec('libvorbis')
       .audioBitrate('128k')
+      .audioChannels(2)
+      .audioFrequency(44100)
       .format('ogg')
       .outputOptions(['-vn']);
     cmd.duration(effectiveDuration)
-      .on('end', resolve)
+      .on('end', () => settle())
       .on('stderr', (line) => {
         stderr = `${stderr}${line}\n`.slice(-4000);
       })
@@ -155,10 +197,53 @@ export async function processAudio({ inputPath, outputPath, settings }) {
         const next = new Error(`Konversi FFmpeg gagal: ${detail.split(/\r?\n/).slice(-2).join(' ').slice(0, 320)}`);
         next.status = 422;
         next.cause = error;
-        reject(next);
+        settle(next);
       })
       .save(outputPath);
   });
+}
+
+export async function processAudio({ inputPath, outputPath, settings, sourceDuration = 0 }) {
+  const sourceProbe = await probeAudio(inputPath).catch((error) => {
+    throw httpError(`Sumber audio tidak bisa dibaca FFmpeg: ${error.message}`, 422);
+  });
+  if (!hasAudioStream(sourceProbe)) {
+    throw httpError('Sumber tidak memiliki stream audio yang bisa dikonversi.', 422);
+  }
+  const detectedSourceDuration = Number(sourceProbe.format?.duration || 0) || Number(sourceDuration || 0);
+  const primary = buildFilters(settings, detectedSourceDuration);
+  let { filters, appliedSettings, effects, warnings, effectiveDuration } = primary;
+  const trimStart = appliedSettings.trimStart;
+
+  try {
+    await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration });
+  } catch (error) {
+    const fallbackSettings = {
+      ...settings,
+      normalize: false,
+      reverb: false,
+      echo: false
+    };
+    const fallback = buildFilters(fallbackSettings, detectedSourceDuration);
+    if (
+      fallback.filters.join('|') === filters.join('|')
+      || String(process.env.DISABLE_AUDIO_FALLBACK || '').toLowerCase() === 'true'
+    ) {
+      throw error;
+    }
+    warnings = [
+      ...warnings,
+      'Konversi utama gagal, backend otomatis memakai fallback aman tanpa normalize/reverb/echo.'
+    ];
+    ({ filters, appliedSettings, effects, effectiveDuration } = fallback);
+    await runFfmpegConversion({
+      inputPath,
+      outputPath,
+      filters,
+      trimStart: appliedSettings.trimStart,
+      effectiveDuration
+    });
+  }
 
   const [stat, probe] = await Promise.all([fs.stat(outputPath), probeAudio(outputPath)]);
   if (!stat.size) {
@@ -166,16 +251,29 @@ export async function processAudio({ inputPath, outputPath, settings }) {
     error.status = 422;
     throw error;
   }
+  if (!hasAudioStream(probe)) {
+    throw httpError('Konversi selesai tetapi output tidak memiliki stream audio.', 422);
+  }
+  const outputDuration = Number(probe.format.duration || 0);
+  if (!outputDuration || outputDuration < 0.2) {
+    throw httpError('Konversi selesai tetapi durasi output terlalu pendek.', 422);
+  }
   return {
     sizeBytes: stat.size,
-    duration: Number(probe.format.duration || 0),
+    duration: outputDuration,
     format: 'ogg',
     codec: 'libvorbis',
     bitrate: '128k',
     filters,
     effects,
+    warnings,
     appliedSettings,
-    effectiveDuration
+    effectiveDuration,
+    source: {
+      duration: detectedSourceDuration,
+      codec: sourceProbe.streams.find((stream) => stream.codec_type === 'audio')?.codec_name || '',
+      format: sourceProbe.format?.format_name || ''
+    }
   };
 }
 
@@ -186,6 +284,8 @@ async function convertSegment({ inputPath, outputPath, start, duration }) {
       .duration(duration)
       .audioCodec('libvorbis')
       .audioBitrate('128k')
+      .audioChannels(2)
+      .audioFrequency(44100)
       .format('ogg')
       .outputOptions(['-vn'])
       .on('end', resolve)
@@ -198,6 +298,12 @@ export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 
   const [stat, probe] = await Promise.all([fs.stat(inputPath), probeAudio(inputPath)]);
   const duration = Number(probe.format.duration || 0);
   const durationLimit = clamp(maxDuration, 30, 600);
+  if (!hasAudioStream(probe)) {
+    throw httpError('File hasil konversi tidak memiliki stream audio untuk diupload.', 422);
+  }
+  if (!duration || duration < 0.2) {
+    throw httpError('Durasi file hasil konversi tidak valid untuk upload Roblox.', 422);
+  }
 
   if (stat.size <= maxBytes && duration <= durationLimit) {
     return {

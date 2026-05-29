@@ -516,19 +516,22 @@ export async function downloadYoutubeAudio(input, uploadsDir) {
   const failures = [];
 
   try {
-    return await downloadDirectMedia(url, uploadsDir);
+    const outputPath = await downloadDirectMedia(url, uploadsDir);
+    return { path: outputPath, method: 'direct-url', failures };
   } catch (error) {
     failures.push(`direct-url: ${error.message}`);
   }
 
   try {
-    return await downloadWithYtDlp(url, uploadsDir);
+    const outputPath = await downloadWithYtDlp(url, uploadsDir);
+    return { path: outputPath, method: 'yt-dlp', failures };
   } catch (error) {
     failures.push(`yt-dlp: ${error.message}`);
   }
 
   try {
-    return await downloadWithYtdl(url, uploadsDir);
+    const outputPath = await downloadWithYtdl(url, uploadsDir);
+    return { path: outputPath, method: 'ytdl-core', failures };
   } catch (error) {
     failures.push(`ytdl-core: ${error.message}`);
   }

@@ -28,5 +28,8 @@ VITE_API_BASE=https://audio-studio-api.onrender.com
 - Audio preview inline hanya untuk file hasil proses sampai `8MB`
 - File lebih besar memakai URL `/api/files/...` agar response tidak berat
 - File sementara auto-cleanup setelah beberapa jam
+- Proses FFmpeg dibatasi queue supaya server tidak overload saat banyak user
+- Upload Roblox otomatis dipotong per part mengikuti limit Open Cloud audio: maksimal 7 menit dan di bawah 20MB per asset
+- Endpoint mengembalikan `requestId`, `conversionTrace`, `warnings`, dan `uploadSummary` agar status berhasil/gagal/pending bisa dilacak jelas
 
 Render Free tetap punya batasan: service bisa sleep saat idle, filesystem tidak permanen, dan resource bukan untuk traffic besar terus-menerus. Tetapi untuk backend FFmpeg gratis, ini lebih kuat daripada Vercel serverless.

@@ -12,6 +12,7 @@ import { downloadYoutubeAudio, getYoutubeInfo } from '../services/youtube.servic
 import { rateLimit } from '../middleware/rateLimit.js';
 import { assertConversionAllowed, recordConversion, verifyToken } from '../services/account.service.js';
 import { probeAudio } from '../services/ffmpeg.service.js';
+import { createTaskQueue } from '../services/taskQueue.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,18 @@ const uploadsDir = resolveUploadsDir();
 const router = express.Router();
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);
 const inlineAudioLimitBytes = Number(process.env.INLINE_AUDIO_LIMIT_MB || 8) * 1024 * 1024;
+const robloxAudioMaxDuration = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
+const robloxAudioMaxBytes = Number(process.env.ROBLOX_AUDIO_MAX_BYTES || (19 * 1024 * 1024));
+const conversionQueue = createTaskQueue({
+  name: 'conversion',
+  concurrency: Math.max(1, Number(process.env.CONVERSION_CONCURRENCY || 2)),
+  maxQueue: Math.max(1, Number(process.env.CONVERSION_QUEUE_LIMIT || 20))
+});
+const robloxQueue = createTaskQueue({
+  name: 'roblox-upload',
+  concurrency: Math.max(1, Number(process.env.ROBLOX_UPLOAD_CONCURRENCY || 1)),
+  maxQueue: Math.max(1, Number(process.env.ROBLOX_UPLOAD_QUEUE_LIMIT || 15))
+});
 const processLimit = rateLimit({
   windowMs: 1000 * 60 * 30,
   max: Number(process.env.PROCESS_RATE_LIMIT || 12),
@@ -60,6 +73,12 @@ const upload = multer({
   }
 });
 
+function cleanNumber(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(Math.max(numeric, min), max);
+}
+
 function parseSettings(raw = '{}') {
   let parsed;
   try {
@@ -69,19 +88,22 @@ function parseSettings(raw = '{}') {
     error.status = 400;
     throw error;
   }
+  parsed = parsed && typeof parsed === 'object' ? parsed : {};
+  const maxDurationLimit = cleanNumber(parsed.maxDurationLimit ?? 14400, 14400, 30, 14400);
   return {
-    speed: Number(parsed.speed ?? 2.3),
-    amplify: Number(parsed.amplify ?? -4),
-    maxDuration: Number(parsed.maxDuration ?? 400),
-    pitch: Number(parsed.pitch ?? 0),
+    speed: cleanNumber(parsed.speed ?? 2.3, 2.3, 0.5, 3),
+    amplify: cleanNumber(parsed.amplify ?? -4, -4, -20, 20),
+    maxDuration: cleanNumber(parsed.maxDuration ?? 400, 400, 30, maxDurationLimit),
+    maxDurationLimit,
+    pitch: cleanNumber(parsed.pitch ?? 0, 0, -12, 12),
     bassBoost: Boolean(parsed.bassBoost),
     reverb: Boolean(parsed.reverb),
     normalize: Boolean(parsed.normalize),
     echo: Boolean(parsed.echo),
-    fadeIn: Number(parsed.fadeIn ?? 0),
-    fadeOut: Number(parsed.fadeOut ?? 0),
-    trimStart: Number(parsed.trimStart ?? 0),
-    trimEnd: Number(parsed.trimEnd ?? 0),
+    fadeIn: cleanNumber(parsed.fadeIn ?? 0, 0, 0, 30),
+    fadeOut: cleanNumber(parsed.fadeOut ?? 0, 0, 0, 30),
+    trimStart: cleanNumber(parsed.trimStart ?? 0, 0, 0, 14400),
+    trimEnd: cleanNumber(parsed.trimEnd ?? 0, 0, 0, 14400),
     eqPreset: typeof parsed.eqPreset === 'string' ? parsed.eqPreset : ''
   };
 }
@@ -150,98 +172,132 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
   let sourcePath = req.file?.path;
   let downloadedPath = '';
   try {
-    const auth = readAuth(req);
-    if (!auth) return res.status(401).json({ error: 'Login dibutuhkan untuk konversi audio.' });
-    const settings = parseSettings(req.body.settings);
-    const youtubeUrl = req.body.youtubeUrl?.trim();
-    let meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
-      title: req.file?.originalname || 'Audio Studio',
-      thumbnail: ''
-    };
-
-    if (!sourcePath && youtubeUrl) {
-      sourcePath = await downloadYoutubeAudio(youtubeUrl, uploadsDir);
-      downloadedPath = sourcePath;
-    }
-
-    if (!sourcePath) return res.status(400).json({ error: 'Upload file audio atau masukkan URL YouTube.' });
-
-    let sourceDuration = 0;
-    try {
-      if (youtubeUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
-      if (!sourceDuration) {
-        const probe = await probeAudio(sourcePath);
-        sourceDuration = Number(probe.format.duration || 0);
+    const responseBody = await conversionQueue.push(async () => {
+      const auth = readAuth(req);
+      if (!auth) {
+        const error = new Error('Login dibutuhkan untuk konversi audio.');
+        error.status = 401;
+        throw error;
       }
-    } catch {
-      sourceDuration = 0;
-    }
-    if (sourceDuration && youtubeUrl && !meta.duration) {
-      meta = { ...meta, duration: sourceDuration, durationSource: 'ffprobe' };
-    }
-    const account = await assertConversionAllowed(auth.sub, sourceDuration);
-    if (account.plan.plan === 'paid') {
-      settings.maxDuration = Math.max(30, Math.ceil(sourceDuration || settings.maxDuration || 400));
-      settings.maxDurationLimit = 14400;
-    } else {
-      settings.maxDuration = Math.min(settings.maxDuration, 600);
-      settings.maxDurationLimit = 600;
-    }
+      const settings = parseSettings(req.body.settings);
+      const youtubeUrl = req.body.youtubeUrl?.trim();
+      const warnings = [];
+      const downloadTrace = [];
+      let meta = youtubeUrl ? await getYoutubeInfo(youtubeUrl) : {
+        title: req.file?.originalname || 'Audio Studio',
+        thumbnail: '',
+        durationSource: req.file ? 'upload' : 'unknown'
+      };
 
-    const outputName = `processed-${nanoid(10)}.ogg`;
-    const outputPath = path.join(uploadsDir, outputName);
-    const result = await processAudio({ inputPath: sourcePath, outputPath, settings });
-    const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
-    const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
-
-    const user = await recordConversion(auth.sub, {
-      source: youtubeUrl ? 'youtube' : 'upload',
-      duration: result.duration,
-      title: meta.title
-    });
-    res.json({
-      fileName: outputName,
-      audioUrl: `/api/files/${outputName}`,
-      audioDataUrl: audioBuffer ? `data:audio/ogg;base64,${audioBuffer.toString('base64')}` : '',
-      duration: result.duration,
-      sizeBytes: result.sizeBytes,
-      title: meta.title,
-      thumbnail: meta.thumbnail,
-      sourceDuration,
-      sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
-      outputDurationText: formatSeconds(result.duration),
-      durationSource: meta.durationSource || (sourceDuration ? 'ffprobe' : 'unknown'),
-      appliedSettings: result.appliedSettings,
-      appliedEffects: result.effects,
-      filterCount: result.filters.length,
-      output: {
-        format: result.format,
-        codec: result.codec,
-        bitrate: result.bitrate,
-        effectiveDuration: result.effectiveDuration
-      },
-      conversionTrace: [
-        {
-          step: youtubeUrl ? 'YouTube' : 'Upload',
-          status: 'Accepted',
-          message: sourceDuration
-            ? `Sumber terbaca ${formatSeconds(sourceDuration)}.`
-            : 'Sumber terbaca, tetapi durasi asli tidak tersedia.'
-        },
-        {
-          step: 'FFmpeg',
-          status: 'Accepted',
-          message: `${result.effects.length} efek/filter diterapkan ke output OGG.`
-        },
-        {
-          step: 'Output',
-          status: 'Accepted',
-          message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
+      if (!sourcePath && youtubeUrl) {
+        const download = await downloadYoutubeAudio(youtubeUrl, uploadsDir);
+        sourcePath = typeof download === 'string' ? download : download.path;
+        downloadedPath = sourcePath;
+        if (download?.method) {
+          downloadTrace.push({
+            step: 'Download',
+            status: 'Accepted',
+            message: `YouTube berhasil diambil lewat ${download.method}.`
+          });
         }
-      ],
-      source: youtubeUrl ? 'youtube' : 'upload',
-      account: user ? { usage: user.usage, subscription: user.subscription } : null
+        if (download?.failures?.length) {
+          warnings.push(`Fallback download dipakai: ${download.failures.map((item) => item.split(':')[0]).join(', ')} gagal dulu.`);
+        }
+      }
+
+      if (!sourcePath) {
+        const error = new Error('Upload file audio atau masukkan URL YouTube.');
+        error.status = 400;
+        throw error;
+      }
+
+      let sourceDuration = 0;
+      let sourceProbe = null;
+      try {
+        if (youtubeUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
+        sourceProbe = await probeAudio(sourcePath);
+        const probedDuration = Number(sourceProbe.format.duration || 0);
+        if (probedDuration) sourceDuration = probedDuration;
+      } catch (error) {
+        warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
+        sourceDuration = 0;
+      }
+      if (sourceDuration && youtubeUrl && (!meta.duration || meta.durationSource !== 'ffprobe')) {
+        meta = { ...meta, duration: sourceDuration, durationSource: 'ffprobe' };
+      }
+      const account = await assertConversionAllowed(auth.sub, sourceDuration);
+      if (account.plan.plan === 'paid') {
+        settings.maxDuration = Math.max(30, Math.ceil(Math.min(sourceDuration || settings.maxDuration || 400, settings.maxDurationLimit || 14400)));
+        settings.maxDurationLimit = 14400;
+      } else {
+        settings.maxDuration = Math.min(settings.maxDuration, 600);
+        settings.maxDurationLimit = 600;
+      }
+
+      const outputName = `processed-${nanoid(10)}.ogg`;
+      const outputPath = path.join(uploadsDir, outputName);
+      const result = await processAudio({ inputPath: sourcePath, outputPath, settings, sourceDuration });
+      warnings.push(...(result.warnings || []));
+      const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
+      const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
+
+      const user = await recordConversion(auth.sub, {
+        source: youtubeUrl ? 'youtube' : 'upload',
+        duration: result.duration,
+        title: meta.title
+      });
+      return {
+        fileName: outputName,
+        audioUrl: `/api/files/${outputName}`,
+        audioDataUrl: audioBuffer ? `data:audio/ogg;base64,${audioBuffer.toString('base64')}` : '',
+        duration: result.duration,
+        sizeBytes: result.sizeBytes,
+        title: meta.title,
+        thumbnail: meta.thumbnail,
+        sourceDuration,
+        sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+        outputDurationText: formatSeconds(result.duration),
+        durationSource: meta.durationSource || (sourceDuration ? 'ffprobe' : 'unknown'),
+        sourceProbe: {
+          format: result.source?.format || sourceProbe?.format?.format_name || '',
+          codec: result.source?.codec || ''
+        },
+        appliedSettings: result.appliedSettings,
+        appliedEffects: result.effects,
+        warnings,
+        filterCount: result.filters.length,
+        output: {
+          format: result.format,
+          codec: result.codec,
+          bitrate: result.bitrate,
+          effectiveDuration: result.effectiveDuration
+        },
+        conversionTrace: [
+          {
+            step: youtubeUrl ? 'YouTube' : 'Upload',
+            status: 'Accepted',
+            message: sourceDuration
+              ? `Sumber terbaca ${formatSeconds(sourceDuration)}.`
+              : 'Sumber terbaca, tetapi durasi asli tidak tersedia.'
+          },
+          ...downloadTrace,
+          {
+            step: 'FFmpeg',
+            status: 'Accepted',
+            message: `${result.effects.length} efek/filter diterapkan ke output OGG.`
+          },
+          {
+            step: 'Output',
+            status: 'Accepted',
+            message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
+          }
+        ],
+        source: youtubeUrl ? 'youtube' : 'upload',
+        queue: conversionQueue.stats(),
+        account: user ? { usage: user.usage, subscription: user.subscription } : null
+      };
     });
+    res.json(responseBody);
   } catch (error) {
     next(error);
   } finally {
@@ -250,7 +306,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
   }
 });
 
-router.post('/asset-status', async (req, res, next) => {
+router.post('/asset-status', infoLimit, async (req, res, next) => {
   try {
     const { operationId, apiKey } = req.body || {};
     if (!operationId) return res.status(400).json({ error: 'operationId wajib.' });
@@ -262,7 +318,7 @@ router.post('/asset-status', async (req, res, next) => {
   }
 });
 
-router.post('/roblox-test', async (req, res, next) => {
+router.post('/roblox-test', infoLimit, async (req, res, next) => {
   try {
     const { apiKey, creator } = req.body || {};
     if (!apiKey) return res.status(400).json({ error: 'API key wajib.' });
@@ -329,43 +385,59 @@ router.post('/roblox-test', async (req, res, next) => {
 router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, res, next) => {
   let splitParts = [];
   try {
-    if (!req.file?.path) return res.status(400).json({ error: 'File audio hasil proses wajib dikirim.' });
-    const payload = parsePayload(req.body.payload, 'Payload upload Roblox');
-    if (!payload.apiKey) return res.status(400).json({ error: 'API key Roblox wajib diisi.' });
-    const target = resolveRobloxCreator(payload.creator, true);
-
-    const split = await splitAudioIfNeeded({
-      inputPath: req.file.path,
-      uploadsDir,
-      maxDuration: Number(payload.splitDuration ?? 180),
-      maxBytes: 6 * 1024 * 1024
-    });
-    splitParts = split.wasSplit ? split.parts.map((part) => part.path) : [];
-
-    const parts = await uploadAudioParts({
-      parts: split.parts,
-      apiKey: payload.apiKey,
-      creator: target.creator,
-      displayName: payload.displayName || 'Audio Studio',
-      description: payload.description || 'Diproses menggunakan Audio Studio'
-    });
-
-    const accepted = parts.filter((part) => part.status === 'Accepted').length;
-    const failed = parts.filter((part) => part.status === 'Failed').length;
-    const pending = parts.filter((part) => part.status === 'Pending').length;
-    res.json({
-      parts,
-      wasSplit: split.wasSplit,
-      uploadSummary: {
-        creator: target.creator,
-        mode: target.mode,
-        partCount: parts.length,
-        accepted,
-        failed,
-        pending,
-        split: split.wasSplit
+    const responseBody = await robloxQueue.push(async () => {
+      if (!req.file?.path) {
+        const error = new Error('File audio hasil proses wajib dikirim.');
+        error.status = 400;
+        throw error;
       }
+      const payload = parsePayload(req.body.payload, 'Payload upload Roblox');
+      if (!payload.apiKey) {
+        const error = new Error('API key Roblox wajib diisi.');
+        error.status = 400;
+        throw error;
+      }
+      const target = resolveRobloxCreator(payload.creator, true);
+
+      const split = await splitAudioIfNeeded({
+        inputPath: req.file.path,
+        uploadsDir,
+        maxDuration: Math.min(Number(payload.splitDuration ?? 180), robloxAudioMaxDuration),
+        maxBytes: robloxAudioMaxBytes
+      });
+      splitParts = split.wasSplit ? split.parts.map((part) => part.path) : [];
+
+      const parts = await uploadAudioParts({
+        parts: split.parts,
+        apiKey: payload.apiKey,
+        creator: target.creator,
+        displayName: payload.displayName || 'Audio Studio',
+        description: payload.description || 'Diproses menggunakan Audio Studio'
+      });
+
+      const accepted = parts.filter((part) => part.status === 'Accepted').length;
+      const failed = parts.filter((part) => part.status === 'Failed').length;
+      const pending = parts.filter((part) => part.status === 'Pending').length;
+      return {
+        parts,
+        wasSplit: split.wasSplit,
+        uploadSummary: {
+          creator: target.creator,
+          mode: target.mode,
+          partCount: parts.length,
+          accepted,
+          failed,
+          pending,
+          split: split.wasSplit,
+          limits: {
+            maxDuration: robloxAudioMaxDuration,
+            maxBytes: robloxAudioMaxBytes
+          },
+          queue: robloxQueue.stats()
+        }
+      };
     });
+    res.json(responseBody);
   } catch (error) {
     next(error);
   } finally {
