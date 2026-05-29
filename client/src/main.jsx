@@ -148,6 +148,11 @@ function formatBytes(bytes) {
   return `${(value / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function cleanRobloxId(value) {
+  const text = String(value || '').trim();
+  return /^\d{2,32}$/.test(text) ? text : '';
+}
+
 function extractYoutubeId(url) {
   try {
     const parsed = new URL(url);
@@ -182,6 +187,8 @@ function compactHistory(items) {
     youtubeUrl: entry.youtubeUrl,
     settings: entry.settings,
     speedNormal: entry.speedNormal,
+    uploadSummary: entry.uploadSummary || null,
+    conversion: entry.conversion || null,
     parts: (entry.parts || []).slice(0, 30).map((part) => ({
       part: part.part,
       status: part.status,
@@ -228,10 +235,17 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [pipelineStatus, setPipelineStatus] = useState({
+    state: 'idle',
+    stepIndex: 0,
+    message: 'Siap memproses audio.',
+    error: ''
+  });
   const [lastError, setLastError] = useState(null);
   const abortRef = useRef(null);
   const [audioFilePreview, setAudioFilePreview] = useState(null);
   const [lastUploadResult, setLastUploadResult] = useState(null);
+  const [robloxCheck, setRobloxCheck] = useState(null);
   const [toast, setToast] = useState(null);
   const [adminMode, setAdminMode] = useState(false);
   const [adminSecret, setAdminSecret] = useState(() => sessionStorage.getItem('audio-studio-admin-secret') || '');
@@ -436,6 +450,18 @@ function App() {
     waveRef.current.load(source);
     return () => waveRef.current?.destroy();
   }, [processed]);
+
+  useEffect(() => {
+    if (!processed?.requestSignature || loading) return;
+    if (processed.requestSignature !== currentProcessSignature()) {
+      setPipelineStatus((current) => current.state === 'running' ? current : {
+        state: 'stale',
+        stepIndex: 2,
+        message: 'Sumber atau setting berubah. Konversi ulang dibutuhkan sebelum upload agar efek terbaru dipakai.',
+        error: ''
+      });
+    }
+  }, [processed, youtubeUrl, audioFile, settings, sourceTab, loading]);
 
   // Auto-poll pending asset status setiap 60 detik
   useEffect(() => {
@@ -741,35 +767,100 @@ function App() {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
+  function currentProcessSignature() {
+    return JSON.stringify({
+      sourceTab,
+      youtubeUrl: sourceTab === 'youtube' ? youtubeUrl.trim() : '',
+      audioFile: audioFile ? {
+        name: audioFile.name,
+        size: audioFile.size,
+        lastModified: audioFile.lastModified
+      } : null,
+      settings
+    });
+  }
+
+  function getRobloxUploadContext() {
+    const uploadApiKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
+    if (!uploadApiKey?.trim()) {
+      throw new Error('Isi Roblox Open Cloud API Key dulu.');
+    }
+    if (mode === 'group') {
+      const targetGroupId = cleanRobloxId(activeGroup?.groupId || groupId);
+      if (!targetGroupId) throw new Error('Mode Group butuh Group ID angka yang valid.');
+      return {
+        uploadApiKey,
+        creator: { groupId: targetGroupId },
+        label: `Group ${targetGroupId}`
+      };
+    }
+    const targetUserId = cleanRobloxId(userId);
+    if (!targetUserId) throw new Error('Mode Personal butuh Roblox User ID angka yang valid.');
+    return {
+      uploadApiKey,
+      creator: { userId: targetUserId },
+      label: `User ${targetUserId}`
+    };
+  }
+
   function setStep(index, text) {
     setLoadingStepIndex(index);
     setLoadingStep(text);
+    setPipelineStatus((current) => ({
+      ...current,
+      state: 'running',
+      stepIndex: index,
+      message: text,
+      error: ''
+    }));
+  }
+
+  function finishPipeline(state, stepIndex, message) {
+    setPipelineStatus({
+      state,
+      stepIndex,
+      message,
+      error: ''
+    });
+  }
+
+  function failPipeline(error, fallbackStep = 0) {
+    setPipelineStatus((current) => ({
+      state: 'error',
+      stepIndex: current.stepIndex || fallbackStep,
+      message: error.message,
+      error: error.message
+    }));
   }
 
   async function processOnly() {
+    if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
+    if (!audioFile && !youtubeUrl.trim()) throw new Error('Pilih file audio atau masukkan URL YouTube dulu.');
+    const requestSignature = currentProcessSignature();
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
-    if (youtubeUrl) form.append('youtubeUrl', youtubeUrl);
+    if (youtubeUrl) form.append('youtubeUrl', youtubeUrl.trim());
     form.append('settings', JSON.stringify(settings));
-    setStep(1, youtubeUrl ? 'Mengunduh audio dari YouTube...' : 'Memproses file audio...');
+    setStep(1, youtubeUrl ? 'Server mengambil audio YouTube dan membaca durasi...' : 'Server membaca file audio...');
     const controller = new AbortController();
     abortRef.current = controller;
+    setStep(2, 'FFmpeg menerapkan preset, speed, EQ, pitch, fade, trim, dan efek manual...');
     const response = await fetch(`${API_BASE}/api/process`, {
       method: 'POST',
       headers: authHeaders(),
       body: form,
       signal: controller.signal
     });
-    setStep(2, 'Mengonversi format dan menerapkan efek...');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Konversi audio gagal.');
+    const converted = { ...data, requestSignature };
     if (data.account) {
       setCurrentUser((user) => user ? { ...user, usage: data.account.usage, subscription: data.account.subscription } : user);
     }
-    setProcessed(data);
-    setStep(3, 'Audio siap diunduh atau di-upload ke Roblox.');
+    setProcessed(converted);
+    finishPipeline('converted', 2, `Konversi berhasil: output ${formatDuration(data.duration)} ${data.output?.format?.toUpperCase() || 'OGG'} siap diputar.`);
     notify('Konversi Audio selesai.');
-    return data;
+    return converted;
   }
 
   async function convertAndUpload() {
@@ -779,22 +870,22 @@ function App() {
       setLastUploadResult(null);
       setLoading(true);
       setStep(0, 'Memulai konversi...');
-      const result = processed || await processOnly();
+      const requestSignature = currentProcessSignature();
+      const result = processed?.requestSignature === requestSignature ? processed : await processOnly();
+      const robloxTarget = getRobloxUploadContext();
       setStep(2, 'Mengirim audio ke Roblox...');
       const audioSource = result.audioDataUrl || `${API_BASE}${result.audioUrl}`;
       const blob = await fetch(audioSource).then((response) => response.blob());
       const form = new FormData();
       form.append('audio', blob, result.fileName);
-      const uploadApiKey = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
-      const creator = mode === 'group'
-        ? { groupId: activeGroup?.groupId || groupId }
-        : { userId };
+      const appliedSettings = result.appliedSettings || settings;
       form.append('payload', JSON.stringify({
-        apiKey: uploadApiKey,
-        creator,
-        maxDuration: settings.maxDuration,
+        apiKey: robloxTarget.uploadApiKey,
+        creator: robloxTarget.creator,
+        splitDuration: 180,
+        maxDuration: appliedSettings.maxDuration,
         displayName: result.title,
-        description: `Speed ${settings.speed}x, Amplifikasi ${settings.amplify} dB`
+        description: `Speed ${appliedSettings.speed}x, Amplifikasi ${appliedSettings.amplify} dB`
       }));
 
       setStep(3, 'Menunggu Roblox memproses asset...');
@@ -807,6 +898,13 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Upload Roblox gagal.');
+      const uploadSummary = data.uploadSummary || {
+        partCount: data.parts?.length || 0,
+        accepted: data.parts?.filter((part) => part.status === 'Accepted').length || 0,
+        failed: data.parts?.filter((part) => part.status === 'Failed').length || 0,
+        pending: data.parts?.filter((part) => part.status === 'Pending').length || 0,
+        split: data.wasSplit
+      };
 
       const entry = {
         id: crypto.randomUUID(),
@@ -814,20 +912,35 @@ function App() {
         title: result.title,
         thumbnail: result.thumbnail,
         youtubeUrl,
-        settings,
-        speedNormal: (1 / settings.speed).toFixed(2),
+        settings: appliedSettings,
+        speedNormal: (1 / appliedSettings.speed).toFixed(2),
         parts: data.parts,
+        uploadSummary,
+        conversion: {
+          sourceDuration: result.sourceDuration,
+          duration: result.duration,
+          effects: result.appliedEffects || []
+        },
         expired: false
       };
       setHistory((items) => compactHistory([entry, ...items]));
       setLastUploadResult(entry);
-      setStep(4, 'Asset siap. Lihat di panel kanan.');
-      notify('Terunggah ke Roblox.');
+      if (uploadSummary.failed && !uploadSummary.accepted && !uploadSummary.pending) {
+        finishPipeline('error', 3, 'Upload terkirim, tetapi Roblox menolak semua part. Lihat detail error per part.');
+        notify('Upload Roblox gagal pada semua part.', 'error');
+      } else {
+        const message = uploadSummary.pending
+          ? `Upload terkirim ke ${robloxTarget.label}. ${uploadSummary.pending} part masih pending moderasi Roblox.`
+          : `Asset berhasil diupload ke ${robloxTarget.label}.`;
+        finishPipeline('uploaded', 4, message);
+        notify(uploadSummary.pending ? 'Upload terkirim, menunggu moderasi Roblox.' : 'Terunggah ke Roblox.', uploadSummary.pending ? 'info' : 'success');
+      }
     } catch (error) {
       if (error.name === 'AbortError') {
         notify('Konversi dibatalkan.', 'info');
       } else {
         setLastError(error.message);
+        failPipeline(error, 0);
         notify(error.message, 'error');
       }
     } finally {
@@ -850,6 +963,7 @@ function App() {
         notify('Konversi dibatalkan.', 'info');
       } else {
         setLastError(error.message);
+        failPipeline(error, 0);
         notify(error.message, 'error');
       }
     } finally {
@@ -966,21 +1080,20 @@ function App() {
   }, [history, librarySearch]);
 
   async function testRobloxConnection() {
-    const key = mode === 'group' && activeGroup ? decrypt(activeGroup.encryptedApiKey) : apiKey;
-    if (!key) {
-      notify('Isi API key dulu.', 'error');
-      return;
-    }
     try {
+      const target = getRobloxUploadContext();
+      setRobloxCheck({ ok: null, message: 'Mengecek koneksi Roblox...', trace: [] });
       const response = await fetch(`${API_BASE}/api/roblox-test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: key })
+        body: JSON.stringify({ apiKey: target.uploadApiKey, creator: target.creator })
       });
       const data = await response.json();
-      if (data.ok) notify('API key valid. Roblox API menerima koneksi.');
+      setRobloxCheck(data);
+      if (data.ok) notify(data.message || 'API key valid. Roblox API menerima koneksi.');
       else notify(data.error || 'Test koneksi gagal.', 'error');
     } catch (error) {
+      setRobloxCheck({ ok: false, error: error.message, trace: [{ step: 'Validasi', status: 'Failed', message: error.message }] });
       notify(error.message, 'error');
     }
   }
@@ -1058,6 +1171,25 @@ function App() {
     sessionStorage.removeItem('audio-studio-admin-secret');
     logout();
     notify('Logout untuk refresh role admin. Login ulang.');
+  }
+
+  function pipelineStepStatus(idx) {
+    if (loading) {
+      if (idx < loadingStepIndex) return 'done';
+      if (idx === loadingStepIndex) return 'active';
+      return 'pending';
+    }
+    if (pipelineStatus.state === 'uploaded') return 'done';
+    if (pipelineStatus.state === 'converted' || pipelineStatus.state === 'stale') {
+      if (idx <= 2) return 'done';
+      return 'pending';
+    }
+    if (pipelineStatus.state === 'error') {
+      if (idx < pipelineStatus.stepIndex) return 'done';
+      if (idx === pipelineStatus.stepIndex) return 'error';
+      return 'pending';
+    }
+    return 'pending';
   }
 
   if (adminMode) {
@@ -1502,8 +1634,33 @@ function App() {
                   <audio className="w-full" controls src={processed.audioDataUrl || `${API_BASE}${processed.audioUrl}`} />
                   <div className="result-info">
                     <span><b>{processed.title}</b></span>
+                    {processed.sourceDuration ? <span className="muted">Sumber: {formatDuration(processed.sourceDuration)}</span> : null}
                     <span className="muted">Durasi: {formatDuration(processed.duration)}</span>
                     <span className="muted">Ukuran: {formatBytes(processed.sizeBytes)}</span>
+                  </div>
+                  <div className="conversion-proof">
+                    <div className="proof-grid">
+                      <div><span>Speed</span><b>{processed.appliedSettings?.speed ?? settings.speed}x</b></div>
+                      <div><span>Amplify</span><b>{processed.appliedSettings?.amplify ?? settings.amplify} dB</b></div>
+                      <div><span>Pitch</span><b>{processed.appliedSettings?.pitch ?? settings.pitch} st</b></div>
+                      <div><span>Output</span><b>{processed.output?.format?.toUpperCase() || 'OGG'} / {processed.output?.bitrate || '128k'}</b></div>
+                    </div>
+                    {!!processed.appliedEffects?.length && (
+                      <div className="effect-list">
+                        {processed.appliedEffects.map((effect) => <span key={effect}>{effect}</span>)}
+                      </div>
+                    )}
+                    {!!processed.conversionTrace?.length && (
+                      <div className="trace-mini">
+                        {processed.conversionTrace.map((item) => (
+                          <div key={`${item.step}-${item.message}`}>
+                            <StatusBadge status={item.status} />
+                            <span>{item.step}</span>
+                            <p>{item.message}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
@@ -1536,6 +1693,26 @@ function App() {
                 <span className="label-help">Roblox Open Cloud API Key <HelpCircle title="Buka create.roblox.com, masuk Creator Dashboard, pilih Open Cloud API Keys, buat key dengan permission Assets API untuk audio." size={16} /></span>
                 <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
               </label>
+              <div className="actions tight">
+                <button className="secondary" onClick={testRobloxConnection} type="button">Test Connection</button>
+              </div>
+              {robloxCheck && (
+                <div className={`connection-card ${robloxCheck.ok ? 'ok' : robloxCheck.ok === false ? 'bad' : 'wait'}`}>
+                  <b>{robloxCheck.ok ? 'Koneksi Roblox valid' : robloxCheck.ok === false ? 'Koneksi Roblox gagal' : 'Mengecek koneksi'}</b>
+                  <p>{robloxCheck.message || robloxCheck.error || 'Menunggu response Roblox.'}</p>
+                  {!!robloxCheck.trace?.length && (
+                    <div className="trace-mini">
+                      {robloxCheck.trace.map((item, index) => (
+                        <div key={`roblox-${index}`}>
+                          <StatusBadge status={item.status} />
+                          <span>{item.step}</span>
+                          <p>{item.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           </div>
 
@@ -1579,17 +1756,7 @@ function App() {
               <h3 className="side-title">Progress Pipeline</h3>
               <ol className="pipeline-steps">
                 {PIPELINE_STEPS.map((step, idx) => {
-                  let status = 'pending';
-                  if (loading) {
-                    if (idx < loadingStepIndex) status = 'done';
-                    else if (idx === loadingStepIndex) status = 'active';
-                  } else if (lastUploadResult && !lastError) {
-                    status = 'done';
-                  } else if (lastError && idx < loadingStepIndex) {
-                    status = 'done';
-                  } else if (lastError && idx === loadingStepIndex) {
-                    status = 'error';
-                  }
+                  const status = pipelineStepStatus(idx);
                   return (
                     <li key={step.key} className={`pipeline-step ${status}`}>
                       <span className="bullet">
@@ -1600,15 +1767,10 @@ function App() {
                   );
                 })}
               </ol>
-              {loading && loadingStep && (
-                <p className="step-note">{loadingStep}</p>
-              )}
-              {!loading && lastUploadResult && !lastError && (
-                <p className="step-note success">Asset berhasil diupload ke Roblox.</p>
-              )}
-              {!loading && lastError && (
-                <p className="step-note error">{lastError}</p>
-              )}
+              <p className={`step-note ${pipelineStatus.state === 'error' ? 'error' : pipelineStatus.state === 'uploaded' || pipelineStatus.state === 'converted' ? 'success' : ''}`}>
+                {loading ? (loadingStep || pipelineStatus.message) : pipelineStatus.message}
+              </p>
+              {pipelineStatus.state === 'stale' && <p className="step-note warning">Klik Konversi lagi supaya preset/manual terbaru benar-benar masuk ke file OGG.</p>}
             </section>
 
             {/* Hasil Upload Roblox */}
@@ -1621,6 +1783,18 @@ function App() {
                     <p className="muted small">
                       {new Date(lastUploadResult.createdAt).toLocaleString('id-ID')}
                     </p>
+                    {lastUploadResult.uploadSummary && (
+                      <p className="muted small">
+                        {lastUploadResult.uploadSummary.partCount} part
+                        {lastUploadResult.uploadSummary.split ? ' / auto split' : ''}
+                        {' | '}
+                        Accepted {lastUploadResult.uploadSummary.accepted || 0}
+                        {' | '}
+                        Pending {lastUploadResult.uploadSummary.pending || 0}
+                        {' | '}
+                        Failed {lastUploadResult.uploadSummary.failed || 0}
+                      </p>
+                    )}
                   </div>
                   {lastUploadResult.parts.map((part) => (
                     <div className="result-row" key={`res-${part.part}`}>
@@ -1721,7 +1895,24 @@ function App() {
               <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Disimpan terenkripsi di browser" />
             </label>
             <p className="muted small">API key disimpan di browser dengan enkripsi AES. Tidak dikirim ke server kecuali saat upload Roblox.</p>
-            <button className="secondary" onClick={testRobloxConnection} disabled={!apiKey}>Test Connection</button>
+            <button className="secondary" onClick={testRobloxConnection}>Test Connection</button>
+            {robloxCheck && (
+              <div className={`connection-card ${robloxCheck.ok ? 'ok' : robloxCheck.ok === false ? 'bad' : 'wait'}`}>
+                <b>{robloxCheck.ok ? 'Koneksi Roblox valid' : robloxCheck.ok === false ? 'Koneksi Roblox gagal' : 'Mengecek koneksi'}</b>
+                <p>{robloxCheck.message || robloxCheck.error || 'Menunggu response Roblox.'}</p>
+                {!!robloxCheck.trace?.length && (
+                  <div className="trace-mini">
+                    {robloxCheck.trace.map((item, index) => (
+                      <div key={`keys-roblox-${index}`}>
+                        <StatusBadge status={item.status} />
+                        <span>{item.step}</span>
+                        <p>{item.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 

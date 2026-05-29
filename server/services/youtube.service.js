@@ -259,6 +259,34 @@ async function getYtDlpInfo(url, videoId) {
   };
 }
 
+async function getYtDlpPrintedInfo(url, videoId) {
+  const output = await runYtDlp([
+    ...ytDlpCommonArgs(),
+    '--simulate',
+    '--print', '%(title)s',
+    '--print', '%(duration)s',
+    '--print', '%(thumbnail)s',
+    url
+  ]);
+  const [title, duration, thumbnail] = output.split(/\r?\n/).map((line) => line.trim());
+  let base = {};
+  if (!title || title.includes('\uFFFD') || !thumbnail) {
+    try {
+      base = await getOembedInfo(url, videoId);
+    } catch {
+      base = {};
+    }
+  }
+  return {
+    title: base.title || title || 'YouTube Audio',
+    thumbnail: base.thumbnail || thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: Number(duration || 0),
+    url,
+    videoId,
+    durationSource: 'yt-dlp-print'
+  };
+}
+
 async function getYtdlInfo(url, videoId) {
   const options = getYtdlOptions();
   const info = await ytdl.getBasicInfo(url, options);
@@ -270,6 +298,25 @@ async function getYtdlInfo(url, videoId) {
     url,
     videoId,
     durationSource: 'ytdl-core'
+  };
+}
+
+async function getDirectMediaInfo(url, videoId) {
+  const directUrl = await getDirectMediaUrl(url);
+  const parsed = new URL(directUrl);
+  let base = {};
+  try {
+    base = await getOembedInfo(url, videoId);
+  } catch {
+    base = {};
+  }
+  return {
+    title: base.title || 'YouTube Audio',
+    thumbnail: base.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: Number(parsed.searchParams.get('dur') || 0),
+    url,
+    videoId,
+    durationSource: 'direct-url'
   };
 }
 
@@ -295,7 +342,9 @@ export async function getYoutubeInfo(input) {
   const attempts = [
     () => getYoutubeApiInfo(url, videoId),
     () => getYtDlpInfo(url, videoId),
+    () => getYtDlpPrintedInfo(url, videoId),
     () => getYtdlInfo(url, videoId),
+    () => getDirectMediaInfo(url, videoId),
     () => getOembedInfo(url, videoId)
   ];
   let lastError = null;

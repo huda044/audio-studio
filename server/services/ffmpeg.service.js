@@ -9,7 +9,14 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobe.path);
 
 function clamp(value, min, max) {
-  return Math.min(Math.max(Number(value), min), max);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.min(Math.max(numeric, min), max);
+}
+
+function round(value, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round(Number(value || 0) * factor) / factor;
 }
 
 function atempoChain(speed) {
@@ -33,11 +40,36 @@ function buildFilters(settings) {
   const maxDurationLimit = clamp(settings.maxDurationLimit ?? 600, 30, 14400);
   const maxDuration = clamp(settings.maxDuration ?? 400, 30, maxDurationLimit);
   const pitch = clamp(settings.pitch ?? 0, -12, 12);
+  const fadeIn = clamp(settings.fadeIn ?? 0, 0, 30);
+  const fadeOut = clamp(settings.fadeOut ?? 0, 0, 30);
+  const trimStart = Math.max(0, Number(settings.trimStart || 0));
+  const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
+  const appliedSettings = {
+    speed: round(speed, 4),
+    amplify,
+    maxDuration,
+    maxDurationLimit,
+    pitch,
+    bassBoost: Boolean(settings.bassBoost),
+    reverb: Boolean(settings.reverb),
+    normalize: Boolean(settings.normalize),
+    echo: Boolean(settings.echo),
+    fadeIn,
+    fadeOut,
+    trimStart,
+    trimEnd,
+    eqPreset: typeof settings.eqPreset === 'string' ? settings.eqPreset : ''
+  };
   const filters = [];
+  const effects = [
+    `Tempo ${appliedSettings.speed}x`,
+    `Volume ${appliedSettings.amplify} dB`
+  ];
 
   if (pitch !== 0) {
     const factor = Math.pow(2, pitch / 12);
     filters.push(`asetrate=44100*${factor.toFixed(6)}`, 'aresample=44100');
+    effects.push(`Pitch ${pitch > 0 ? '+' : ''}${pitch} semitone`);
   }
 
   filters.push(...atempoChain(speed));
@@ -52,20 +84,39 @@ function buildFilters(settings) {
   };
   if (settings.eqPreset && eqPresets[settings.eqPreset]) {
     filters.push(...eqPresets[settings.eqPreset]);
+    effects.push(`EQ ${settings.eqPreset.replace(/_/g, ' ')}`);
   }
 
-  if (settings.bassBoost) filters.push('equalizer=f=90:t=q:w=1:g=8');
-  if (settings.reverb) filters.push('aecho=0.8:0.88:60:0.35');
-  if (settings.echo) filters.push('aecho=0.8:0.9:1000:0.3');
-  if (settings.normalize) filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
-  if (settings.fadeIn > 0) filters.push(`afade=t=in:st=0:d=${clamp(settings.fadeIn, 0, 30)}`);
-  if (settings.fadeOut > 0) {
-    const fadeOut = clamp(settings.fadeOut, 0, 30);
+  if (appliedSettings.bassBoost) {
+    filters.push('equalizer=f=90:t=q:w=1:g=8');
+    effects.push('Bass boost');
+  }
+  if (appliedSettings.reverb) {
+    filters.push('aecho=0.8:0.88:60:0.35');
+    effects.push('Reverb');
+  }
+  if (appliedSettings.echo) {
+    filters.push('aecho=0.8:0.9:1000:0.3');
+    effects.push('Echo');
+  }
+  if (appliedSettings.normalize) {
+    filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+    effects.push('Normalize loudness');
+  }
+  if (fadeIn > 0) {
+    filters.push(`afade=t=in:st=0:d=${fadeIn}`);
+    effects.push(`Fade in ${fadeIn}s`);
+  }
+  if (fadeOut > 0) {
     const start = Math.max(0, maxDuration - fadeOut);
     filters.push(`afade=t=out:st=${start}:d=${fadeOut}`);
+    effects.push(`Fade out ${fadeOut}s`);
   }
+  if (trimStart > 0) effects.push(`Trim start ${trimStart}s`);
+  if (trimEnd > 0) effects.push(`Trim end ${trimEnd}s`);
+  filters.push('aresample=44100');
 
-  return { filters, maxDuration };
+  return { filters, maxDuration, appliedSettings, effects };
 }
 
 export function probeAudio(inputPath) {
@@ -78,11 +129,15 @@ export function probeAudio(inputPath) {
 }
 
 export async function processAudio({ inputPath, outputPath, settings }) {
-  const { filters, maxDuration } = buildFilters(settings);
-  const trimStart = Math.max(0, Number(settings.trimStart || 0));
-  const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
+  const { filters, maxDuration, appliedSettings, effects } = buildFilters(settings);
+  const trimStart = appliedSettings.trimStart;
+  const trimEnd = appliedSettings.trimEnd;
+  const effectiveDuration = trimEnd > 0 && trimEnd > trimStart
+    ? Math.min(trimEnd - trimStart, maxDuration)
+    : maxDuration;
   await new Promise((resolve, reject) => {
     let cmd = ffmpeg(inputPath);
+    let stderr = '';
     if (trimStart > 0) cmd = cmd.seekInput(trimStart);
     cmd
       .audioFilters(filters)
@@ -90,18 +145,38 @@ export async function processAudio({ inputPath, outputPath, settings }) {
       .audioBitrate('128k')
       .format('ogg')
       .outputOptions(['-vn']);
-    // Use trimEnd if specified (seconds from start of original after seek)
-    const effectiveDuration = trimEnd > 0 && trimEnd > trimStart
-      ? Math.min(trimEnd - trimStart, maxDuration)
-      : maxDuration;
     cmd.duration(effectiveDuration)
       .on('end', resolve)
-      .on('error', reject)
+      .on('stderr', (line) => {
+        stderr = `${stderr}${line}\n`.slice(-4000);
+      })
+      .on('error', (error) => {
+        const detail = stderr.trim() || error.message;
+        const next = new Error(`Konversi FFmpeg gagal: ${detail.split(/\r?\n/).slice(-2).join(' ').slice(0, 320)}`);
+        next.status = 422;
+        next.cause = error;
+        reject(next);
+      })
       .save(outputPath);
   });
 
   const [stat, probe] = await Promise.all([fs.stat(outputPath), probeAudio(outputPath)]);
-  return { sizeBytes: stat.size, duration: Number(probe.format.duration || 0) };
+  if (!stat.size) {
+    const error = new Error('Konversi selesai tetapi file output kosong.');
+    error.status = 422;
+    throw error;
+  }
+  return {
+    sizeBytes: stat.size,
+    duration: Number(probe.format.duration || 0),
+    format: 'ogg',
+    codec: 'libvorbis',
+    bitrate: '128k',
+    filters,
+    effects,
+    appliedSettings,
+    effectiveDuration
+  };
 }
 
 async function convertSegment({ inputPath, outputPath, start, duration }) {

@@ -100,6 +100,42 @@ function readAuth(req) {
   }
 }
 
+function formatSeconds(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${minutes}:${String(sec).padStart(2, '0')}`;
+}
+
+function parsePayload(raw, label = 'payload') {
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+  } catch {
+    const error = new Error(`${label} tidak valid.`);
+    error.status = 400;
+    throw error;
+  }
+}
+
+function cleanNumericId(value) {
+  const text = String(value || '').trim();
+  return /^\d{2,32}$/.test(text) ? text : '';
+}
+
+function resolveRobloxCreator(creator = {}, required = true) {
+  const groupId = cleanNumericId(creator.groupId);
+  const userId = cleanNumericId(creator.userId);
+  if (groupId) return { creator: { groupId }, mode: 'group', warnings: [] };
+  if (userId) return { creator: { userId }, mode: 'personal', warnings: [] };
+  const message = 'Isi Roblox User ID untuk Personal atau Group ID untuk Group sebelum upload.';
+  if (required) {
+    const error = new Error(message);
+    error.status = 400;
+    throw error;
+  }
+  return { creator: null, mode: 'unknown', warnings: [message] };
+}
+
 router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {
     if (!req.query.url) return res.status(400).json({ error: 'URL YouTube wajib diisi.' });
@@ -171,6 +207,38 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       sizeBytes: result.sizeBytes,
       title: meta.title,
       thumbnail: meta.thumbnail,
+      sourceDuration,
+      sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+      outputDurationText: formatSeconds(result.duration),
+      durationSource: meta.durationSource || (sourceDuration ? 'ffprobe' : 'unknown'),
+      appliedSettings: result.appliedSettings,
+      appliedEffects: result.effects,
+      filterCount: result.filters.length,
+      output: {
+        format: result.format,
+        codec: result.codec,
+        bitrate: result.bitrate,
+        effectiveDuration: result.effectiveDuration
+      },
+      conversionTrace: [
+        {
+          step: youtubeUrl ? 'YouTube' : 'Upload',
+          status: 'Accepted',
+          message: sourceDuration
+            ? `Sumber terbaca ${formatSeconds(sourceDuration)}.`
+            : 'Sumber terbaca, tetapi durasi asli tidak tersedia.'
+        },
+        {
+          step: 'FFmpeg',
+          status: 'Accepted',
+          message: `${result.effects.length} efek/filter diterapkan ke output OGG.`
+        },
+        {
+          step: 'Output',
+          status: 'Accepted',
+          message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
+        }
+      ],
       source: youtubeUrl ? 'youtube' : 'upload',
       account: user ? { usage: user.usage, subscription: user.subscription } : null
     });
@@ -196,28 +264,62 @@ router.post('/asset-status', async (req, res, next) => {
 
 router.post('/roblox-test', async (req, res, next) => {
   try {
-    const { apiKey } = req.body || {};
+    const { apiKey, creator } = req.body || {};
     if (!apiKey) return res.status(400).json({ error: 'API key wajib.' });
-    // Cek dengan get user-restricted-access (tidak perlu permission khusus, hanya verifikasi key valid)
+    const target = resolveRobloxCreator(creator, false);
+    const trace = [{
+      step: 'Target',
+      status: target.creator ? 'Accepted' : 'Pending',
+      message: target.creator
+        ? `Mode ${target.mode} siap dicek.`
+        : target.warnings[0]
+    }];
     const axios = (await import('axios')).default;
     try {
-      // Roblox tidak punya endpoint "ping" universal. Kita pakai operation lookup dengan ID dummy
-      // dan periksa response code. Key invalid = 401, key valid tapi op not found = 404.
+      trace.push({
+        step: 'Open Cloud',
+        status: 'Pending',
+        message: 'Menghubungi Roblox Assets API dengan API key ini.'
+      });
       const response = await axios.get('https://apis.roblox.com/assets/v1/operations/dummy-op', {
         headers: { 'x-api-key': apiKey },
         timeout: 8000,
         validateStatus: () => true
       });
       if (response.status === 401 || response.status === 403) {
-        return res.json({ ok: false, error: 'API key tidak valid atau tidak punya permission Assets.' });
+        trace.push({
+          step: 'Open Cloud',
+          status: 'Failed',
+          message: 'API key ditolak Roblox. Cek key dan permission Assets API.'
+        });
+        return res.json({ ok: false, status: response.status, error: 'API key tidak valid atau tidak punya permission Assets.', trace });
       }
       if (response.status >= 500) {
-        return res.json({ ok: false, error: 'Roblox API sedang bermasalah, coba lagi nanti.' });
+        trace.push({
+          step: 'Open Cloud',
+          status: 'Failed',
+          message: 'Roblox API sedang bermasalah.'
+        });
+        return res.json({ ok: false, status: response.status, error: 'Roblox API sedang bermasalah, coba lagi nanti.', trace });
       }
-      // 404 (operation tidak ada) = key valid
-      return res.json({ ok: true, status: response.status });
+      trace.push({
+        step: 'Open Cloud',
+        status: 'Accepted',
+        message: response.status === 404
+          ? 'API key diterima. Operation dummy tidak ditemukan, artinya koneksi valid.'
+          : `Roblox merespons HTTP ${response.status}. Key tidak ditolak.`
+      });
+      return res.json({
+        ok: true,
+        status: response.status,
+        message: 'Koneksi Roblox Open Cloud valid. Upload final tetap bergantung pada permission creator dan moderasi Roblox.',
+        creator: target.creator,
+        warnings: target.warnings,
+        trace
+      });
     } catch (error) {
-      return res.json({ ok: false, error: error.message });
+      trace.push({ step: 'Open Cloud', status: 'Failed', message: error.message });
+      return res.json({ ok: false, error: error.message, trace });
     }
   } catch (error) {
     next(error);
@@ -228,8 +330,9 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
   let splitParts = [];
   try {
     if (!req.file?.path) return res.status(400).json({ error: 'File audio hasil proses wajib dikirim.' });
-    const payload = JSON.parse(req.body.payload || '{}');
+    const payload = parsePayload(req.body.payload, 'Payload upload Roblox');
     if (!payload.apiKey) return res.status(400).json({ error: 'API key Roblox wajib diisi.' });
+    const target = resolveRobloxCreator(payload.creator, true);
 
     const split = await splitAudioIfNeeded({
       inputPath: req.file.path,
@@ -242,12 +345,27 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
     const parts = await uploadAudioParts({
       parts: split.parts,
       apiKey: payload.apiKey,
-      creator: payload.creator,
+      creator: target.creator,
       displayName: payload.displayName || 'Audio Studio',
       description: payload.description || 'Diproses menggunakan Audio Studio'
     });
 
-    res.json({ parts, wasSplit: split.wasSplit });
+    const accepted = parts.filter((part) => part.status === 'Accepted').length;
+    const failed = parts.filter((part) => part.status === 'Failed').length;
+    const pending = parts.filter((part) => part.status === 'Pending').length;
+    res.json({
+      parts,
+      wasSplit: split.wasSplit,
+      uploadSummary: {
+        creator: target.creator,
+        mode: target.mode,
+        partCount: parts.length,
+        accepted,
+        failed,
+        pending,
+        split: split.wasSplit
+      }
+    });
   } catch (error) {
     next(error);
   } finally {
