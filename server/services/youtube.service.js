@@ -22,7 +22,7 @@ let cachedYtdlOptions = null;
 let cachedYtDlpPath;
 let cachedCookiesKey = '';
 let cachedCookiesFile = '';
-let cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '' };
+let cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
 let cookieLogged = false;
 
 export function getCookieStatus() {
@@ -249,7 +249,7 @@ function normalizeCookieText(raw) {
   if (!text) return '';
 
   if (looksBinary(text)) {
-    cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'binary-or-corrupt' };
+      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'binary-or-corrupt', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
     return '';
   }
 
@@ -275,7 +275,7 @@ function normalizeCookieText(raw) {
     }
     text = rows.length > 1 ? rows.join('\n') : '';
     if (!text) {
-      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'no-tabs-and-no-pairs' };
+      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'no-tabs-and-no-pairs', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
       return '';
     }
   }
@@ -306,14 +306,31 @@ function normalizeCookieText(raw) {
 
   const validCount = validRows.filter((row) => !row.startsWith('#')).length;
   if (!validCount) {
-    cookieStatus = { state: 'invalid', validCount: 0, totalLines, reason: 'no-valid-rows' };
+    cookieStatus = { state: 'invalid', validCount: 0, totalLines, reason: 'no-valid-rows', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
     return '';
   }
 
   if (!validRows.some((row) => row.startsWith('# Netscape HTTP Cookie File'))) {
     validRows.unshift('# Netscape HTTP Cookie File');
   }
-  cookieStatus = { state: 'ok', validCount, totalLines, reason: '' };
+  const cookieNames = new Set(validRows
+    .filter((row) => !row.startsWith('#'))
+    .map((row) => row.split('\t')[5])
+    .filter(Boolean));
+  const hasVisitorCookie = cookieNames.has('VISITOR_INFO1_LIVE') || cookieNames.has('__Secure-1PSIDTS');
+  const hasLoginCookies = [
+    'LOGIN_INFO',
+    'SAPISID',
+    '__Secure-1PAPISID',
+    '__Secure-3PAPISID',
+    'SID',
+    '__Secure-1PSID',
+    '__Secure-3PSID'
+  ].some((name) => cookieNames.has(name));
+  const requiredMissing = [];
+  if (!hasVisitorCookie) requiredMissing.push('VISITOR_INFO1_LIVE');
+  if (!hasLoginCookies) requiredMissing.push('LOGIN_INFO/SAPISID/__Secure-*SID');
+  cookieStatus = { state: 'ok', validCount, totalLines, reason: '', hasLoginCookies, hasVisitorCookie, requiredMissing };
   return `${validRows.join('\n')}\n`;
 }
 
@@ -325,7 +342,7 @@ function envCookieText() {
     try {
       return normalizeCookieText(Buffer.from(rawBase64, 'base64').toString('utf8'));
     } catch {
-      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'base64-decode-failed' };
+      cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'base64-decode-failed', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
       return '';
     }
   }
@@ -347,7 +364,7 @@ function resolveGeneratedCookiesFile() {
   const text = envCookieText();
   if (!text) {
     if (cookieStatus.state !== 'invalid' && !hasCookieAttempt()) {
-      cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '' };
+      cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
     }
     if (!cookieLogged && cookieStatus.state === 'invalid') {
       cookieLogged = true;
@@ -377,6 +394,9 @@ function hasCookieSupport() {
 function botCheckMessage() {
   if (cookieStatus.state === 'invalid') {
     return `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape dari extension "Get cookies.txt LOCALLY" lengkap dengan newline antar baris, lalu restart Space.`;
+  }
+  if (cookieStatus.state === 'ok' && !cookieStatus.hasLoginCookies) {
+    return 'Cookie YouTube sudah kebaca, tapi tidak terlihat seperti cookies akun login. Export ulang dari browser/incognito yang sudah login YouTube memakai format Netscape cookies.txt lengkap untuk domain youtube.com dan google.com.';
   }
   return 'YouTube menolak request dari hosting ini karena bot-check. Tambahkan cookie YouTube ke secret YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE di backend, lalu restart Space. Atau upload file audio langsung.';
 }
@@ -480,6 +500,9 @@ export async function getYoutubeRuntimeStatus() {
       validCount: status.validCount,
       totalLines: status.totalLines,
       reason: status.reason,
+      hasLoginCookies: status.hasLoginCookies,
+      hasVisitorCookie: status.hasVisitorCookie,
+      requiredMissing: status.requiredMissing,
       envSet: status.envSet,
       hasFile: Boolean(status.file)
     },
@@ -1042,9 +1065,13 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   if (cookieStatus.state === 'invalid') {
     finalMessage = `Cookie YouTube terbaca tapi formatnya rusak (${cookieStatus.reason}). Salin ulang cookies.txt Netscape lengkap dengan newline antar baris, lalu restart Space.`;
   } else if (cookieStatus.state === 'ok') {
-    finalMessage = failures.some((item) => isNetworkTlsErrorText(item))
-      ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Ada error SSL/TLS dari jaringan hosting ke YouTube; backend sudah paksa IPv4 dan retry, jadi langkah berikutnya adalah pakai YOUTUBE_PROXY atau deploy di provider/IP lain.'
-      : 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie bisa sudah rotated/kurang lengkap, atau YouTube meminta PO Token. Coba export cookie ulang dari incognito, atau isi YOUTUBE_PO_TOKEN dan YOUTUBE_VISITOR_DATA.';
+    if (!cookieStatus.hasLoginCookies) {
+      finalMessage = 'Cookie YouTube kebaca, tapi belum berisi cookie login yang dibutuhkan. Export ulang cookies.txt dari browser/incognito yang sudah login YouTube, pastikan domain youtube.com dan google.com ikut, lalu update YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64 dan restart Space.';
+    } else {
+      finalMessage = failures.some((item) => isNetworkTlsErrorText(item))
+        ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Ada error SSL/TLS dari jaringan hosting ke YouTube; backend sudah paksa IPv4 dan retry, jadi langkah berikutnya adalah pakai YOUTUBE_PROXY atau deploy di provider/IP lain.'
+        : 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie bisa sudah rotated/kurang lengkap, atau YouTube meminta PO Token. Coba export cookie ulang dari incognito, atau isi YOUTUBE_PO_TOKEN dan YOUTUBE_VISITOR_DATA.';
+    }
   } else if (failures.some((item) => item.toLowerCase().includes('timeout'))) {
     finalMessage = 'Download YouTube timeout di semua fallback. Backend sudah mencoba mode potongan dan beberapa client extractor; coba kecilkan Max Duration, isi cookie YouTube, atau pakai proxy hosting yang tidak dibatasi YouTube.';
   } else {
