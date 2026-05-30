@@ -151,6 +151,17 @@ function parseSourceMeta(raw) {
   };
 }
 
+function sourceMetaPayload(meta = {}) {
+  return {
+    title: meta.title || 'Audio Studio',
+    thumbnail: meta.thumbnail || '',
+    duration: Number(meta.duration || 0) || 0,
+    durationSource: meta.durationSource || 'unknown',
+    url: meta.url || '',
+    videoId: meta.videoId || ''
+  };
+}
+
 function fallbackYoutubeMeta(sourceUrl) {
   const videoId = normalizeYoutubeUrl(sourceUrl).videoId;
   return {
@@ -161,6 +172,31 @@ function fallbackYoutubeMeta(sourceUrl) {
     videoId,
     durationSource: 'fallback'
   };
+}
+
+function sourceFileNameFromPath(filePath) {
+  return path.basename(filePath || '');
+}
+
+function resolveStagedSourcePath(fileName) {
+  const clean = path.basename(String(fileName || '').trim());
+  if (!/^(youtube|soundcloud|upload)-[\w.-]+$/i.test(clean)) {
+    const error = new Error('File sumber sementara tidak valid. Download ulang sumber audio.');
+    error.status = 400;
+    throw error;
+  }
+  const fullPath = path.resolve(uploadsDir, clean);
+  if (!fullPath.startsWith(path.resolve(uploadsDir) + path.sep)) {
+    const error = new Error('File sumber sementara tidak valid. Download ulang sumber audio.');
+    error.status = 400;
+    throw error;
+  }
+  if (!fsSync.existsSync(fullPath)) {
+    const error = new Error('File sumber sementara sudah expired. Download ulang sumber audio.');
+    error.status = 410;
+    throw error;
+  }
+  return fullPath;
 }
 
 function cleanNumericId(value) {
@@ -248,6 +284,221 @@ router.get('/soundcloud-info', infoLimit, async (req, res, next) => {
     if (!req.query.url) return res.status(400).json({ error: 'URL SoundCloud wajib diisi.' });
     const info = await getSoundCloudInfo(String(req.query.url));
     res.json(info);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/download-source', processLimit, upload.single('audio'), async (req, res, next) => {
+  let sourcePath = req.file?.path || '';
+  try {
+    const responseBody = await conversionQueue.push(async () => {
+      const auth = readAuth(req);
+      if (!auth) {
+        const error = new Error('Login dibutuhkan untuk download sumber audio.');
+        error.status = 401;
+        throw error;
+      }
+      const settings = parseSettings(req.body.settings);
+      const source = detectSourceUrl(req.body || {});
+      const sourceUrl = source.url;
+      const sourceKind = source.kind;
+      const sourceMeta = parseSourceMeta(req.body.sourceMeta);
+      const warnings = [];
+      const downloadTrace = [];
+      let downloadedSectionEnd = 0;
+      let meta = {
+        title: req.file?.originalname || 'Audio Studio',
+        thumbnail: '',
+        duration: 0,
+        durationSource: req.file ? 'upload' : 'unknown'
+      };
+
+      if (sourceUrl) {
+        if (sourceMeta.title || sourceMeta.thumbnail || sourceMeta.duration) {
+          meta = { ...meta, ...sourceMeta, url: sourceUrl };
+        } else if (sourceKind === 'soundcloud') {
+          meta = await getSoundCloudInfo(sourceUrl);
+        } else {
+          meta = fallbackYoutubeMeta(sourceUrl);
+        }
+      }
+
+      if (!sourcePath && sourceUrl) {
+        const sectionEnd = computeYoutubeSectionEnd(settings, Number(meta.duration || 0));
+        const download = sourceKind === 'soundcloud'
+          ? await downloadSoundCloudAudio(sourceUrl, uploadsDir, { sectionEnd })
+          : await downloadYoutubeAudio(sourceUrl, uploadsDir, { sectionEnd });
+        sourcePath = typeof download === 'string' ? download : download.path;
+        downloadedSectionEnd = Number(download?.sectionEnd || 0) || 0;
+        const sourceLabel = sourceKind === 'soundcloud' ? 'SoundCloud' : 'YouTube';
+        if (download?.method) {
+          downloadTrace.push({
+            step: 'Download',
+            status: 'Accepted',
+            message: `${sourceLabel} berhasil didownload lewat ${download.method}${download.sectionEnd ? ` sampai ${formatSeconds(download.sectionEnd)}` : ''}.`
+          });
+        }
+        if (download?.failures?.length) {
+          warnings.push(`Fallback download dipakai: ${download.failures.map((item) => item.split(':')[0]).join(', ')} gagal dulu.`);
+        }
+      }
+
+      if (!sourcePath) {
+        const error = new Error('Upload file audio atau masukkan URL YouTube/SoundCloud.');
+        error.status = 400;
+        throw error;
+      }
+
+      if (req.file?.path && sourcePath === req.file.path) {
+        const ext = path.extname(req.file.originalname || '').toLowerCase() || '.audio';
+        const stagedPath = path.join(uploadsDir, `upload-${nanoid(10)}${ext}`);
+        await fs.rename(sourcePath, stagedPath);
+        sourcePath = stagedPath;
+      }
+
+      let sourceDuration = Number(meta.duration || 0) || 0;
+      let sourceProbe = null;
+      try {
+        sourceProbe = await probeAudio(sourcePath);
+        const probedDuration = Number(sourceProbe.format.duration || 0);
+        if (probedDuration && !sourceDuration) sourceDuration = probedDuration;
+      } catch (error) {
+        warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
+      }
+
+      const stat = await fs.stat(sourcePath).catch(() => null);
+      return {
+        sourceFile: sourceFileNameFromPath(sourcePath),
+        sourceUrl,
+        source: sourceKind || (sourceUrl ? 'url' : 'upload'),
+        title: meta.title,
+        thumbnail: meta.thumbnail,
+        sourceDuration,
+        sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+        downloadedSectionEnd,
+        sizeBytes: stat?.size || 0,
+        meta: sourceMetaPayload({ ...meta, duration: sourceDuration }),
+        sourceProbe: {
+          format: sourceProbe?.format?.format_name || '',
+          codec: sourceProbe?.streams?.find?.((stream) => stream.codec_type === 'audio')?.codec_name || ''
+        },
+        warnings,
+        conversionTrace: [
+          {
+            step: sourceKind === 'soundcloud' ? 'SoundCloud' : (sourceKind === 'youtube' ? 'YouTube' : 'Upload'),
+            status: 'Accepted',
+            message: sourceDuration ? `Sumber siap diedit (${formatSeconds(sourceDuration)}).` : 'Sumber siap diedit.'
+          },
+          ...downloadTrace
+        ],
+        queue: conversionQueue.stats()
+      };
+    });
+    res.json(responseBody);
+  } catch (error) {
+    await removeQuiet(req.file?.path);
+    next(error);
+  }
+});
+
+router.post('/convert-source', processLimit, upload.none(), async (req, res, next) => {
+  try {
+    const responseBody = await conversionQueue.push(async () => {
+      const auth = readAuth(req);
+      if (!auth) {
+        const error = new Error('Login dibutuhkan untuk konversi audio.');
+        error.status = 401;
+        throw error;
+      }
+      const settings = parseSettings(req.body.settings);
+      const requestedMaxDuration = settings.maxDuration;
+      const sourcePath = resolveStagedSourcePath(req.body.sourceFile);
+      const sourceUrl = String(req.body.sourceUrl || '').trim();
+      let meta = parseSourceMeta(req.body.sourceMeta);
+      if (!meta.title) meta = { ...meta, title: path.basename(sourcePath) };
+      const warnings = [];
+      let sourceDuration = Number(meta.duration || 0) || 0;
+      let sourceProbe = null;
+
+      try {
+        sourceProbe = await probeAudio(sourcePath);
+        const probedDuration = Number(sourceProbe.format.duration || 0);
+        if (probedDuration && !sourceDuration) sourceDuration = probedDuration;
+      } catch (error) {
+        warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
+      }
+
+      const account = await assertConversionAllowed(auth.sub, sourceDuration);
+      if (account.plan.plan === 'paid') {
+        settings.maxDurationLimit = 14400;
+        settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || 400, settings.maxDurationLimit)));
+      } else {
+        settings.maxDurationLimit = 600;
+        settings.maxDuration = Math.min(requestedMaxDuration || settings.maxDuration, 600);
+      }
+
+      const outputName = `processed-${nanoid(10)}.ogg`;
+      const outputPath = path.join(uploadsDir, outputName);
+      const result = await processAudio({ inputPath: sourcePath, outputPath, settings, sourceDuration });
+      warnings.push(...(result.warnings || []));
+      const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
+      const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
+      const user = await recordConversion(auth.sub, {
+        source: sourceUrl ? 'url' : 'upload',
+        duration: result.duration,
+        title: meta.title
+      });
+
+      return {
+        fileName: outputName,
+        audioUrl: `/api/files/${outputName}`,
+        audioDataUrl: audioBuffer ? `data:audio/ogg;base64,${audioBuffer.toString('base64')}` : '',
+        duration: result.duration,
+        sizeBytes: result.sizeBytes,
+        title: meta.title,
+        thumbnail: meta.thumbnail,
+        sourceDuration,
+        sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+        outputDurationText: formatSeconds(result.duration),
+        durationSource: meta.durationSource || (sourceDuration ? 'ffprobe' : 'unknown'),
+        sourceProbe: {
+          format: result.source?.format || sourceProbe?.format?.format_name || '',
+          codec: result.source?.codec || ''
+        },
+        appliedSettings: result.appliedSettings,
+        appliedEffects: result.effects,
+        warnings,
+        filterCount: result.filters.length,
+        output: {
+          format: result.format,
+          codec: result.codec,
+          bitrate: result.bitrate,
+          effectiveDuration: result.effectiveDuration
+        },
+        conversionTrace: [
+          {
+            step: 'Edit',
+            status: 'Accepted',
+            message: `${result.effects.length} efek/filter siap diterapkan dari preset/manual.`
+          },
+          {
+            step: 'FFmpeg',
+            status: 'Accepted',
+            message: `${result.effects.length} efek/filter diterapkan ke output OGG.`
+          },
+          {
+            step: 'Output',
+            status: 'Accepted',
+            message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
+          }
+        ],
+        source: sourceUrl ? 'url' : 'upload',
+        queue: conversionQueue.stats(),
+        account: user ? { usage: user.usage, subscription: user.subscription } : null
+      };
+    });
+    res.json(responseBody);
   } catch (error) {
     next(error);
   }

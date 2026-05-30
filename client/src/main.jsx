@@ -226,6 +226,7 @@ function App() {
   const [sourceTab, setSourceTab] = useState('youtube');
   const [settings, setSettings] = useState(defaultSettings);
   const [processed, setProcessed] = useState(null);
+  const [stagedSource, setStagedSource] = useState(null);
   const [mode, setMode] = useState('personal');
   const [userId, setUserId] = useState('');
   const [groupId, setGroupId] = useState('');
@@ -532,6 +533,18 @@ function App() {
     }
   }, [processed, youtubeUrl, audioFile, settings, sourceTab, loading]);
 
+  useEffect(() => {
+    setStagedSource(null);
+    setProcessed(null);
+    setPipelineStatus({
+      state: 'idle',
+      stepIndex: 0,
+      message: 'Tempel link atau pilih file, lalu lanjutkan tahap demi tahap.',
+      error: '',
+      details: []
+    });
+  }, [sourceTab, youtubeUrl, audioFile?.name, audioFile?.size, audioFile?.lastModified]);
+
   // Auto-poll pending asset status setiap 60 detik
   useEffect(() => {
     if (!history.length) return;
@@ -630,6 +643,47 @@ function App() {
     return authToken ? { Authorization: `Bearer ${authToken}` } : {};
   }
 
+  function profileSignatureFromPublic(profile = {}) {
+    const config = profile.robloxConfig || {};
+    return JSON.stringify({
+      robloxConfig: {
+        mode: config.mode || 'personal',
+        userId: config.userId || '',
+        groupId: config.groupId || '',
+        selectedGroupId: config.selectedGroupId || ''
+      },
+      groups: compactGroups(profile.groups || []).map((group) => ({
+        id: group.id,
+        name: group.name,
+        groupId: group.groupId,
+        creatorUserId: group.creatorUserId,
+        hasApiKey: Boolean(group.hasApiKey),
+        apiKeyFormat: group.apiKeyFormat || (group.hasApiKey ? 'aes-256-gcm' : 'empty')
+      })),
+      history: compactHistory(profile.history || [])
+    });
+  }
+
+  function profileSignatureFromPayload(profile = {}, responseProfile = null) {
+    const publicProfile = responseProfile || {
+      robloxConfig: {
+        mode: profile.robloxConfig?.mode || 'personal',
+        userId: profile.robloxConfig?.userId || '',
+        groupId: profile.robloxConfig?.groupId || '',
+        selectedGroupId: profile.robloxConfig?.selectedGroupId || '',
+        hasApiKey: apiKeyStored?.hasApiKey || Boolean(profile.robloxConfig?.apiKey),
+        apiKeyFormat: profile.robloxConfig?.apiKey ? 'aes-256-gcm' : (apiKeyStored?.format || 'empty')
+      },
+      groups: (profile.groups || []).map((group) => ({
+        ...group,
+        hasApiKey: Boolean(group.apiKey || group.hasApiKey),
+        apiKeyFormat: group.apiKey ? 'aes-256-gcm' : (group.apiKeyFormat || (group.hasApiKey ? 'aes-256-gcm' : 'empty'))
+      })),
+      history: profile.history || []
+    };
+    return profileSignatureFromPublic(publicProfile);
+  }
+
   function applyUserProfile(user) {
     setCurrentUser(user);
     const profile = user.profile || {};
@@ -645,7 +699,7 @@ function App() {
     });
     setGroups(compactGroups(profile.groups));
     setHistory(compactHistory(profile.history));
-    lastProfileSyncRef.current = JSON.stringify(profile || {});
+    lastProfileSyncRef.current = profileSignatureFromPublic(profile);
   }
 
   async function handleAuth(event) {
@@ -786,12 +840,29 @@ function App() {
         id: group.id,
         name: group.name,
         groupId: group.groupId,
-        creatorUserId: group.creatorUserId
+        creatorUserId: group.creatorUserId,
+        hasApiKey: Boolean(group.hasApiKey),
+        apiKeyFormat: group.apiKeyFormat || (group.hasApiKey ? 'aes-256-gcm' : 'empty')
       };
       // Hanya kirim plaintext kalau user baru saja edit (key in-memory). Kalau gak, server akan keep value yang sudah tersimpan.
       if (group.apiKey && String(group.apiKey).trim()) out.apiKey = String(group.apiKey).trim();
       return out;
     });
+    if (userId.trim() && !cleanRobloxId(userId)) {
+      notify('Roblox User ID harus angka.', 'error');
+      return;
+    }
+    if (groupId.trim() && !cleanRobloxId(groupId)) {
+      notify('Group ID manual harus angka.', 'error');
+      return;
+    }
+    const invalidGroup = groupsPayload.find((group) =>
+      (group.groupId && !cleanRobloxId(group.groupId))
+      || (group.creatorUserId && !cleanRobloxId(group.creatorUserId)));
+    if (invalidGroup) {
+      notify('Group ID dan Creator User ID harus angka.', 'error');
+      return;
+    }
     const profile = {
       robloxConfig: {
         mode,
@@ -803,13 +874,12 @@ function App() {
       groups: groupsPayload,
       history: compactHistory(history)
     };
-    const signaturePayload = {
-      ...profile,
-      groups: groupsPayload.map((group) => ({ ...group, apiKey: group.apiKey ? '<dirty>' : '' })),
-      robloxConfig: { ...profile.robloxConfig, apiKey: inlinePersonalKey ? '<dirty>' : '' }
-    };
-    const profileJson = JSON.stringify(signaturePayload);
-    if (profileJson === lastProfileSyncRef.current) return;
+    const profileJson = profileSignatureFromPayload(profile);
+    const hasNewSecret = Boolean(inlinePersonalKey || groupsPayload.some((group) => group.apiKey));
+    if (!hasNewSecret && profileJson === lastProfileSyncRef.current) {
+      notify('Data Roblox sudah tersimpan.', 'info');
+      return;
+    }
 
     try {
       setSyncingProfile(true);
@@ -825,11 +895,11 @@ function App() {
       if (groupsPayload.some((g) => g.apiKey)) {
         setGroups((items) => items.map((group) => ({ ...group, apiKey: undefined })));
       }
-      setCurrentUser(data.user);
+      applyUserProfile(data.user);
       const newConfig = data.user?.profile?.robloxConfig || {};
       setApiKeyStored({ hasApiKey: Boolean(newConfig.hasApiKey), format: newConfig.apiKeyFormat || 'empty' });
-      setGroups(compactGroups(data.user?.profile?.groups || []));
-      lastProfileSyncRef.current = profileJson;
+      lastProfileSyncRef.current = profileSignatureFromPublic(data.user?.profile || {});
+      notify('Data Roblox berhasil disimpan ke akun.', 'success');
     } catch (error) {
       notify(error.message, 'error');
     } finally {
@@ -915,8 +985,31 @@ function App() {
         size: audioFile.size,
         lastModified: audioFile.lastModified
       } : null,
+      stagedSource: stagedSource ? {
+        sourceFile: stagedSource.sourceFile,
+        title: stagedSource.title,
+        sourceDuration: stagedSource.sourceDuration
+      } : null,
       settings
     });
+  }
+
+  function currentSourceMeta() {
+    return {
+      title: youtubeInfo?.title || stagedSource?.title || '',
+      thumbnail: youtubeInfo?.thumbnail || stagedSource?.thumbnail || '',
+      duration: youtubeInfo?.duration || stagedSource?.sourceDuration || 0,
+      durationSource: youtubeInfo?.durationSource || stagedSource?.durationSource || 'client-preview'
+    };
+  }
+
+  function neededInputSecondsForSettings() {
+    const speed = Math.min(Math.max(Number(settings.speed || 1), 0.5), 3);
+    const maxDuration = Math.min(Math.max(Number(settings.maxDuration || 400), 30), Number(settings.maxDurationLimit || 14400));
+    const trimStart = Math.max(0, Number(settings.trimStart || 0));
+    const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
+    const neededInput = Math.ceil(maxDuration * speed + 12);
+    return trimEnd > trimStart ? trimEnd : trimStart + neededInput;
   }
 
   function getRobloxUploadContext() {
@@ -982,30 +1075,58 @@ function App() {
     }));
   }
 
-  async function processOnly() {
+  async function downloadSourceOnly() {
     if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
     if (!audioFile && !youtubeUrl.trim()) throw new Error('Pilih file audio atau masukkan URL YouTube/SoundCloud dulu.');
-    const requestSignature = currentProcessSignature();
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('sourceUrl', youtubeUrl.trim());
     if (youtubeInfo) {
-      form.append('sourceMeta', JSON.stringify({
-        title: youtubeInfo.title || '',
-        thumbnail: youtubeInfo.thumbnail || '',
-        duration: youtubeInfo.duration || 0,
-        durationSource: youtubeInfo.durationSource || 'client-preview'
-      }));
+      form.append('sourceMeta', JSON.stringify(currentSourceMeta()));
     }
     form.append('settings', JSON.stringify(settings));
     const sourceLabel = youtubeInfo?.kind === 'soundcloud' ? 'SoundCloud' : (youtubeUrl ? 'YouTube' : '');
     setStep(1, sourceLabel
-      ? `Server mengambil audio ${sourceLabel} dan membaca durasi...`
-      : 'Server membaca file audio...');
+      ? `Server mendownload audio ${sourceLabel} sebagai sumber edit...`
+      : 'Server menyiapkan file audio sebagai sumber edit...');
     const controller = new AbortController();
     abortRef.current = controller;
-    setStep(2, 'FFmpeg menerapkan preset, speed, EQ, pitch, fade, trim, dan efek manual...');
-    const response = await fetch(`${API_BASE}/api/process`, {
+    const response = await fetch(`${API_BASE}/api/download-source`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw apiError(data, 'Download sumber audio gagal.');
+    setStagedSource(data);
+    setProcessed(null);
+    finishPipeline('downloaded', 1, `Sumber siap diedit: ${data.title || 'Audio'}${data.sourceDuration ? ` (${formatDuration(data.sourceDuration)})` : ''}.`);
+    notify('Sumber audio siap diedit.');
+    return data;
+  }
+
+  async function processOnly() {
+    if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
+    if (!stagedSource?.sourceFile) throw new Error('Download sumber audio dulu sebelum konversi.');
+    if (stagedSource.downloadedSectionEnd && neededInputSecondsForSettings() > Number(stagedSource.downloadedSectionEnd) + 2) {
+      throw new Error('Setting durasi/trim sekarang butuh sumber lebih panjang. Klik Download Ulang, lalu konversi lagi.');
+    }
+    const requestSignature = currentProcessSignature();
+    const form = new FormData();
+    form.append('sourceFile', stagedSource.sourceFile);
+    form.append('sourceUrl', stagedSource.sourceUrl || youtubeUrl.trim());
+    form.append('sourceMeta', JSON.stringify({
+      title: stagedSource.title || currentSourceMeta().title,
+      thumbnail: stagedSource.thumbnail || currentSourceMeta().thumbnail,
+      duration: stagedSource.sourceDuration || currentSourceMeta().duration,
+      durationSource: stagedSource.durationSource || currentSourceMeta().durationSource
+    }));
+    form.append('settings', JSON.stringify(settings));
+    setStep(2, 'FFmpeg menerapkan preset/manual dan membuat output OGG...');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const response = await fetch(`${API_BASE}/api/convert-source`, {
       method: 'POST',
       headers: authHeaders(),
       body: form,
@@ -1029,9 +1150,9 @@ function App() {
       setLastError(null);
       setLastUploadResult(null);
       setLoading(true);
-      setStep(0, 'Memulai konversi...');
-      const requestSignature = currentProcessSignature();
-      const result = processed?.requestSignature === requestSignature ? processed : await processOnly();
+      if (!processed) throw new Error('Konversi OGG dulu sebelum upload Roblox.');
+      if (pipelineStatus.state === 'stale') throw new Error('Preset/manual sudah berubah. Konversi ulang OGG dulu sebelum upload.');
+      const result = processed;
       const robloxTarget = getRobloxUploadContext();
       setStep(3, 'Mengirim audio ke Roblox...');
       const audioSource = result.audioDataUrl || `${API_BASE}${result.audioUrl}`;
@@ -1118,7 +1239,7 @@ function App() {
     try {
       setLastError(null);
       setLoading(true);
-      setStep(0, 'Memulai konversi...');
+      setStep(2, 'Memulai konversi OGG...');
       await processOnly();
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -1126,6 +1247,29 @@ function App() {
       } else {
         setLastError(error.message);
         failPipeline(error, 0);
+        notify(error.message, 'error');
+      }
+    } finally {
+      abortRef.current = null;
+      setLoading(false);
+      setLoadingStep('');
+      setLoadingStepIndex(0);
+    }
+  }
+
+  async function handleDownloadSourceClick() {
+    if (loading) return;
+    try {
+      setLastError(null);
+      setLoading(true);
+      setStep(0, 'Menyiapkan sumber audio...');
+      await downloadSourceOnly();
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        notify('Download dibatalkan.', 'info');
+      } else {
+        setLastError(error.message);
+        failPipeline(error, 1);
         notify(error.message, 'error');
       }
     } finally {
@@ -1157,7 +1301,7 @@ function App() {
     setGroups((items) => [group, ...items.filter((item) => item.groupId !== group.groupId)]);
     setSelectedGroupId(group.groupId);
     setGroupForm({ groupId: '', creatorUserId: '', apiKey: '' });
-    notify('Grup tersimpan. Klik Sinkron supaya tersimpan terenkripsi di server.');
+    notify('Grup ditambahkan. Klik Simpan Semua Grup supaya tersimpan terenkripsi di server.');
   }
 
   function copyCenz(entry) {
@@ -1556,6 +1700,10 @@ function App() {
     if (pipelineStatus.state === 'uploaded') return 'done';
     if (pipelineStatus.state === 'converted' || pipelineStatus.state === 'stale') {
       if (idx <= 2) return 'done';
+      return 'pending';
+    }
+    if (pipelineStatus.state === 'downloaded') {
+      if (idx <= 1) return 'done';
       return 'pending';
     }
     if (pipelineStatus.state === 'error') {
@@ -2104,6 +2252,24 @@ function App() {
                     </div>
                   )}
                   {youtubePreviewError && <p className="muted mt-3">{youtubePreviewError}</p>}
+                  {stagedSource && (
+                    <div className="connection-card ok">
+                      <b>Sumber sudah didownload</b>
+                      <p>{stagedSource.title || 'Audio'}{stagedSource.sourceDuration ? ` | ${formatDuration(stagedSource.sourceDuration)}` : ''}{stagedSource.sizeBytes ? ` | ${formatBytes(stagedSource.sizeBytes)}` : ''}</p>
+                      {stagedSource.downloadedSectionEnd ? <p className="muted small">Potongan sumber tersedia sampai {formatDuration(stagedSource.downloadedSectionEnd)}. Jika durasi/trim dibuat lebih panjang, klik Download Ulang.</p> : null}
+                      {!!stagedSource.conversionTrace?.length && (
+                        <div className="trace-mini">
+                          {stagedSource.conversionTrace.map((item, index) => (
+                            <div key={`source-${index}`}>
+                              <StatusBadge status={item.status} />
+                              <span>{item.step}</span>
+                              <p>{item.message}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
@@ -2126,6 +2292,13 @@ function App() {
                         <button className="icon-wide" onClick={() => setAudioFile(null)}>Hapus</button>
                       </div>
                       <audio controls src={audioFilePreview.url} className="w-full" />
+                    </div>
+                  )}
+                  {stagedSource && (
+                    <div className="connection-card ok">
+                      <b>File siap diedit</b>
+                      <p>{stagedSource.title || audioFilePreview?.name || 'Audio'}{stagedSource.sourceDuration ? ` | ${formatDuration(stagedSource.sourceDuration)}` : ''}</p>
+                      {stagedSource.downloadedSectionEnd ? <p className="muted small">Potongan sumber tersedia sampai {formatDuration(stagedSource.downloadedSectionEnd)}.</p> : null}
                     </div>
                   )}
                 </>
@@ -2303,6 +2476,9 @@ function App() {
                 ) : null}
               </label>
               <div className="actions tight">
+                <button className="primary" onClick={saveProfile} disabled={syncingProfile} type="button">
+                  {syncingProfile ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />} Simpan Data Roblox
+                </button>
                 <button className="secondary" onClick={testRobloxConnection} type="button">Test Connection</button>
               </div>
               {robloxCheck && (
@@ -2333,17 +2509,25 @@ function App() {
               <div className="side-actions">
                 <button
                   className="secondary"
-                  onClick={handleProcessClick}
-                  disabled={loading || (!audioFile && !youtubeUrl)}
+                  onClick={handleDownloadSourceClick}
+                  disabled={loading || (!audioFile && !youtubeUrl) || Boolean(stagedSource)}
                 >
-                  {loading ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />} Konversi
+                  {loading && loadingStepIndex <= 1 ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />} Next: Download
+                </button>
+                <button
+                  className="secondary"
+                  onClick={handleProcessClick}
+                  disabled={loading || !stagedSource || (Boolean(processed) && pipelineStatus.state !== 'stale')}
+                >
+                  {loading && loadingStepIndex === 2 ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />}
+                  {pipelineStatus.state === 'stale' ? 'Konversi Ulang OGG' : 'Next: Konversi OGG'}
                 </button>
                 <button
                   className="primary"
                   onClick={convertAndUpload}
-                  disabled={loading || (!audioFile && !youtubeUrl && !processed)}
+                  disabled={loading || !processed || pipelineStatus.state === 'stale'}
                 >
-                  {loading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Convert & Upload
+                  {loading && loadingStepIndex >= 3 ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Next: Upload Roblox
                 </button>
                 {processed && (
                   <a
@@ -2353,6 +2537,9 @@ function App() {
                   >
                     Download OGG
                   </a>
+                )}
+                {stagedSource && !processed && (
+                  <button className="icon-wide" onClick={() => setStagedSource(null)}>Download Ulang</button>
                 )}
                 {processed && (
                   <button className="icon-wide" onClick={() => setProcessed(null)}>Reset Hasil</button>
@@ -2519,7 +2706,12 @@ function App() {
               />
             </label>
             <p className="muted small">API key disimpan terenkripsi AES-256-GCM di server. Plaintext tidak pernah dikirim balik ke browser sehingga aman walau bundle JS terbongkar.</p>
-            <button className="secondary" onClick={testRobloxConnection}>Test Connection</button>
+            <div className="actions tight">
+              <button className="primary" onClick={saveProfile} disabled={syncingProfile}>
+                {syncingProfile ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />} Simpan Data Roblox
+              </button>
+              <button className="secondary" onClick={testRobloxConnection}>Test Connection</button>
+            </div>
             {robloxCheck && (
               <div className={`connection-card ${robloxCheck.ok ? 'ok' : robloxCheck.ok === false ? 'bad' : 'wait'}`}>
                 <b>{robloxCheck.ok ? 'Koneksi Roblox valid' : robloxCheck.ok === false ? 'Koneksi Roblox gagal' : 'Mengecek koneksi'}</b>
@@ -2548,7 +2740,12 @@ function App() {
               <label className="field"><span>Creator Roblox User ID</span><input value={groupForm.creatorUserId} onChange={(e) => setGroupForm({ ...groupForm, creatorUserId: e.target.value })} /></label>
               <label className="field"><span>Group API Key</span><input type="password" value={groupForm.apiKey} onChange={(e) => setGroupForm({ ...groupForm, apiKey: e.target.value })} /></label>
             </div>
-            <button className="secondary" onClick={addGroup}>Simpan Grup</button>
+            <div className="actions tight">
+              <button className="secondary" onClick={addGroup}>Tambah Grup</button>
+              <button className="primary" onClick={saveProfile} disabled={syncingProfile}>
+                {syncingProfile ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />} Simpan Semua Grup
+              </button>
+            </div>
             <div className="list">
               {groups.map((group) => (
                 <div className="list-row" key={group.id}>
