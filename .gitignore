@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+.env.oracle
+data/
 uploads/*
 !uploads/.gitkeep
 server/data/
