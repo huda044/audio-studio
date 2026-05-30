@@ -1,22 +1,83 @@
 services:
   - type: web
-    name: audio-studio-api
-    runtime: node
+    name: audio-studio
+    runtime: docker
     plan: free
-    rootDir: server
-    buildCommand: npm install
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
     envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 7860
+      - key: CLIENT_DIST
+        value: /app/client/dist
       - key: CLIENT_ORIGIN
-        value: https://client-daax4042s-projects.vercel.app
+        value: "*"
+      - key: APP_PUBLIC_URL
+        sync: false
       - key: MAX_UPLOAD_MB
         value: 250
       - key: INLINE_AUDIO_LIMIT_MB
         value: 8
+      - key: DATA_DIR
+        value: /data
+      - key: DATABASE_URL
+        sync: false
+      - key: POSTGRES_SSL
+        sync: false
+      - key: DATA_STORE_NAMESPACE
+        value: audio-studio
+      - key: DATA_STORE_TABLE
+        value: audio_studio_kv
+      - key: JWT_SECRET
+        sync: false
+      - key: SECRETS_MASTER_KEY
+        sync: false
+      - key: ADMIN_BOOTSTRAP_USERNAME
+        sync: false
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        sync: false
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: ADMIN_BOOTSTRAP_RESET_PASSWORD
+        value: false
+      - key: EMAIL_DEV_CODES
+        value: true
+      - key: PROCESS_RATE_LIMIT
+        value: 12
+      - key: INFO_RATE_LIMIT
+        value: 45
+      - key: CONVERSION_CONCURRENCY
+        value: 1
+      - key: CONVERSION_QUEUE_LIMIT
+        value: 10
+      - key: JSON_LIMIT
+        value: 512kb
       - key: YTDLP_FORCE_UPDATE
         value: true
       - key: YTDLP_PREFER_LOCAL
-        value: false
+        value: true
+      - key: YTDLP_STARTUP_UPDATE
+        value: true
+      - key: YTDLP_PATH
+        value: /usr/local/bin/yt-dlp-py
+      - key: YTDLP_BGUTIL_PROVIDER
+        value: true
+      - key: YTDLP_BGUTIL_PROVIDER_HOME
+        value: /opt/bgutil-ytdlp-pot-provider/server
+      - key: YTDLP_BGUTIL_PROVIDER_URL
+        value: http://127.0.0.1:4416
+      - key: YTDLP_BGUTIL_DISABLE_INNERTUBE
+        value: 1
+      - key: YTDLP_BGUTIL_WARMUP_TIMEOUT_MS
+        value: 90000
+      - key: YOUTUBE_PO_DOWNLOAD_ORDER
+        value: yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core,direct-section-mweb,direct-url-mweb
+      - key: YOUTUBE_PO_GET_URL_TIMEOUT_MS
+        value: 45000
       - key: YTDLP_ENABLE_SECTIONS
         value: true
       - key: YTDLP_ALT_CLIENT_FALLBACKS
@@ -42,26 +103,38 @@ services:
       - key: YOUTUBE_DOWNLOAD_ORDER
         value: direct-section,direct-url,ytdl-core,yt-dlp
       - key: YTDLP_GET_URL_TIMEOUT_MS
-        value: 45000
+        value: 60000
       - key: YTDLP_SECTION_TIMEOUT_MS
-        value: 45000
+        value: 60000
       - key: YTDLP_DOWNLOAD_TIMEOUT_MS
         value: 90000
       - key: YOUTUBE_DIRECT_SECTION_TIMEOUT_MS
         value: 120000
-      - key: DATA_STORE_NAMESPACE
-        value: audio-studio
-      - key: DATA_STORE_TABLE
-        value: audio_studio_kv
-      - key: DATABASE_URL
+      - key: YOUTUBE_DIRECT_DOWNLOAD_TIMEOUT_MS
+        value: 60000
+      - key: YTDL_CORE_DOWNLOAD_TIMEOUT_MS
+        value: 60000
+      - key: YTDLP_COOKIES_BASE64
         sync: false
-      - key: JWT_SECRET
+      - key: YTDLP_COOKIES_TEXT
         sync: false
-      - key: SECRETS_MASTER_KEY
+      - key: YOUTUBE_PROXY
         sync: false
-      - key: ADMIN_BOOTSTRAP_USERNAME
+      - key: YOUTUBE_PROXY_STRICT
+        value: true
+      - key: YOUTUBE_PROXY_REQUIRED
+        value: false
+      - key: YOUTUBE_PROXY_PROTOCOL
         sync: false
-      - key: ADMIN_BOOTSTRAP_EMAIL
+      - key: YOUTUBE_PROXY_HOST
         sync: false
-      - key: ADMIN_BOOTSTRAP_PASSWORD
+      - key: YOUTUBE_PROXY_PORT
+        sync: false
+      - key: YOUTUBE_PROXY_USERNAME
+        sync: false
+      - key: YOUTUBE_PROXY_PASSWORD
+        sync: false
+      - key: YOUTUBE_PO_TOKEN
+        sync: false
+      - key: YOUTUBE_VISITOR_DATA
         sync: false

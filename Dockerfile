@@ -5,7 +5,7 @@ RUN apt-get update \
   && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
   && chmod a+rx /usr/local/bin/yt-dlp \
   && python3 -m venv /opt/yt-dlp-venv \
-  && /opt/yt-dlp-venv/bin/pip install --no-cache-dir -U "yt-dlp[default]" bgutil-ytdlp-pot-provider \
+  && /opt/yt-dlp-venv/bin/pip install --no-cache-dir -U "yt-dlp[default]" PySocks bgutil-ytdlp-pot-provider \
   && printf '#!/bin/sh\nexec /opt/yt-dlp-venv/bin/python -m yt_dlp "$@"\n' > /usr/local/bin/yt-dlp-py \
   && chmod a+rx /usr/local/bin/yt-dlp-py \
   && git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil-ytdlp-pot-provider \
@@ -79,6 +79,16 @@ ENV YTDLP_GET_URL_TIMEOUT_MS=60000
 ENV YTDLP_SECTION_TIMEOUT_MS=60000
 ENV YTDLP_DOWNLOAD_TIMEOUT_MS=90000
 ENV YOUTUBE_DIRECT_SECTION_TIMEOUT_MS=120000
+ENV YOUTUBE_DIRECT_DOWNLOAD_TIMEOUT_MS=60000
+ENV YTDL_CORE_DOWNLOAD_TIMEOUT_MS=60000
+ENV YOUTUBE_PROXY=
+ENV YOUTUBE_PROXY_STRICT=true
+ENV YOUTUBE_PROXY_REQUIRED=false
+ENV YOUTUBE_PROXY_PROTOCOL=http
+ENV YOUTUBE_PROXY_HOST=
+ENV YOUTUBE_PROXY_PORT=
+ENV YOUTUBE_PROXY_USERNAME=
+ENV YOUTUBE_PROXY_PASSWORD=
 ENV FREE_CONVERT_LIMIT=3
 ENV FREE_DURATION_LIMIT_SECONDS=600
 ENV APP_NAME="Audio Studio"

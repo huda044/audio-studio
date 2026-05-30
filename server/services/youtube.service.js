@@ -98,6 +98,85 @@ function envEnabled(name, defaultValue = false) {
   return !['0', 'false', 'no', 'off'].includes(String(raw).toLowerCase());
 }
 
+function envText(...names) {
+  for (const name of names) {
+    const value = String(process.env[name] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function buildProxyFromParts() {
+  const host = envText('YOUTUBE_PROXY_HOST', 'YTDLP_PROXY_HOST');
+  const port = envText('YOUTUBE_PROXY_PORT', 'YTDLP_PROXY_PORT');
+  if (!host || !port) return '';
+
+  const protocol = envText('YOUTUBE_PROXY_PROTOCOL', 'YTDLP_PROXY_PROTOCOL') || 'http';
+  const normalizedProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`;
+  try {
+    const url = new URL(`${normalizedProtocol}//${host}`);
+    url.port = port;
+    const username = envText('YOUTUBE_PROXY_USERNAME', 'YOUTUBE_PROXY_USER', 'YTDLP_PROXY_USERNAME', 'YTDLP_PROXY_USER');
+    const password = envText('YOUTUBE_PROXY_PASSWORD', 'YOUTUBE_PROXY_PASS', 'YTDLP_PROXY_PASSWORD', 'YTDLP_PROXY_PASS');
+    if (username) url.username = username;
+    if (password) url.password = password;
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function resolveYoutubeProxy() {
+  const raw = envText('YOUTUBE_PROXY', 'YOUTUBE_PROXY_URL', 'YTDLP_PROXY') || buildProxyFromParts();
+  if (!raw) return '';
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!parsed.hostname || !parsed.port) return '';
+    if (!['http:', 'https:', 'socks4:', 'socks4a:', 'socks5:', 'socks5h:'].includes(parsed.protocol.toLowerCase())) {
+      return '';
+    }
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function maskProxyUrl(proxyUrl) {
+  if (!proxyUrl) return '';
+  try {
+    const parsed = new URL(proxyUrl);
+    const host = parsed.hostname;
+    const maskedHost = host.length <= 8 ? '***' : `${host.slice(0, 3)}...${host.slice(-4)}`;
+    parsed.hostname = maskedHost;
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return 'configured';
+  }
+}
+
+function youtubeProxyStatus() {
+  const proxy = resolveYoutubeProxy();
+  const envSet = Boolean(envText('YOUTUBE_PROXY', 'YOUTUBE_PROXY_URL', 'YTDLP_PROXY')
+    || envText('YOUTUBE_PROXY_HOST', 'YTDLP_PROXY_HOST'));
+  let protocol = '';
+  try {
+    protocol = proxy ? new URL(proxy).protocol.replace(':', '') : '';
+  } catch {
+    protocol = '';
+  }
+  return {
+    enabled: Boolean(proxy),
+    envSet,
+    protocol,
+    masked: maskProxyUrl(proxy),
+    strict: Boolean(proxy) && envEnabled('YOUTUBE_PROXY_STRICT', true),
+    valid: !envSet || Boolean(proxy)
+  };
+}
+
 function isYoutubeHost(hostname) {
   const host = hostname.toLowerCase();
   return host === 'youtu.be'
@@ -402,15 +481,15 @@ function botCheckMessage() {
 }
 
 function getYtdlOptions() {
+  const proxy = resolveYoutubeProxy();
   const key = JSON.stringify({
     cookieJson: process.env.YOUTUBE_COOKIES_JSON || '',
     cookie: process.env.YOUTUBE_COOKIE || '',
-    proxy: process.env.YOUTUBE_PROXY || ''
+    proxy
   });
   if (cachedYtdlOptions && cachedYtdlOptionsKey === key) return cachedYtdlOptions;
 
   const cookies = parseCookiesJson(process.env.YOUTUBE_COOKIES_JSON);
-  const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
   const options = {
     requestOptions: {
       headers: {
@@ -512,6 +591,7 @@ export async function getYoutubeRuntimeStatus() {
   return {
     ytdlp,
     poProvider,
+    proxy: youtubeProxyStatus(),
     cookies: {
       state: status.state,
       validCount: status.validCount,
@@ -556,7 +636,7 @@ function ytDlpCommonArgs(options = {}) {
     ...jsRuntimeArgs()
   ];
   const cookiesFile = resolveGeneratedCookiesFile();
-  const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
+  const proxy = resolveYoutubeProxy();
   const extractorArgs = buildExtractorArgs(options);
   const providerArgs = buildPoProviderArgs();
   const impersonate = String(process.env.YTDLP_IMPERSONATE || '').trim();
@@ -1001,6 +1081,8 @@ function orderedStrategies(options = {}) {
   const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
   const poProviderEnabled = Boolean(buildPoProviderArgs());
   const poOrder = String(process.env.YOUTUBE_PO_DOWNLOAD_ORDER || 'yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core,direct-section-mweb,direct-url-mweb').trim();
+  const proxy = resolveYoutubeProxy();
+  const proxyStrict = Boolean(proxy) && envEnabled('YOUTUBE_PROXY_STRICT', true);
   const base = poProviderEnabled
     ? poOrder.split(',').map((item) => item.trim()).filter(Boolean)
     : configured
@@ -1044,6 +1126,14 @@ function orderedStrategies(options = {}) {
     insertAfter('yt-dlp-ios', 'yt-dlp-web-embedded');
   }
 
+  if (proxyStrict) {
+    const proxied = strategies.filter((strategy) => strategy.startsWith('yt-dlp'));
+    for (const fallback of ['yt-dlp-section', 'yt-dlp']) {
+      if (!proxied.includes(fallback)) proxied.push(fallback);
+    }
+    return proxied.length ? proxied : ['yt-dlp-section-mweb', 'yt-dlp-mweb', 'yt-dlp'];
+  }
+
   return strategies;
 }
 
@@ -1067,6 +1157,13 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   const { url } = normalizeYoutubeUrl(input);
   const failures = [];
   const poProviderEnabled = Boolean(buildPoProviderArgs());
+  const proxy = youtubeProxyStatus();
+  if (!proxy.valid) {
+    throw httpError('YOUTUBE_PROXY sudah diisi, tapi formatnya tidak valid. Pakai http://user:pass@host:port atau isi YOUTUBE_PROXY_HOST + YOUTUBE_PROXY_PORT.', 400);
+  }
+  if (envEnabled('YOUTUBE_PROXY_REQUIRED', false) && !proxy.enabled) {
+    throw httpError('YOUTUBE_PROXY_REQUIRED aktif, tapi YOUTUBE_PROXY belum valid. Isi proxy dulu di secret Hugging Face lalu restart Space.', 503);
+  }
 
   for (const strategy of orderedStrategies(options)) {
     try {

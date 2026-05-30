@@ -1,114 +1,145 @@
 # Deploy Gratis Tanpa Kartu
 
-Render meminta kartu untuk verifikasi, jadi jangan dipakai kalau ingin benar-benar tanpa kartu.
+Kalau tidak punya credit card, Oracle Cloud bukan pilihan karena akun OCI biasanya butuh kartu untuk verifikasi. Untuk project Audio Studio, opsi no-card yang paling masuk akal adalah:
 
-Opsi paling praktis untuk project ini adalah deploy sebagai Docker container di platform yang mendukung free/no-card. Repository ini sudah punya `Dockerfile` yang menjalankan frontend React dan backend Express dalam satu service.
+1. **Render Free + Docker** untuk deploy cloud gratis.
+2. **PC/laptop sendiri + Cloudflare Quick Tunnel** untuk tes paling cepat dan biasanya lebih ramah YouTube karena memakai IP internet rumah.
 
-## Hugging Face Spaces
+Cloudflare Workers/Pages tidak cocok untuk backend ini karena app butuh Node server panjang, FFmpeg, Python, yt-dlp, file sementara, dan proses download/convert yang bisa lama.
 
-1. Buka https://huggingface.co/spaces
-2. Pilih **Create new Space**.
-3. Pilih **SDK: Docker**.
-4. Buat Space public.
-5. Upload/push isi repo GitHub ini ke Space.
-6. Space akan build Dockerfile dan menjalankan app di port `7860`.
+## Opsi 1: Render Free Docker
+
+Render cocok dicoba dulu karena bisa build dari `Dockerfile`, jadi isi container sama dengan build production: frontend React, backend Express, FFmpeg, yt-dlp, dan PO token provider.
+
+Dokumen resmi Render menyebut free deploy tidak membutuhkan payment untuk web service/static site, tetapi free web service bisa sleep setelah tidak aktif.
+
+### Langkah
+
+1. Push repo ini ke GitHub.
+2. Buka https://render.com/
+3. Sign up pakai GitHub.
+4. Pilih **New +** lalu **Blueprint** jika ingin memakai `render.yaml`, atau pilih **Web Service** manual.
+5. Hubungkan repo.
+6. Kalau manual:
+   - Runtime/Language: **Docker**
+   - Dockerfile path: `./Dockerfile`
+   - Plan: **Free**
+   - Health check path: `/health`
+7. Isi environment variables yang bertanda secret di dashboard Render.
+
+Minimal secret:
+
+```env
+DATABASE_URL=postgresql://...
+JWT_SECRET=isi_random_panjang
+SECRETS_MASTER_KEY=isi_base64_32_byte
+ADMIN_BOOTSTRAP_USERNAME=admin
+ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+ADMIN_BOOTSTRAP_PASSWORD=password_admin_kuat
+YTDLP_COOKIES_BASE64=hasil_base64_cookies_txt
+APP_PUBLIC_URL=https://nama-service.onrender.com
+```
+
+Generate secret:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Masukkan output pertama ke `JWT_SECRET`, output kedua ke `SECRETS_MASTER_KEY`.
+
+Kalau cookies YouTube multiline susah ditempel, ubah ke base64:
+
+```bash
+base64 -w 0 cookies.txt
+```
+
+Lalu isi:
+
+```env
+YTDLP_COOKIES_BASE64=hasil_base64
+YTDLP_COOKIES_TEXT=
+```
+
+### Setelah Deploy
+
+Buka:
+
+```text
+https://nama-service.onrender.com/health
+https://nama-service.onrender.com/api/youtube-runtime-status
+```
+
+Target sehat:
+
+```json
+{
+  "ytdlp": { "path": "yt-dlp-py" },
+  "poProvider": { "enabled": true, "ok": true },
+  "cookies": { "state": "ok", "hasLoginCookies": true, "hasVisitorCookie": true }
+}
+```
+
+Catatan penting:
+
+- Render free bisa sleep, jadi request pertama setelah idle bisa lambat.
+- Storage file lokal tidak permanen. Pakai `DATABASE_URL` untuk akun, API key Roblox, grup, invoice, dan history.
+- YouTube tetap bisa memblokir IP cloud. Kalau Render juga kena bot-check, opsi paling stabil tanpa kartu adalah menjalankan backend di PC sendiri lewat tunnel.
+
+## Opsi 2: PC Sendiri + Cloudflare Quick Tunnel
+
+Ini bukan hosting cloud permanen, tapi bagus untuk development/testing tanpa kartu. App berjalan di PC kamu, lalu Cloudflare memberi URL sementara `trycloudflare.com`.
 
 Kelebihan:
 
-- Tidak perlu kartu untuk mulai.
-- Frontend dan backend satu domain.
-- FFmpeg tersedia dari Docker image.
-- Cocok untuk public demo dan testing audio.
+- Tidak perlu credit card.
+- Tidak perlu VPS.
+- YouTube sering lebih lancar karena memakai IP internet rumah, bukan IP datacenter hosting.
 
 Batasan:
 
-- Free hardware tetap terbatas.
-- Service bisa sleep.
-- File sementara tidak permanen.
-- Untuk traffic besar sungguhan, tetap butuh hosting berbayar/VPS.
+- PC harus menyala.
+- URL quick tunnel berubah setiap dijalankan ulang.
+- Untuk production serius tetap lebih baik VPS/domain.
 
-## Env yang Bisa Diatur
+### Jalankan App Lokal
 
-```env
-MAX_UPLOAD_MB=250
-INLINE_AUDIO_LIMIT_MB=8
-DATA_DIR=/data
-DATABASE_URL=postgres://user:password@host:5432/db
-SECRETS_MASTER_KEY=isi-output-node-scripts-generate-master-key
-JWT_SECRET=ganti-dengan-random-secret-panjang
-ADMIN_BOOTSTRAP_USERNAME=admin
-ADMIN_BOOTSTRAP_EMAIL=admin@example.com
-ADMIN_BOOTSTRAP_PASSWORD=ganti-password-admin-kuat
-GOOGLE_CLIENT_ID=isi-kalau-pakai-google-login
-SMTP_HOST=isi-kalau-email-verifikasi-asli
-SMTP_PORT=587
-SMTP_USER=email-smtp
-SMTP_PASS=password-smtp
-EMAIL_FROM=no-reply@example.com
-EMAIL_DEV_CODES=true
-PROCESS_RATE_LIMIT=12
-INFO_RATE_LIMIT=45
-JSON_LIMIT=512kb
-YTDLP_ENABLE_SECTIONS=true
-YTDLP_ALT_CLIENT_FALLBACKS=true
-YTDLP_FORCE_UPDATE=true
-YTDLP_PREFER_LOCAL=true
-YTDLP_STARTUP_UPDATE=true
-YTDLP_PATH=/usr/local/bin/yt-dlp-py
-YTDLP_BGUTIL_PROVIDER=true
-YTDLP_BGUTIL_PROVIDER_URL=http://127.0.0.1:4416
-YTDLP_BGUTIL_DISABLE_INNERTUBE=1
-YTDLP_BGUTIL_WARMUP_TIMEOUT_MS=90000
-YOUTUBE_PO_DOWNLOAD_ORDER=yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core,direct-section-mweb,direct-url-mweb
-YOUTUBE_PO_GET_URL_TIMEOUT_MS=45000
-YTDLP_FORCE_IPV4=true
-YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp
-YTDLP_GET_URL_TIMEOUT_MS=60000
-YTDLP_SECTION_TIMEOUT_MS=60000
-YOUTUBE_DIRECT_SECTION_TIMEOUT_MS=120000
+Install Docker Desktop dulu, lalu dari folder project:
+
+```bash
+docker build -t audio-studio .
+docker run --rm -p 7860:7860 --env-file .env.oracle audio-studio
 ```
 
-Naikkan `MAX_UPLOAD_MB` hanya kalau platform hosting mengizinkan upload sebesar itu.
+Atau kalau sudah punya Docker Compose:
 
-Fitur akun sekarang bisa memakai PostgreSQL lewat `DATABASE_URL`. Ini yang disarankan agar akun terdaftar, Group ID, Creator ID, invoice, history, dan API key terenkripsi tetap aman setelah rebuild/redeploy.
+```bash
+cp .env.oracle.example .env.oracle
+# isi .env.oracle dulu
+docker compose -f docker-compose.oracle.yml up --build
+```
 
-Kalau `DATABASE_URL` kosong, data disimpan ke file JSON di `DATA_DIR`. Di hosting gratis tanpa storage persistent, file itu bisa hilang saat container dibuat ulang. `DATA_DIR=/data` hanya aman kalau platform benar-benar memasang persistent storage ke path itu.
+### Publish Dengan Quick Tunnel
 
-Generate `SECRETS_MASTER_KEY` dari folder `server` dengan `node scripts/generate-master-key.mjs`, lalu simpan hasilnya sebagai env hosting.
+Pakai Wrangler:
 
-Pengaturan hemat limit:
+```bash
+npx wrangler tunnel quick-start http://localhost:7860
+```
 
-- `PROCESS_RATE_LIMIT` membatasi konversi/upload berat per window 30 menit.
-- `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
-- `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
-- `YTDLP_ENABLE_SECTIONS=true` membuat backend mengambil potongan durasi yang dibutuhkan dulu, bukan download video panjang penuh.
-- `YTDLP_FORCE_UPDATE=true`, `YTDLP_PREFER_LOCAL=true`, dan `YTDLP_STARTUP_UPDATE=true` membuat Space refresh yt-dlp saat startup lalu memakai binary lokal terbaru.
-- `YTDLP_FORCE_IPV4=true` dan `YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp` mengurangi error SSL/TLS dan mencoba direct media URL sebelum download penuh.
-- Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.
-
-Untuk cek status runtime YouTube setelah deploy, buka:
+Nanti terminal akan menampilkan URL seperti:
 
 ```text
-https://nama-space-kamu.hf.space/api/youtube-runtime-status
+https://random-words.trycloudflare.com
 ```
 
-Kalau `cookies.state` masih `absent` dan YouTube terkena bot-check, isi secret `YTDLP_COOKIES_TEXT` atau `YTDLP_COOKIES_BASE64` dari cookies.txt format Netscape, lalu restart Space.
+Masukkan URL itu ke `APP_PUBLIC_URL` kalau fitur OAuth/callback butuh public URL.
 
-Kalau cookies sudah `ok` tetapi YouTube masih menolak dengan "Sign in to confirm you're not a bot", export ulang cookies dari private/incognito window yang sudah login YouTube. Jika masih ditolak, isi PO Token:
+## Opsi 3: Hugging Face Spaces
 
-```env
-YOUTUBE_PO_TOKEN=mweb.gvs+TOKEN_KAMU
-YOUTUBE_VISITOR_DATA=VISITOR_DATA_KAMU
-```
+Hugging Face tetap gratis/no-card dan bisa Docker, tapi untuk kasus kamu YouTube sudah sering gagal karena bot-check/timeout walaupun cookie dan PO provider sehat. Jadi untuk project ini Hugging Face tidak saya jadikan pilihan utama lagi.
 
-Jika token yang kamu punya hanya isi token mentah tanpa `mweb.gvs+`, backend otomatis menambahkan prefix itu.
+## Rekomendasi
 
-Dockerfile juga memasang `bgutil-ytdlp-pot-provider` sebagai PO Token provider otomatis. Setelah rebuild, `/api/youtube-runtime-status` harus menunjukkan `ytdlp.path` sebagai `yt-dlp-py` kalau provider plugin Python yang dipakai.
-
-Catatan akun, email, Google, dan pembayaran:
-
-- Jika `SMTP_HOST` belum diisi, kode verifikasi muncul sebagai dev code dari API agar sistem tetap bisa dites gratis.
-- Untuk email sungguhan, isi SMTP provider.
-- Untuk Google Login, isi `GOOGLE_CLIENT_ID` di backend dan `VITE_GOOGLE_CLIENT_ID` saat build frontend.
-- `SECRETS_MASTER_KEY` wajib stabil. Kalau berubah, API key Roblox yang sudah terenkripsi tidak bisa dibuka lagi.
-- QRIS/DANA/Mandiri saat ini dibuat sebagai invoice manual `Pending`. Admin bisa mengaktifkan invoice dari menu **CMS Admin** setelah login sebagai admin.
+Mulai dari **Render Free Docker** karena paling mirip deploy cloud normal tanpa kartu. Kalau YouTube masih gagal dengan pesan bot-check, pindah ke **PC sendiri + Cloudflare Quick Tunnel** untuk membuktikan bahwa masalahnya memang IP hosting, bukan kode app.
