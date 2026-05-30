@@ -437,7 +437,7 @@ function execFileAsync(file, args, timeoutMs) {
 async function resolveYtDlpPath() {
   if (cachedYtDlpPath !== undefined) return cachedYtDlpPath;
   const envPath = String(process.env.YTDLP_PATH || process.env.YT_DLP_PATH || '').trim().replace(/^["']|["']$/g, '');
-  const preferLocal = envEnabled('YTDLP_PREFER_LOCAL', isWindows);
+  const preferLocal = envEnabled('YTDLP_PREFER_LOCAL', isWindows || envEnabled('YTDLP_FORCE_UPDATE', false));
   const systemCandidates = [isWindows ? 'yt-dlp.exe' : 'yt-dlp', 'yt-dlp'];
   const candidates = [
     envPath,
@@ -457,6 +457,37 @@ async function resolveYtDlpPath() {
 
   cachedYtDlpPath = '';
   return cachedYtDlpPath;
+}
+
+export async function getYoutubeRuntimeStatus() {
+  const status = inspectCookies();
+  let ytdlp = { available: false, path: '', version: '', error: '' };
+  try {
+    const binary = await resolveYtDlpPath();
+    if (binary) {
+      const version = cleanErrorText(await execFileAsync(binary, ['--version'], 8000));
+      ytdlp = { available: true, path: binary.includes(path.sep) ? path.basename(binary) : binary, version, error: '' };
+    } else {
+      ytdlp = { available: false, path: '', version: '', error: 'yt-dlp tidak ditemukan.' };
+    }
+  } catch (error) {
+    ytdlp = { available: false, path: '', version: '', error: cleanErrorText(error.message) };
+  }
+  return {
+    ytdlp,
+    cookies: {
+      state: status.state,
+      validCount: status.validCount,
+      totalLines: status.totalLines,
+      reason: status.reason,
+      envSet: status.envSet,
+      hasFile: Boolean(status.file)
+    },
+    ffmpeg: Boolean(ffmpegPath),
+    downloadOrder: orderedStrategies({ sectionEnd: 45 }).slice(0, 20),
+    forceUpdate: envEnabled('YTDLP_FORCE_UPDATE', false),
+    preferLocal: envEnabled('YTDLP_PREFER_LOCAL', isWindows || envEnabled('YTDLP_FORCE_UPDATE', false))
+  };
 }
 
 function jsRuntimeArgs() {

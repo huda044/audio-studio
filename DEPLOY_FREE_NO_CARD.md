@@ -52,6 +52,8 @@ JSON_LIMIT=512kb
 YTDLP_ENABLE_SECTIONS=true
 YTDLP_ALT_CLIENT_FALLBACKS=true
 YTDLP_FORCE_UPDATE=true
+YTDLP_PREFER_LOCAL=true
+YTDLP_STARTUP_UPDATE=true
 YTDLP_FORCE_IPV4=true
 YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp
 YTDLP_SECTION_TIMEOUT_MS=45000
@@ -72,8 +74,17 @@ Pengaturan hemat limit:
 - `INFO_RATE_LIMIT` membatasi preview YouTube per menit.
 - `INLINE_AUDIO_LIMIT_MB` mencegah response preview terlalu besar.
 - `YTDLP_ENABLE_SECTIONS=true` membuat backend mengambil potongan durasi yang dibutuhkan dulu, bukan download video panjang penuh.
+- `YTDLP_FORCE_UPDATE=true`, `YTDLP_PREFER_LOCAL=true`, dan `YTDLP_STARTUP_UPDATE=true` membuat Space refresh yt-dlp saat startup lalu memakai binary lokal terbaru.
 - `YTDLP_FORCE_IPV4=true` dan `YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp` mengurangi error SSL/TLS dan mencoba direct media URL sebelum download penuh.
 - Riwayat akun dipangkas otomatis agar storage tidak cepat penuh.
+
+Untuk cek status runtime YouTube setelah deploy, buka:
+
+```text
+https://nama-space-kamu.hf.space/api/youtube-runtime-status
+```
+
+Kalau `cookies.state` masih `absent` dan YouTube terkena bot-check, isi secret `YTDLP_COOKIES_TEXT` atau `YTDLP_COOKIES_BASE64` dari cookies.txt format Netscape, lalu restart Space.
 
 Catatan akun, email, Google, dan pembayaran:
 

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import { processAudio, splitAudioIfNeeded } from '../services/ffmpeg.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
-import { downloadYoutubeAudio, getYoutubeInfo, inspectCookies, normalizeYoutubeUrl } from '../services/youtube.service.js';
+import { downloadYoutubeAudio, getYoutubeInfo, getYoutubeRuntimeStatus, inspectCookies, normalizeYoutubeUrl } from '../services/youtube.service.js';
 import { downloadSoundCloudAudio, getSoundCloudInfo, isSoundCloudUrl, normalizeSoundCloudUrl } from '../services/soundcloud.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { assertConversionAllowed, recordConversion, verifyToken, getServerApiKeyForUser } from '../services/account.service.js';
@@ -195,6 +195,14 @@ router.get('/youtube-cookies-status', infoLimit, async (_req, res, next) => {
       hasFile: Boolean(status.file)
     };
     res.json(safe);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/youtube-runtime-status', infoLimit, async (_req, res, next) => {
+  try {
+    res.json(await getYoutubeRuntimeStatus());
   } catch (error) {
     next(error);
   }
