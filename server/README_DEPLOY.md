@@ -87,6 +87,12 @@ YOUTUBE_VISITOR_DATA=VISITOR_DATA_KAMU
 
 `YOUTUBE_PO_TOKEN` boleh juga diisi token mentah; backend akan menganggapnya sebagai `mweb.gvs`.
 
+Untuk Hugging Face Docker, Dockerfile sudah menyiapkan `bgutil-ytdlp-pot-provider` otomatis. Setelah rebuild, endpoint `/api/youtube-runtime-status` seharusnya menampilkan `ytdlp.path` sebagai `yt-dlp-py`, artinya yt-dlp Python + plugin provider yang dipakai. Kalau ingin mematikan provider ini:
+
+```env
+YTDLP_BGUTIL_PROVIDER=false
+```
+
 Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panjang tidak selalu diunduh penuh. Sekarang mode paling awal adalah `direct-section`: backend ambil direct media URL dulu, lalu FFmpeg hanya membaca potongan durasi yang dibutuhkan. Setelah itu baru fallback ke client extractor (`mweb`, `tv`, `ios`, `default`) sebelum menyerah.
 
 Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.

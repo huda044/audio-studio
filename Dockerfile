@@ -1,9 +1,17 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 \
+  && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git python3 python3-pip python3-venv \
   && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
   && chmod a+rx /usr/local/bin/yt-dlp \
+  && python3 -m venv /opt/yt-dlp-venv \
+  && /opt/yt-dlp-venv/bin/pip install --no-cache-dir -U "yt-dlp[default]" bgutil-ytdlp-pot-provider \
+  && printf '#!/bin/sh\nexec /opt/yt-dlp-venv/bin/python -m yt_dlp "$@"\n' > /usr/local/bin/yt-dlp-py \
+  && chmod a+rx /usr/local/bin/yt-dlp-py \
+  && git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil-ytdlp-pot-provider \
+  && cd /opt/bgutil-ytdlp-pot-provider/server \
+  && npm ci \
+  && npx tsc \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -47,6 +55,10 @@ ENV JSON_LIMIT=512kb
 ENV YTDLP_FORCE_UPDATE=true
 ENV YTDLP_PREFER_LOCAL=true
 ENV YTDLP_STARTUP_UPDATE=true
+ENV YTDLP_PATH=/usr/local/bin/yt-dlp-py
+ENV YTDLP_BGUTIL_PROVIDER=true
+ENV YTDLP_BGUTIL_PROVIDER_HOME=/opt/bgutil-ytdlp-pot-provider/server
+ENV YTDLP_BGUTIL_PROVIDER_URL=http://127.0.0.1:4416
 ENV YTDLP_ENABLE_SECTIONS=true
 ENV YTDLP_ALT_CLIENT_FALLBACKS=true
 ENV YTDLP_FORCE_IPV4=true

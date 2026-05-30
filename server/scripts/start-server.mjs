@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import process from 'node:process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,6 +26,30 @@ function runNode(args) {
   });
 }
 
+function startBgutilProvider() {
+  if (envDisabled('YTDLP_BGUTIL_PROVIDER')) return null;
+  const providerHome = process.env.YTDLP_BGUTIL_PROVIDER_HOME || '/opt/bgutil-ytdlp-pot-provider/server';
+  const providerScript = path.join(providerHome, 'build', 'main.js');
+  const port = process.env.YTDLP_BGUTIL_PROVIDER_PORT || '4416';
+  const child = spawn(process.execPath, [providerScript, '--port', port], {
+    cwd: providerHome,
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env: process.env
+  });
+  child.on('error', (error) => {
+    console.warn(`[startup] bgutil PO Token provider gagal start: ${error.message}`);
+  });
+  child.on('exit', (code, signal) => {
+    if (code !== 0 && code !== null) {
+      console.warn(`[startup] bgutil PO Token provider berhenti: exit ${code}`);
+    } else if (signal) {
+      console.warn(`[startup] bgutil PO Token provider berhenti: ${signal}`);
+    }
+  });
+  process.on('exit', () => child.kill());
+  return child;
+}
+
 if (!envDisabled('YTDLP_STARTUP_UPDATE') && !envDisabled('YTDLP_FORCE_UPDATE')) {
   try {
     await runNode(['scripts/install-yt-dlp.mjs']);
@@ -32,5 +57,7 @@ if (!envDisabled('YTDLP_STARTUP_UPDATE') && !envDisabled('YTDLP_FORCE_UPDATE')) 
     console.warn(`[startup] yt-dlp update dilewati: ${error.message}`);
   }
 }
+
+startBgutilProvider();
 
 await import('../server.js');

@@ -54,6 +54,9 @@ YTDLP_ALT_CLIENT_FALLBACKS=true
 YTDLP_FORCE_UPDATE=true
 YTDLP_PREFER_LOCAL=true
 YTDLP_STARTUP_UPDATE=true
+YTDLP_PATH=/usr/local/bin/yt-dlp-py
+YTDLP_BGUTIL_PROVIDER=true
+YTDLP_BGUTIL_PROVIDER_URL=http://127.0.0.1:4416
 YTDLP_FORCE_IPV4=true
 YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp
 YTDLP_GET_URL_TIMEOUT_MS=120000
@@ -95,6 +98,8 @@ YOUTUBE_VISITOR_DATA=VISITOR_DATA_KAMU
 ```
 
 Jika token yang kamu punya hanya isi token mentah tanpa `mweb.gvs+`, backend otomatis menambahkan prefix itu.
+
+Dockerfile juga memasang `bgutil-ytdlp-pot-provider` sebagai PO Token provider otomatis. Setelah rebuild, `/api/youtube-runtime-status` harus menunjukkan `ytdlp.path` sebagai `yt-dlp-py` kalau provider plugin Python yang dipakai.
 
 Catatan akun, email, Google, dan pembayaran:
 

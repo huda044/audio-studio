@@ -541,6 +541,7 @@ function ytDlpCommonArgs(options = {}) {
   const cookiesFile = resolveGeneratedCookiesFile();
   const proxy = String(process.env.YOUTUBE_PROXY || '').trim();
   const extractorArgs = buildExtractorArgs(options);
+  const providerArgs = buildPoProviderArgs();
   const impersonate = String(process.env.YTDLP_IMPERSONATE || '').trim();
   const httpChunkSize = String(process.env.YTDLP_HTTP_CHUNK_SIZE || '').trim();
   const sleepRequests = String(process.env.YTDLP_SLEEP_REQUESTS || '').trim();
@@ -554,7 +555,17 @@ function ytDlpCommonArgs(options = {}) {
   if (httpChunkSize) args.push('--http-chunk-size', httpChunkSize);
   if (sleepRequests) args.push('--sleep-requests', sleepRequests);
   if (extractorArgs) args.push('--extractor-args', extractorArgs);
+  if (providerArgs) args.push('--extractor-args', providerArgs);
   return args;
+}
+
+function buildPoProviderArgs() {
+  if (['0', 'false', 'no', 'off'].includes(String(process.env.YTDLP_BGUTIL_PROVIDER || '').toLowerCase())) {
+    return '';
+  }
+  const baseUrl = String(process.env.YTDLP_BGUTIL_PROVIDER_URL || '').trim();
+  if (!baseUrl) return '';
+  return `youtubepot-bgutilhttp:base_url=${baseUrl}`;
 }
 
 function buildExtractorArgs(options = {}) {
