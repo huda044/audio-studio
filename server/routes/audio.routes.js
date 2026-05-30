@@ -141,6 +141,28 @@ function parsePayload(raw, label = 'payload') {
   }
 }
 
+function parseSourceMeta(raw) {
+  const parsed = parsePayload(raw || '{}', 'Metadata sumber');
+  return {
+    title: String(parsed.title || '').trim().slice(0, 180),
+    thumbnail: String(parsed.thumbnail || '').trim().slice(0, 600),
+    duration: Math.max(0, Number(parsed.duration || 0) || 0),
+    durationSource: String(parsed.durationSource || 'client-preview').trim().slice(0, 60)
+  };
+}
+
+function fallbackYoutubeMeta(sourceUrl) {
+  const videoId = normalizeYoutubeUrl(sourceUrl).videoId;
+  return {
+    title: 'YouTube Audio',
+    thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: 0,
+    url: sourceUrl,
+    videoId,
+    durationSource: 'fallback'
+  };
+}
+
 function cleanNumericId(value) {
   const text = String(value || '').trim();
   return /^\d{2,32}$/.test(text) ? text : '';
@@ -263,13 +285,24 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       const sourceKind = source.kind;
       const warnings = [];
       const downloadTrace = [];
-      let meta = sourceUrl
-        ? (sourceKind === 'soundcloud' ? await getSoundCloudInfo(sourceUrl) : await getYoutubeInfo(sourceUrl))
-        : {
-          title: req.file?.originalname || 'Audio Studio',
-          thumbnail: '',
-          durationSource: req.file ? 'upload' : 'unknown'
-        };
+      let downloadedSectionEnd = 0;
+      const sourceMeta = parseSourceMeta(req.body.sourceMeta);
+      let meta = {
+        title: req.file?.originalname || 'Audio Studio',
+        thumbnail: '',
+        duration: 0,
+        durationSource: req.file ? 'upload' : 'unknown'
+      };
+
+      if (sourceUrl) {
+        if (sourceMeta.title || sourceMeta.thumbnail || sourceMeta.duration) {
+          meta = { ...meta, ...sourceMeta, url: sourceUrl };
+        } else if (sourceKind === 'soundcloud') {
+          meta = await getSoundCloudInfo(sourceUrl);
+        } else {
+          meta = fallbackYoutubeMeta(sourceUrl);
+        }
+      }
 
       if (!sourcePath && sourceUrl) {
         const sectionEnd = computeYoutubeSectionEnd(settings, Number(meta.duration || 0));
@@ -278,6 +311,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
           : await downloadYoutubeAudio(sourceUrl, uploadsDir, { sectionEnd });
         sourcePath = typeof download === 'string' ? download : download.path;
         downloadedPath = sourcePath;
+        downloadedSectionEnd = Number(download?.sectionEnd || 0) || 0;
         const sourceLabel = sourceKind === 'soundcloud' ? 'SoundCloud' : 'YouTube';
         if (download?.method) {
           downloadTrace.push({
@@ -303,13 +337,19 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         if (sourceUrl && meta.duration) sourceDuration = Number(meta.duration) || 0;
         sourceProbe = await probeAudio(sourcePath);
         const probedDuration = Number(sourceProbe.format.duration || 0);
-        if (probedDuration) sourceDuration = probedDuration;
+        if (probedDuration && !(sourceUrl && sourceDuration && downloadedSectionEnd)) {
+          sourceDuration = probedDuration;
+        }
       } catch (error) {
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
         sourceDuration = 0;
       }
       if (sourceDuration && sourceUrl && (!meta.duration || meta.durationSource !== 'ffprobe')) {
-        meta = { ...meta, duration: sourceDuration, durationSource: 'ffprobe' };
+        meta = {
+          ...meta,
+          duration: sourceDuration,
+          durationSource: downloadedSectionEnd ? (meta.durationSource || 'client-preview') : 'ffprobe'
+        };
       }
       const account = await assertConversionAllowed(auth.sub, sourceDuration);
       if (account.plan.plan === 'paid') {

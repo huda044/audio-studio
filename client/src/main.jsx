@@ -989,6 +989,14 @@ function App() {
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('sourceUrl', youtubeUrl.trim());
+    if (youtubeInfo) {
+      form.append('sourceMeta', JSON.stringify({
+        title: youtubeInfo.title || '',
+        thumbnail: youtubeInfo.thumbnail || '',
+        duration: youtubeInfo.duration || 0,
+        durationSource: youtubeInfo.durationSource || 'client-preview'
+      }));
+    }
     form.append('settings', JSON.stringify(settings));
     const sourceLabel = youtubeInfo?.kind === 'soundcloud' ? 'SoundCloud' : (youtubeUrl ? 'YouTube' : '');
     setStep(1, sourceLabel
