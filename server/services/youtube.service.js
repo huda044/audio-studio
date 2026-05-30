@@ -496,16 +496,13 @@ export async function getYoutubeRuntimeStatus() {
   }
   if (poProvider.enabled && poProvider.baseUrl) {
     try {
-      const response = await fetch(`${poProvider.baseUrl.replace(/\/+$/, '')}/get_pot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+      const response = await fetch(`${poProvider.baseUrl.replace(/\/+$/, '')}/ping`, {
+        method: 'GET',
         signal: AbortSignal.timeout(Number(process.env.YTDLP_BGUTIL_STATUS_TIMEOUT_MS || 15000))
       });
-      const data = await response.json().catch(() => ({}));
       poProvider = {
         ...poProvider,
-        ok: response.ok && Boolean(data.po_token || data.pot || data.poToken),
+        ok: response.ok,
         error: response.ok ? '' : `HTTP ${response.status}`
       };
     } catch (error) {
@@ -1008,10 +1005,10 @@ function orderedStrategies(options = {}) {
   const add = (strategy) => {
     if (strategy && !strategies.includes(strategy)) strategies.push(strategy);
   };
-  if (options.sectionEnd) add('direct-section');
-  add('direct-url');
+  if (!poProviderEnabled && options.sectionEnd) add('direct-section');
+  if (!poProviderEnabled) add('direct-url');
   for (const strategy of base) add(strategy);
-  if (options.sectionEnd && !strategies.includes('yt-dlp-section')) add('yt-dlp-section');
+  if (!poProviderEnabled && options.sectionEnd && !strategies.includes('yt-dlp-section')) add('yt-dlp-section');
 
   if (!poProviderEnabled && String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
     const insertAfter = (needle, extra) => {

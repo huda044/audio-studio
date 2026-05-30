@@ -57,10 +57,8 @@ async function warmBgutilProvider() {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/get_pot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/ping`, {
+        method: 'GET',
         signal: AbortSignal.timeout(15000)
       });
       if (response.ok) {
