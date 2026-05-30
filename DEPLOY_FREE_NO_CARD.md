@@ -56,7 +56,8 @@ YTDLP_PREFER_LOCAL=true
 YTDLP_STARTUP_UPDATE=true
 YTDLP_FORCE_IPV4=true
 YOUTUBE_DOWNLOAD_ORDER=direct-section,direct-url,ytdl-core,yt-dlp
-YTDLP_SECTION_TIMEOUT_MS=45000
+YTDLP_GET_URL_TIMEOUT_MS=120000
+YTDLP_SECTION_TIMEOUT_MS=120000
 YOUTUBE_DIRECT_SECTION_TIMEOUT_MS=120000
 ```
 
@@ -85,6 +86,15 @@ https://nama-space-kamu.hf.space/api/youtube-runtime-status
 ```
 
 Kalau `cookies.state` masih `absent` dan YouTube terkena bot-check, isi secret `YTDLP_COOKIES_TEXT` atau `YTDLP_COOKIES_BASE64` dari cookies.txt format Netscape, lalu restart Space.
+
+Kalau cookies sudah `ok` tetapi YouTube masih menolak dengan "Sign in to confirm you're not a bot", export ulang cookies dari private/incognito window yang sudah login YouTube. Jika masih ditolak, isi PO Token:
+
+```env
+YOUTUBE_PO_TOKEN=mweb.gvs+TOKEN_KAMU
+YOUTUBE_VISITOR_DATA=VISITOR_DATA_KAMU
+```
+
+Jika token yang kamu punya hanya isi token mentah tanpa `mweb.gvs+`, backend otomatis menambahkan prefix itu.
 
 Catatan akun, email, Google, dan pembayaran:
 

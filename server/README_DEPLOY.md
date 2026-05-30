@@ -78,6 +78,15 @@ https://domain-backend-kamu/api/youtube-runtime-status
 
 Jika `ytdlp.available=true` tetapi `cookies.state=absent`, backend sudah siap tetapi masih bisa ditolak YouTube di IP hosting. Isi cookie YouTube yang valid jika muncul bot-check.
 
+Jika cookies sudah terbaca `ok` tetapi detail error masih "Sign in to confirm you're not a bot", cookies kemungkinan kurang lengkap/rotated atau YouTube meminta PO Token. Export ulang cookies dari private/incognito window yang login YouTube. Kalau tetap gagal, isi:
+
+```env
+YOUTUBE_PO_TOKEN=mweb.gvs+TOKEN_KAMU
+YOUTUBE_VISITOR_DATA=VISITOR_DATA_KAMU
+```
+
+`YOUTUBE_PO_TOKEN` boleh juga diisi token mentah; backend akan menganggapnya sebagai `mweb.gvs`.
+
 Backend memakai partial download (`YTDLP_ENABLE_SECTIONS=true`) agar video panjang tidak selalu diunduh penuh. Sekarang mode paling awal adalah `direct-section`: backend ambil direct media URL dulu, lalu FFmpeg hanya membaca potongan durasi yang dibutuhkan. Setelah itu baru fallback ke client extractor (`mweb`, `tv`, `ios`, `default`) sebelum menyerah.
 
 Untuk link yang butuh YouTube challenge solver, backend otomatis menjalankan yt-dlp dengan runtime Node (`--js-runtimes node:<node backend>`). Kalau hosting memakai path Node khusus, isi `YTDLP_JS_RUNTIMES=node:/path/to/node`.

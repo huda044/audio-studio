@@ -552,7 +552,10 @@ function buildExtractorArgs(options = {}) {
   const extraYoutubeArgs = [];
 
   if (visitorData) extraYoutubeArgs.push(`visitor_data=${visitorData}`);
-  if (poToken) extraYoutubeArgs.push(`po_token=${poToken}`);
+  if (poToken) {
+    const normalizedPoToken = poToken.includes('+') ? poToken : `mweb.gvs+${poToken}`;
+    extraYoutubeArgs.push(`po_token=${normalizedPoToken}`);
+  }
   if (dataSyncId) extraYoutubeArgs.push(`data_sync_id=${dataSyncId}`);
   if (playerSkip) extraYoutubeArgs.push(`player_skip=${playerSkip}`);
   if (extraYoutubeArgs.length) parts.push(`youtube:${extraYoutubeArgs.join(';')}`);
@@ -806,7 +809,7 @@ async function getDirectMediaUrl(url, options = {}) {
     '--format', 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
     '--get-url',
     url
-  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 45000));
+  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 120000));
   const directUrl = output
     .split(/\r?\n/)
     .map((line) => line.trim())
