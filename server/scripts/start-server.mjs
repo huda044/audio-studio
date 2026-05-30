@@ -50,6 +50,31 @@ function startBgutilProvider() {
   return child;
 }
 
+async function warmBgutilProvider() {
+  if (envDisabled('YTDLP_BGUTIL_PROVIDER')) return;
+  const baseUrl = process.env.YTDLP_BGUTIL_PROVIDER_URL || 'http://127.0.0.1:4416';
+  const timeoutMs = Number(process.env.YTDLP_BGUTIL_WARMUP_TIMEOUT_MS || 90000);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/get_pot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(15000)
+      });
+      if (response.ok) {
+        console.log('[startup] bgutil PO Token provider siap.');
+        return;
+      }
+    } catch {
+      // provider may still be booting; retry until deadline
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  console.warn('[startup] bgutil PO Token provider belum siap setelah warmup timeout.');
+}
+
 if (!envDisabled('YTDLP_STARTUP_UPDATE') && !envDisabled('YTDLP_FORCE_UPDATE')) {
   try {
     await runNode(['scripts/install-yt-dlp.mjs']);
@@ -59,5 +84,8 @@ if (!envDisabled('YTDLP_STARTUP_UPDATE') && !envDisabled('YTDLP_FORCE_UPDATE')) 
 }
 
 startBgutilProvider();
+warmBgutilProvider().catch((error) => {
+  console.warn(`[startup] bgutil PO Token provider warmup gagal: ${error.message}`);
+});
 
 await import('../server.js');

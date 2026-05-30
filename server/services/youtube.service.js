@@ -482,6 +482,7 @@ async function resolveYtDlpPath() {
 export async function getYoutubeRuntimeStatus() {
   const status = inspectCookies();
   let ytdlp = { available: false, path: '', version: '', error: '' };
+  let poProvider = { enabled: Boolean(buildPoProviderArgs()), ok: false, baseUrl: String(process.env.YTDLP_BGUTIL_PROVIDER_URL || '').trim(), error: '' };
   try {
     const binary = await resolveYtDlpPath();
     if (binary) {
@@ -493,8 +494,27 @@ export async function getYoutubeRuntimeStatus() {
   } catch (error) {
     ytdlp = { available: false, path: '', version: '', error: cleanErrorText(error.message) };
   }
+  if (poProvider.enabled && poProvider.baseUrl) {
+    try {
+      const response = await fetch(`${poProvider.baseUrl.replace(/\/+$/, '')}/get_pot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(Number(process.env.YTDLP_BGUTIL_STATUS_TIMEOUT_MS || 15000))
+      });
+      const data = await response.json().catch(() => ({}));
+      poProvider = {
+        ...poProvider,
+        ok: response.ok && Boolean(data.po_token || data.pot || data.poToken),
+        error: response.ok ? '' : `HTTP ${response.status}`
+      };
+    } catch (error) {
+      poProvider = { ...poProvider, ok: false, error: cleanErrorText(error.message) };
+    }
+  }
   return {
     ytdlp,
+    poProvider,
     cookies: {
       state: status.state,
       validCount: status.validCount,
@@ -977,9 +997,13 @@ async function downloadWithYtdl(url, uploadsDir) {
 
 function orderedStrategies(options = {}) {
   const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
-  const base = configured
-    ? configured.split(',').map((item) => item.trim()).filter(Boolean)
-    : ['direct-section', 'direct-url', 'ytdl-core', 'yt-dlp'];
+  const poProviderEnabled = Boolean(buildPoProviderArgs());
+  const poOrder = String(process.env.YOUTUBE_PO_DOWNLOAD_ORDER || 'direct-section-mweb,direct-url-mweb,yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core').trim();
+  const base = poProviderEnabled
+    ? poOrder.split(',').map((item) => item.trim()).filter(Boolean)
+    : configured
+      ? configured.split(',').map((item) => item.trim()).filter(Boolean)
+      : ['direct-section', 'direct-url', 'ytdl-core', 'yt-dlp'];
   const strategies = [];
   const add = (strategy) => {
     if (strategy && !strategies.includes(strategy)) strategies.push(strategy);
@@ -989,7 +1013,7 @@ function orderedStrategies(options = {}) {
   for (const strategy of base) add(strategy);
   if (options.sectionEnd && !strategies.includes('yt-dlp-section')) add('yt-dlp-section');
 
-  if (String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
+  if (!poProviderEnabled && String(process.env.YTDLP_ALT_CLIENT_FALLBACKS || 'true').toLowerCase() !== 'false') {
     const insertAfter = (needle, extra) => {
       if (strategies.includes(extra)) return;
       const index = strategies.indexOf(needle);
@@ -1040,6 +1064,7 @@ function strategyOptions(strategy, options = {}) {
 export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   const { url } = normalizeYoutubeUrl(input);
   const failures = [];
+  const poProviderEnabled = Boolean(buildPoProviderArgs());
 
   for (const strategy of orderedStrategies(options)) {
     try {
@@ -1065,6 +1090,7 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
       }
     } catch (error) {
       failures.push(`${strategy}: ${cleanErrorText(error.message)}`);
+      if (poProviderEnabled && isTimeoutError(error)) break;
       // Jangan berhenti di bot-check/timeout pertama. Client extractor lain
       // atau direct media URL masih bisa berhasil untuk video yang sama.
       if (isBotCheckError(error) && !hasCookieSupport()) continue;
