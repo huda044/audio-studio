@@ -582,7 +582,9 @@ function buildPoProviderArgs() {
   }
   const baseUrl = String(process.env.YTDLP_BGUTIL_PROVIDER_URL || '').trim();
   if (!baseUrl) return '';
-  return `youtubepot-bgutilhttp:base_url=${baseUrl}`;
+  const disableInnertube = String(process.env.YTDLP_BGUTIL_DISABLE_INNERTUBE ?? '1').toLowerCase();
+  const extra = disableInnertube === '0' || disableInnertube === 'false' ? '' : ';disable_innertube=1';
+  return `youtubepot-bgutilhttp:base_url=${baseUrl}${extra}`;
 }
 
 function buildExtractorArgs(options = {}) {
@@ -855,12 +857,15 @@ function inferAudioContainerFromUrl(url) {
 }
 
 async function getDirectMediaUrl(url, options = {}) {
+  const timeoutMs = buildPoProviderArgs()
+    ? Number(process.env.YOUTUBE_PO_GET_URL_TIMEOUT_MS || 45000)
+    : Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 120000);
   const output = await runYtDlp([
     ...ytDlpCommonArgs(options),
     '--format', 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
     '--get-url',
     url
-  ], Number(process.env.YTDLP_GET_URL_TIMEOUT_MS || 120000));
+  ], timeoutMs);
   const directUrl = output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -995,7 +1000,7 @@ async function downloadWithYtdl(url, uploadsDir) {
 function orderedStrategies(options = {}) {
   const configured = String(process.env.YOUTUBE_DOWNLOAD_ORDER || '').trim();
   const poProviderEnabled = Boolean(buildPoProviderArgs());
-  const poOrder = String(process.env.YOUTUBE_PO_DOWNLOAD_ORDER || 'direct-section-mweb,direct-url-mweb,yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core').trim();
+  const poOrder = String(process.env.YOUTUBE_PO_DOWNLOAD_ORDER || 'yt-dlp-section-mweb,yt-dlp-mweb,ytdl-core,direct-section-mweb,direct-url-mweb').trim();
   const base = poProviderEnabled
     ? poOrder.split(',').map((item) => item.trim()).filter(Boolean)
     : configured
