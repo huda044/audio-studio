@@ -8,6 +8,8 @@ import { nanoid } from 'nanoid';
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobe.path);
 
+const APP_MAX_DURATION_SECONDS = Math.min(Math.max(Number(process.env.APP_MAX_DURATION_SECONDS || 200), 30), 14400);
+
 function clamp(value, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return min;
@@ -60,8 +62,8 @@ function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, m
 function buildFilters(settings, sourceDuration = 0) {
   const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
   const amplify = clamp(settings.amplify ?? -4, -20, 20);
-  const maxDurationLimit = clamp(settings.maxDurationLimit ?? 600, 30, 14400);
-  const maxDuration = clamp(settings.maxDuration ?? 400, 30, maxDurationLimit);
+  const maxDurationLimit = Math.min(clamp(settings.maxDurationLimit ?? APP_MAX_DURATION_SECONDS, 30, 14400), APP_MAX_DURATION_SECONDS);
+  const maxDuration = clamp(settings.maxDuration ?? APP_MAX_DURATION_SECONDS, 30, maxDurationLimit);
   const pitch = clamp(settings.pitch ?? 0, -12, 12);
   const fadeIn = clamp(settings.fadeIn ?? 0, 0, 30);
   const fadeOut = clamp(settings.fadeOut ?? 0, 0, 30);
@@ -340,7 +342,7 @@ async function convertSegment({ inputPath, outputPath, start, duration }) {
   });
 }
 
-export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 400, maxBytes = 6 * 1024 * 1024 }) {
+export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = APP_MAX_DURATION_SECONDS, maxBytes = 6 * 1024 * 1024 }) {
   const [stat, probe] = await Promise.all([fs.stat(inputPath), probeAudio(inputPath)]);
   const duration = Number(probe.format.duration || 0);
   const durationLimit = clamp(maxDuration, 30, 600);

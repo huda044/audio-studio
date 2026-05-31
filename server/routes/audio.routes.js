@@ -44,6 +44,7 @@ const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);
 const inlineAudioLimitBytes = Number(process.env.INLINE_AUDIO_LIMIT_MB || 8) * 1024 * 1024;
 const robloxAudioMaxDuration = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
 const robloxAudioMaxBytes = Number(process.env.ROBLOX_AUDIO_MAX_BYTES || (19 * 1024 * 1024));
+const appMaxDurationSeconds = Math.min(Math.max(Number(process.env.APP_MAX_DURATION_SECONDS || 200), 30), 14400);
 const conversionQueue = createTaskQueue({
   name: 'conversion',
   concurrency: Math.max(1, Number(process.env.CONVERSION_CONCURRENCY || 2)),
@@ -91,11 +92,11 @@ function parseSettings(raw = '{}') {
     throw error;
   }
   parsed = parsed && typeof parsed === 'object' ? parsed : {};
-  const maxDurationLimit = cleanNumber(parsed.maxDurationLimit ?? 14400, 14400, 30, 14400);
+  const maxDurationLimit = Math.min(cleanNumber(parsed.maxDurationLimit ?? appMaxDurationSeconds, appMaxDurationSeconds, 30, 14400), appMaxDurationSeconds);
   return {
     speed: cleanNumber(parsed.speed ?? 2.3, 2.3, 0.5, 3),
     amplify: cleanNumber(parsed.amplify ?? -4, -4, -20, 20),
-    maxDuration: cleanNumber(parsed.maxDuration ?? 400, 400, 30, maxDurationLimit),
+    maxDuration: cleanNumber(parsed.maxDuration ?? appMaxDurationSeconds, appMaxDurationSeconds, 30, maxDurationLimit),
     maxDurationLimit,
     pitch: cleanNumber(parsed.pitch ?? 0, 0, -12, 12),
     bassBoost: Boolean(parsed.bassBoost),
@@ -221,7 +222,7 @@ function resolveRobloxCreator(creator = {}, required = true) {
 function computeYoutubeSectionEnd(settings = {}, sourceDuration = 0) {
   if (String(process.env.YTDLP_ENABLE_SECTIONS || 'true').toLowerCase() === 'false') return 0;
   const speed = Math.min(Math.max(Number(settings.speed || 1), 0.5), 3);
-  const maxDuration = Math.min(Math.max(Number(settings.maxDuration || 400), 30), Number(settings.maxDurationLimit || 14400));
+  const maxDuration = Math.min(Math.max(Number(settings.maxDuration || appMaxDurationSeconds), 30), appMaxDurationSeconds);
   const trimStart = Math.max(0, Number(settings.trimStart || 0));
   const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
   const neededInput = Math.ceil(maxDuration * speed + 12);
@@ -429,14 +430,9 @@ router.post('/convert-source', processLimit, upload.none(), async (req, res, nex
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
       }
 
-      const account = await assertConversionAllowed(auth.sub, sourceDuration);
-      if (account.plan.plan === 'paid') {
-        settings.maxDurationLimit = 14400;
-        settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || 400, settings.maxDurationLimit)));
-      } else {
-        settings.maxDurationLimit = 600;
-        settings.maxDuration = Math.min(requestedMaxDuration || settings.maxDuration, 600);
-      }
+      await assertConversionAllowed(auth.sub, sourceDuration);
+      settings.maxDurationLimit = appMaxDurationSeconds;
+      settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || appMaxDurationSeconds, appMaxDurationSeconds)));
 
       const outputName = `processed-${nanoid(10)}.ogg`;
       const outputPath = path.join(uploadsDir, outputName);
@@ -605,14 +601,9 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
           durationSource: downloadedSectionEnd ? (meta.durationSource || 'client-preview') : 'ffprobe'
         };
       }
-      const account = await assertConversionAllowed(auth.sub, sourceDuration);
-      if (account.plan.plan === 'paid') {
-        settings.maxDurationLimit = 14400;
-        settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || 400, settings.maxDurationLimit)));
-      } else {
-        settings.maxDurationLimit = 600;
-        settings.maxDuration = Math.min(requestedMaxDuration || settings.maxDuration, 600);
-      }
+      await assertConversionAllowed(auth.sub, sourceDuration);
+      settings.maxDurationLimit = appMaxDurationSeconds;
+      settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || appMaxDurationSeconds, appMaxDurationSeconds)));
 
       const outputName = `processed-${nanoid(10)}.ogg`;
       const outputPath = path.join(uploadsDir, outputName);

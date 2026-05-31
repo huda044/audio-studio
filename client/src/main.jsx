@@ -34,6 +34,7 @@ import AppShell from './AppShell.jsx';
 const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
 const VITE_GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const KEY_SECRET = 'audio-studio-local-key';
+const MAX_AUDIO_DURATION_SECONDS = 200;
 const presets = [
   ['Lambat', 2.1],
   ['Default', 2.3],
@@ -45,7 +46,7 @@ const presets = [
 const defaultSettings = {
   speed: 2.3,
   amplify: -4,
-  maxDuration: 400,
+  maxDuration: MAX_AUDIO_DURATION_SECONDS,
   pitch: 0,
   bassBoost: false,
   reverb: false,
@@ -57,6 +58,20 @@ const defaultSettings = {
   trimEnd: 0,
   eqPreset: ''
 };
+
+function clampMaxDuration(value) {
+  const numeric = Number(value || MAX_AUDIO_DURATION_SECONDS);
+  return Math.min(Math.max(numeric, 30), MAX_AUDIO_DURATION_SECONDS);
+}
+
+function normalizeSettings(settings = {}) {
+  return {
+    ...defaultSettings,
+    ...settings,
+    maxDuration: clampMaxDuration(settings.maxDuration),
+    maxDurationLimit: MAX_AUDIO_DURATION_SECONDS
+  };
+}
 
 const EQ_PRESETS = [
   { value: '', label: 'Flat (default)' },
@@ -224,7 +239,7 @@ function App() {
   const [youtubePreviewError, setYoutubePreviewError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
   const [sourceTab, setSourceTab] = useState('youtube');
-  const [settings, setSettings] = useState(defaultSettings);
+  const [settings, setSettings] = useState(() => normalizeSettings(defaultSettings));
   const [processed, setProcessed] = useState(null);
   const [stagedSource, setStagedSource] = useState(null);
   const [mode, setMode] = useState('personal');
@@ -1050,7 +1065,7 @@ function App() {
   }
 
   function setSetting(key, value) {
-    setSettings((current) => ({ ...current, [key]: value }));
+    setSettings((current) => normalizeSettings({ ...current, [key]: value }));
   }
 
   function currentProcessSignature() {
@@ -1082,7 +1097,7 @@ function App() {
 
   function neededInputSecondsForSettings() {
     const speed = Math.min(Math.max(Number(settings.speed || 1), 0.5), 3);
-    const maxDuration = Math.min(Math.max(Number(settings.maxDuration || 400), 30), Number(settings.maxDurationLimit || 14400));
+    const maxDuration = clampMaxDuration(settings.maxDuration);
     const trimStart = Math.max(0, Number(settings.trimStart || 0));
     const trimEnd = Math.max(0, Number(settings.trimEnd || 0));
     const neededInput = Math.ceil(maxDuration * speed + 12);
@@ -1424,7 +1439,7 @@ function App() {
       setAudioFile(null);
     }
     if (entry.settings) {
-      setSettings({ ...defaultSettings, ...entry.settings });
+      setSettings(normalizeSettings(entry.settings));
     }
     setProcessed(null);
     setActivePage('pipeline');
@@ -1899,7 +1914,7 @@ function App() {
       }
     ];
     const plans = [
-      { id: 'seven', label: 'Paid 7 Hari', price: 'Rp 35.000', perks: ['Konversi tanpa batas', 'Durasi sampai 4 jam per lagu', 'Upload Roblox Personal & Group', 'Cek moderasi realtime'] },
+      { id: 'seven', label: 'Paid 7 Hari', price: 'Rp 35.000', perks: ['Konversi tanpa batas', `Durasi maks ${MAX_AUDIO_DURATION_SECONDS} detik per lagu`, 'Upload Roblox Personal & Group', 'Cek moderasi realtime'] },
       { id: 'thirty', label: 'Paid 30 Hari', price: 'Rp 100.000', perks: ['Semua benefit 7 hari', 'Lebih hemat untuk produksi rutin', 'Prioritas dukungan'], featured: true }
     ];
     return (
@@ -1963,7 +1978,7 @@ function App() {
               </div>
             ))}
           </div>
-          <p className="muted small landing-free-note">Akun Free dapat 3 konversi gratis untuk uji coba (maks 10 menit per lagu).</p>
+          <p className="muted small landing-free-note">Akun Free dapat 3 konversi gratis untuk uji coba (maks {MAX_AUDIO_DURATION_SECONDS} detik per lagu).</p>
         </section>
 
         <section className="landing-security">
@@ -2203,7 +2218,7 @@ function App() {
                   <b>Plan: {currentUser.subscription?.label || 'Free'}</b>
                   {currentUser.subscription?.plan === 'paid'
                     ? <p className="muted">Aktif sampai {new Date(currentUser.subscription.expiresAt).toLocaleDateString('id-ID')}</p>
-                    : <p className="muted">Free: {currentUser.usage?.conversions || 0}/3 konversi | Maks 10 menit</p>
+                    : <p className="muted">Free: {currentUser.usage?.conversions || 0}/3 konversi | Maks {MAX_AUDIO_DURATION_SECONDS} detik</p>
                   }
                 </div>
                 <button className="primary" onClick={() => setBillingForm({ ...billingForm, step: 'pricing' })}>Upgrade Plan</button>
@@ -2213,7 +2228,7 @@ function App() {
                     <div className="modal-content pricing-modal" onClick={(e) => e.stopPropagation()}>
                       <button className="modal-close" onClick={() => setBillingForm({ ...billingForm, step: null })}>×</button>
                       <h2>Pilih Paket</h2>
-                      <p className="muted">Upgrade untuk unlimited konversi dan durasi tanpa batas.</p>
+                      <p className="muted">Upgrade untuk unlimited konversi dengan durasi maks {MAX_AUDIO_DURATION_SECONDS} detik per lagu.</p>
                       <div className="pricing-grid">
                         <div className="pricing-card">
                           <h3>Free</h3>
@@ -2221,7 +2236,7 @@ function App() {
                           <p className="period">selamanya</p>
                           <ul>
                             <li>3 konversi</li>
-                            <li>Maks durasi 10 menit</li>
+                            <li>Maks durasi {MAX_AUDIO_DURATION_SECONDS} detik</li>
                             <li>Auto upload Roblox</li>
                             <li>Speed & amplify control</li>
                           </ul>
@@ -2233,7 +2248,7 @@ function App() {
                           <p className="period">untuk 7 hari</p>
                           <ul>
                             <li>Unlimited konversi</li>
-                            <li>Durasi tanpa batas</li>
+                            <li>Durasi maks {MAX_AUDIO_DURATION_SECONDS} detik</li>
                             <li>Auto upload Roblox</li>
                             <li>Priority support</li>
                           </ul>
@@ -2246,7 +2261,7 @@ function App() {
                           <span className="save-badge">Hemat 5%</span>
                           <ul>
                             <li>Unlimited konversi</li>
-                            <li>Durasi tanpa batas</li>
+                            <li>Durasi maks {MAX_AUDIO_DURATION_SECONDS} detik</li>
                             <li>Auto upload Roblox</li>
                             <li>Priority support</li>
                           </ul>
@@ -2494,7 +2509,7 @@ function App() {
                   <input
                     type="number"
                     min={30}
-                    max={600}
+                    max={MAX_AUDIO_DURATION_SECONDS}
                     step={10}
                     value={settings.maxDuration}
                     onChange={(e) => setSetting('maxDuration', Number(e.target.value) || 0)}
