@@ -278,7 +278,14 @@ function App() {
   const waveBoxRef = useRef(null);
 
   const summary = `Speed: ${settings.speed}x | Amplify: ${settings.amplify} dB | Max: ${settings.maxDuration}s`;
-  const activeGroup = groups.find((group) => group.groupId === selectedGroupId);
+  const selectedGroup = groups.find((group) => group.groupId === selectedGroupId);
+  const manualGroupId = cleanRobloxId(groupId);
+  const manualGroup = manualGroupId ? groups.find((group) => group.groupId === manualGroupId) : null;
+  const activeGroup = selectedGroup || manualGroup || null;
+  const activeGroupId = cleanRobloxId(selectedGroup?.groupId || manualGroupId || activeGroup?.groupId);
+  const hasStoredApiKeyForMode = mode === 'group'
+    ? Boolean(activeGroup?.hasApiKey || (activeGroupId && apiKeyStored?.hasApiKey))
+    : Boolean(apiKeyStored?.hasApiKey);
 
   useEffect(() => {
     // Hapus key lama plain/CryptoJS yang dulu pernah disimpan di localStorage.
@@ -341,17 +348,6 @@ function App() {
     script.setAttribute('data-client-key', gatewayInfo.midtrans.clientKey);
     document.head.appendChild(script);
   }, [gatewayInfo]);
-
-  useEffect(() => {
-    if (currentUser?.role === 'admin' && authToken && !adminMode) {
-      try {
-        const payload = JSON.parse(atob(authToken.split('.')[1]));
-        if (payload.role === 'admin') setAdminMode(true);
-      } catch {
-        // token invalid, skip
-      }
-    }
-  }, [currentUser, authToken]);
 
   useEffect(() => {
     if (!authToken) {
@@ -549,14 +545,16 @@ function App() {
   useEffect(() => {
     if (!history.length) return;
     const personalReady = Boolean(apiKey?.trim() || apiKeyStored?.hasApiKey);
-    const groupReady = mode === 'group' ? Boolean(activeGroup?.hasApiKey) : true;
+    const groupReady = mode === 'group'
+      ? Boolean(activeGroup?.hasApiKey || (activeGroupId && apiKeyStored?.hasApiKey))
+      : true;
     if (!personalReady && !groupReady) return;
     const hasPending = history.some((entry) => entry.parts?.some((p) => p.status === 'Pending' && p.operationId));
     if (!hasPending) return;
 
     const interval = setInterval(async () => {
       const inlineKey = apiKey?.trim();
-      const keyRef = inlineKey ? '' : (mode === 'group' && activeGroup ? activeGroup.groupId : 'personal');
+      const keyRef = inlineKey ? '' : (mode === 'group' ? activeGroupId : 'personal');
       if (!inlineKey && !keyRef) return;
       const pendingPairs = [];
       for (const entry of history) {
@@ -607,7 +605,7 @@ function App() {
       }));
     }, 60000);
     return () => clearInterval(interval);
-  }, [history, apiKey, apiKeyStored, mode, activeGroup, authToken]);
+  }, [history, apiKey, apiKeyStored, mode, activeGroup, activeGroupId, authToken]);
 
   const linkedGroupOptions = useMemo(() => groups.map((group) => (
     <option key={group.groupId} value={group.groupId}>{group.name} ({group.groupId})</option>
@@ -641,6 +639,22 @@ function App() {
 
   function authHeaders() {
     return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  }
+
+  function handleGroupSelect(value) {
+    const clean = cleanRobloxId(value);
+    setSelectedGroupId(clean);
+    if (clean) setGroupId(clean);
+  }
+
+  function handleManualGroupId(value) {
+    const clean = cleanRobloxId(value);
+    setGroupId(value);
+    if (clean && groups.some((group) => group.groupId === clean)) {
+      setSelectedGroupId(clean);
+    } else if (selectedGroupId && clean !== selectedGroupId) {
+      setSelectedGroupId('');
+    }
   }
 
   function profileSignatureFromPublic(profile = {}) {
@@ -834,20 +848,42 @@ function App() {
 
   async function saveProfile() {
     if (!authToken || !currentUser) return;
-    const inlinePersonalKey = apiKey?.trim();
-    const groupsPayload = groups.map((group) => {
+    const inlineApiKey = apiKey?.trim();
+    const groupTargetId = mode === 'group' ? activeGroupId : '';
+    const groupKeyTargetId = groupTargetId || cleanRobloxId(selectedGroupId) || cleanRobloxId(groupId);
+    const groupsForSave = groups.some((group) => group.groupId === groupKeyTargetId)
+      ? groups
+      : (mode === 'group' && groupKeyTargetId && inlineApiKey)
+        ? [
+          ...groups,
+          {
+            id: crypto.randomUUID(),
+            name: `Grup ${groupKeyTargetId}`,
+            groupId: groupKeyTargetId,
+            creatorUserId: '',
+            hasApiKey: false,
+            apiKeyFormat: 'empty'
+          }
+        ]
+        : groups;
+    const groupsPayload = groupsForSave.map((group) => {
       const out = {
         id: group.id,
-        name: group.name,
-        groupId: group.groupId,
-        creatorUserId: group.creatorUserId,
+        name: group.name || `Grup ${group.groupId}`,
+        groupId: cleanRobloxId(group.groupId),
+        creatorUserId: cleanRobloxId(group.creatorUserId),
         hasApiKey: Boolean(group.hasApiKey),
         apiKeyFormat: group.apiKeyFormat || (group.hasApiKey ? 'aes-256-gcm' : 'empty')
       };
-      // Hanya kirim plaintext kalau user baru saja edit (key in-memory). Kalau gak, server akan keep value yang sudah tersimpan.
+      // Hanya kirim plaintext kalau user baru saja edit. Kalau tidak, server akan keep value yang sudah tersimpan.
       if (group.apiKey && String(group.apiKey).trim()) out.apiKey = String(group.apiKey).trim();
+      if (mode === 'group' && inlineApiKey && groupKeyTargetId && out.groupId === groupKeyTargetId) {
+        out.apiKey = inlineApiKey;
+        out.hasApiKey = true;
+        out.apiKeyFormat = 'aes-256-gcm';
+      }
       return out;
-    });
+    }).filter((group) => group.groupId);
     if (userId.trim() && !cleanRobloxId(userId)) {
       notify('Roblox User ID harus angka.', 'error');
       return;
@@ -866,16 +902,16 @@ function App() {
     const profile = {
       robloxConfig: {
         mode,
-        userId,
-        groupId,
-        selectedGroupId,
-        ...(inlinePersonalKey ? { apiKey: inlinePersonalKey } : {})
+        userId: cleanRobloxId(userId),
+        groupId: cleanRobloxId(groupId),
+        selectedGroupId: cleanRobloxId(selectedGroupId || groupKeyTargetId),
+        ...(mode === 'personal' && inlineApiKey ? { apiKey: inlineApiKey } : {})
       },
       groups: groupsPayload,
       history: compactHistory(history)
     };
     const profileJson = profileSignatureFromPayload(profile);
-    const hasNewSecret = Boolean(inlinePersonalKey || groupsPayload.some((group) => group.apiKey));
+    const hasNewSecret = Boolean(inlineApiKey || groupsPayload.some((group) => group.apiKey));
     if (!hasNewSecret && profileJson === lastProfileSyncRef.current) {
       notify('Data Roblox sudah tersimpan.', 'info');
       return;
@@ -891,7 +927,7 @@ function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal menyimpan profile.');
       // Server hanya kirim balik metadata API key (hasApiKey, format), plaintext sekali kirim sudah dihapus dari memory di sini
-      if (inlinePersonalKey) setApiKey('');
+      if (inlineApiKey) setApiKey('');
       if (groupsPayload.some((g) => g.apiKey)) {
         setGroups((items) => items.map((group) => ({ ...group, apiKey: undefined })));
       }
@@ -1014,16 +1050,16 @@ function App() {
 
   function getRobloxUploadContext() {
     const hasInline = Boolean(apiKey?.trim());
-    const groupHasStoredKey = Boolean(activeGroup?.hasApiKey);
+    const groupHasStoredKey = Boolean(activeGroup?.hasApiKey || (activeGroupId && apiKeyStored?.hasApiKey));
     const personalHasStoredKey = Boolean(apiKeyStored?.hasApiKey);
     if (mode === 'group') {
-      const targetGroupId = cleanRobloxId(activeGroup?.groupId || groupId);
+      const targetGroupId = activeGroupId;
       if (!targetGroupId) throw new Error('Mode Group butuh Group ID angka yang valid.');
       if (!hasInline && !groupHasStoredKey) {
-        throw new Error('Group ini belum punya API key tersimpan. Buka Manajemen Grup, edit grup, dan tempel API key.');
+        throw new Error('Group ini belum punya API key tersimpan. Pilih grup tertaut, isi Group ID manual yang sama dengan grup tersimpan, atau tempel API key lalu klik Simpan Data Roblox.');
       }
       return {
-        keyRef: hasInline ? '' : (activeGroup?.groupId || ''),
+        keyRef: hasInline ? '' : targetGroupId,
         inlineApiKey: hasInline ? apiKey.trim() : '',
         creator: { groupId: targetGroupId },
         label: `Group ${targetGroupId}`
@@ -1416,9 +1452,9 @@ function App() {
       return;
     }
     const inlineKey = apiKey?.trim();
-    const groupRef = mode === 'group' && activeGroup ? activeGroup.groupId : '';
+    const groupRef = mode === 'group' ? activeGroupId : '';
     const personalReady = apiKeyStored?.hasApiKey;
-    const groupReady = Boolean(activeGroup?.hasApiKey);
+    const groupReady = Boolean(activeGroup?.hasApiKey || (activeGroupId && apiKeyStored?.hasApiKey));
     if (!inlineKey && !((mode === 'group' && groupReady) || (mode !== 'group' && personalReady))) {
       notify('Isi API key Roblox dulu di halaman API Keys untuk cek ulang.', 'error');
       return;
@@ -2455,12 +2491,12 @@ function App() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="field">
                     <span>Pilih Grup Tertaut</span>
-                    <select value={selectedGroupId} onChange={(e) => setSelectedGroupId(e.target.value)}>
+                    <select value={selectedGroupId} onChange={(e) => handleGroupSelect(e.target.value)}>
                       <option value="">Manual / belum pilih</option>
                       {linkedGroupOptions}
                     </select>
                   </label>
-                  <label className="field"><span>Group ID Manual</span><input value={groupId} onChange={(e) => setGroupId(e.target.value)} /></label>
+                  <label className="field"><span>Group ID Manual</span><input value={groupId} onChange={(e) => handleManualGroupId(e.target.value)} /></label>
                 </div>
               )}
               <label className="field">
@@ -2469,9 +2505,9 @@ function App() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={apiKeyStored?.hasApiKey ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
+                  placeholder={hasStoredApiKeyForMode ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
                 />
-                {apiKeyStored?.hasApiKey ? (
+                {hasStoredApiKeyForMode ? (
                   <small className="muted">Key tersimpan di server pakai AES-256-GCM. Plaintext tidak dikirim balik ke browser.</small>
                 ) : null}
               </label>
@@ -2688,12 +2724,12 @@ function App() {
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="field">
                   <span>Pilih Grup Tertaut</span>
-                  <select value={selectedGroupId} onChange={(e) => setSelectedGroupId(e.target.value)}>
+                  <select value={selectedGroupId} onChange={(e) => handleGroupSelect(e.target.value)}>
                     <option value="">Manual / belum pilih</option>
                     {linkedGroupOptions}
                   </select>
                 </label>
-                <label className="field"><span>Group ID Manual</span><input value={groupId} onChange={(e) => setGroupId(e.target.value)} /></label>
+                <label className="field"><span>Group ID Manual</span><input value={groupId} onChange={(e) => handleManualGroupId(e.target.value)} /></label>
               </div>
             )}
             <label className="field">
@@ -2702,7 +2738,7 @@ function App() {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={apiKeyStored?.hasApiKey ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
+                placeholder={hasStoredApiKeyForMode ? '✓ Tersimpan terenkripsi di server (kosongkan = pakai key yang sudah tersimpan)' : 'Tempel Open Cloud API key di sini'}
               />
             </label>
             <p className="muted small">API key disimpan terenkripsi AES-256-GCM di server. Plaintext tidak pernah dikirim balik ke browser sehingga aman walau bundle JS terbongkar.</p>

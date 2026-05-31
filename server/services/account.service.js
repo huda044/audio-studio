@@ -825,7 +825,7 @@ export async function updateUserProfile(id, profile) {
     const previousConfig = previousProfile.robloxConfig || {};
     const previousGroups = Array.isArray(previousProfile.groups) ? previousProfile.groups : [];
     const incomingConfig = profile.robloxConfig || {};
-    const cleanGroups = Array.isArray(profile.groups)
+    let cleanGroups = Array.isArray(profile.groups)
       ? profile.groups.slice(0, 30).map((group) => {
         const previousGroup = previousGroups.find((item) => item.id === group.id || item.groupId === group.groupId) || {};
         return {
@@ -870,6 +870,24 @@ export async function updateUserProfile(id, profile) {
       selectedGroupId: String(incomingConfig.selectedGroupId || '').slice(0, 32),
       encryptedApiKey: pickIncomingApiKey(incomingConfig.apiKey, incomingConfig.encryptedApiKey, previousConfig.encryptedApiKey).slice(0, 4096)
     };
+    const configGroupId = String(cleanConfig.selectedGroupId || cleanConfig.groupId || '').trim();
+    if (cleanConfig.mode === 'group' && configGroupId && cleanConfig.encryptedApiKey) {
+      const existingGroup = cleanGroups.find((group) => group.groupId === configGroupId || group.id === configGroupId);
+      if (existingGroup && !existingGroup.encryptedApiKey) {
+        existingGroup.encryptedApiKey = cleanConfig.encryptedApiKey;
+      } else if (!existingGroup && cleanGroups.length < 30) {
+        cleanGroups = [
+          ...cleanGroups,
+          {
+            id: nanoid(12),
+            name: `Grup ${configGroupId}`,
+            groupId: configGroupId,
+            creatorUserId: '',
+            encryptedApiKey: cleanConfig.encryptedApiKey
+          }
+        ];
+      }
+    }
 
     user.profile = {
       robloxConfig: cleanConfig,
@@ -892,6 +910,11 @@ export function resolveServerApiKey(user, { groupId } = {}) {
   if (groupId) {
     const group = (profile.groups || []).find((item) => item.groupId === groupId || item.id === groupId);
     encrypted = group?.encryptedApiKey || '';
+    const config = profile.robloxConfig || {};
+    const configGroupId = String(config.groupId || config.selectedGroupId || '').trim();
+    if (!encrypted && config.mode === 'group' && configGroupId === String(groupId).trim()) {
+      encrypted = config.encryptedApiKey || '';
+    }
   } else {
     encrypted = profile.robloxConfig?.encryptedApiKey || '';
   }
