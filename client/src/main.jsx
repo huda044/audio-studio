@@ -1145,7 +1145,7 @@ function App() {
   function failPipeline(error, fallbackStep = 0) {
     setPipelineStatus((current) => ({
       state: 'error',
-      stepIndex: current.stepIndex || fallbackStep,
+      stepIndex: current.state === 'running' ? current.stepIndex : fallbackStep,
       message: error.message,
       error: error.message,
       details: Array.isArray(error.details) ? error.details : []
@@ -1304,7 +1304,7 @@ function App() {
         notify('Konversi dibatalkan.', 'info');
       } else {
         setLastError(error.message);
-        failPipeline(error, 0);
+        failPipeline(error, 3);
         notify(error.message, 'error');
       }
     } finally {
@@ -1363,6 +1363,33 @@ function App() {
 
   function cancelLoading() {
     abortRef.current?.abort();
+  }
+
+  function retryPipelineStep() {
+    const stepIndex = pipelineStatus.stepIndex || 0;
+    setLastError(null);
+    if (stepIndex <= 1) {
+      handleDownloadSourceClick();
+      return;
+    }
+    if (stepIndex === 2) {
+      handleProcessClick();
+      return;
+    }
+    convertAndUpload();
+  }
+
+  function clearPipelineError() {
+    setLastError(null);
+    setPipelineStatus((current) => current.state === 'error'
+      ? {
+          state: 'idle',
+          stepIndex: 0,
+          message: 'Siap lanjut. Periksa input, lalu jalankan tahap yang dibutuhkan.',
+          error: '',
+          details: []
+        }
+      : current);
   }
 
   function addGroup() {
@@ -1797,6 +1824,45 @@ function App() {
     return 'pending';
   }
 
+  function actionStatus(kind) {
+    const errorText = lastError || pipelineStatus.error || pipelineStatus.message;
+    if (kind === 'download') {
+      if (loading && loadingStepIndex <= 1) {
+        return { state: 'active', text: loadingStep || 'Download sedang berjalan...' };
+      }
+      if (pipelineStatus.state === 'error' && pipelineStatus.stepIndex <= 1) {
+        return { state: 'error', text: errorText };
+      }
+      if (stagedSource) return { state: 'done', text: 'Sumber audio sudah siap.' };
+      if (audioFile || youtubeUrl.trim()) return { state: 'pending', text: 'Siap download sumber.' };
+      return { state: 'pending', text: 'Pilih file atau tempel link dulu.' };
+    }
+
+    if (kind === 'convert') {
+      if (loading && loadingStepIndex === 2) {
+        return { state: 'active', text: loadingStep || 'Konversi sedang berjalan...' };
+      }
+      if (pipelineStatus.state === 'error' && pipelineStatus.stepIndex === 2) {
+        return { state: 'error', text: errorText };
+      }
+      if (pipelineStatus.state === 'stale') return { state: 'warning', text: 'Setting berubah, konversi ulang.' };
+      if (processed) return { state: 'done', text: 'Output OGG sudah siap.' };
+      if (stagedSource) return { state: 'pending', text: 'Siap konversi OGG.' };
+      return { state: 'pending', text: 'Download sumber dulu.' };
+    }
+
+    if (loading && loadingStepIndex >= 3) {
+      return { state: 'active', text: loadingStep || 'Upload Roblox sedang berjalan...' };
+    }
+    if (pipelineStatus.state === 'error' && pipelineStatus.stepIndex >= 3) {
+      return { state: 'error', text: errorText };
+    }
+    if (pipelineStatus.state === 'uploaded') return { state: 'done', text: 'Upload Roblox selesai.' };
+    if (pipelineStatus.state === 'stale') return { state: 'warning', text: 'Konversi ulang dulu.' };
+    if (processed) return { state: 'pending', text: 'Siap upload Roblox.' };
+    return { state: 'pending', text: 'Konversi OGG dulu.' };
+  }
+
   function renderLandingPage() {
     const features = [
       {
@@ -2053,10 +2119,14 @@ function App() {
     );
   }
 
+  const downloadActionStatus = actionStatus('download');
+  const convertActionStatus = actionStatus('convert');
+  const uploadActionStatus = actionStatus('upload');
+
   return (
     <>
       <Toast toast={toast} />
-      {loading && (
+      {false && loading && (
         <div className="loading-overlay">
           <div className="loading-card">
             <Loader2 className="spin" size={36} />
@@ -2082,7 +2152,7 @@ function App() {
           </div>
         </div>
       )}
-      {lastError && !loading && (
+      {false && lastError && !loading && (
         <div className="error-banner">
           <div>
             <b>Gagal memproses</b>
@@ -2590,28 +2660,40 @@ function App() {
             <section className="panel side-panel">
               <h3 className="side-title">Aksi</h3>
               <div className="side-actions">
-                <button
-                  className="secondary"
-                  onClick={handleDownloadSourceClick}
-                  disabled={loading || (!audioFile && !youtubeUrl) || Boolean(stagedSource)}
-                >
-                  {loading && loadingStepIndex <= 1 ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />} Next: Download
-                </button>
-                <button
-                  className="secondary"
-                  onClick={handleProcessClick}
-                  disabled={loading || !stagedSource || (Boolean(processed) && pipelineStatus.state !== 'stale')}
-                >
-                  {loading && loadingStepIndex === 2 ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />}
-                  {pipelineStatus.state === 'stale' ? 'Konversi Ulang OGG' : 'Next: Konversi OGG'}
-                </button>
-                <button
-                  className="primary"
-                  onClick={convertAndUpload}
-                  disabled={loading || !processed || pipelineStatus.state === 'stale'}
-                >
-                  {loading && loadingStepIndex >= 3 ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Next: Upload Roblox
-                </button>
+                <div className="side-action-row">
+                  <button
+                    className="secondary"
+                    onClick={handleDownloadSourceClick}
+                    disabled={loading || (!audioFile && !youtubeUrl) || Boolean(stagedSource)}
+                  >
+                    {loading && loadingStepIndex <= 1 ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />} Next: Download
+                  </button>
+                  <span className={`action-status ${downloadActionStatus.state}`}>{downloadActionStatus.text}</span>
+                </div>
+                <div className="side-action-row">
+                  <button
+                    className="secondary"
+                    onClick={handleProcessClick}
+                    disabled={loading || !stagedSource || (Boolean(processed) && pipelineStatus.state !== 'stale')}
+                  >
+                    {loading && loadingStepIndex === 2 ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />}
+                    {pipelineStatus.state === 'stale' ? 'Konversi Ulang OGG' : 'Next: Konversi OGG'}
+                  </button>
+                  <span className={`action-status ${convertActionStatus.state}`}>{convertActionStatus.text}</span>
+                </div>
+                <div className="side-action-row">
+                  <button
+                    className="primary"
+                    onClick={convertAndUpload}
+                    disabled={loading || !processed || pipelineStatus.state === 'stale'}
+                  >
+                    {loading && loadingStepIndex >= 3 ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Next: Upload Roblox
+                  </button>
+                  <span className={`action-status ${uploadActionStatus.state}`}>{uploadActionStatus.text}</span>
+                </div>
+                {loading && (
+                  <button className="icon-wide bad" onClick={cancelLoading}>Batalkan proses</button>
+                )}
                 {processed && (
                   <a
                     className="secondary"
@@ -2657,6 +2739,12 @@ function App() {
                       <p>{item}</p>
                     </div>
                   ))}
+                </div>
+              )}
+              {pipelineStatus.state === 'error' && (
+                <div className="inline-error-actions">
+                  <button className="secondary" onClick={retryPipelineStep}>Coba Lagi</button>
+                  <button className="icon-wide" onClick={clearPipelineError}>Tutup</button>
                 </div>
               )}
               {pipelineStatus.state === 'stale' && <p className="step-note warning">Klik Konversi lagi supaya preset/manual terbaru benar-benar masuk ke file OGG.</p>}
