@@ -698,6 +698,47 @@ function App() {
     return profileSignatureFromPublic(publicProfile);
   }
 
+  function profileGroupsMetadata(items = groups) {
+    return (Array.isArray(items) ? items : []).map((group) => ({
+      id: group.id,
+      name: group.name || `Grup ${group.groupId}`,
+      groupId: cleanRobloxId(group.groupId),
+      creatorUserId: cleanRobloxId(group.creatorUserId),
+      hasApiKey: Boolean(group.hasApiKey),
+      apiKeyFormat: group.apiKeyFormat || (group.hasApiKey ? 'aes-256-gcm' : 'empty')
+    })).filter((group) => group.groupId);
+  }
+
+  function profileSnapshot(historyOverride = history) {
+    return {
+      robloxConfig: {
+        mode,
+        userId: cleanRobloxId(userId),
+        groupId: cleanRobloxId(groupId),
+        selectedGroupId: cleanRobloxId(selectedGroupId || activeGroupId)
+      },
+      groups: profileGroupsMetadata(groups),
+      history: compactHistory(historyOverride)
+    };
+  }
+
+  async function syncProfileSnapshot(historyOverride = history) {
+    if (!authToken || !currentUser) return null;
+    const profile = profileSnapshot(historyOverride);
+    const response = await fetch(`${API_BASE}/api/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ profile })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Gagal sinkron data profil.');
+    if (data.user) {
+      setCurrentUser(data.user);
+      lastProfileSyncRef.current = profileSignatureFromPublic(data.user.profile || {});
+    }
+    return data.user || null;
+  }
+
   function applyUserProfile(user) {
     setCurrentUser(user);
     const profile = user.profile || {};
@@ -1242,8 +1283,12 @@ function App() {
         },
         expired: false
       };
-      setHistory((items) => compactHistory([entry, ...items]));
+      const nextHistory = compactHistory([entry, ...history]);
+      setHistory(nextHistory);
       setLastUploadResult(entry);
+      syncProfileSnapshot(nextHistory).catch((error) => {
+        notify(`Upload berhasil, tapi sinkron riwayat gagal: ${error.message}`, 'error');
+      });
       if (uploadSummary.failed && !uploadSummary.accepted && !uploadSummary.pending) {
         finishPipeline('error', 3, 'Upload terkirim, tetapi Roblox menolak semua part. Lihat detail error per part.');
         notify('Upload Roblox gagal pada semua part.', 'error');
@@ -1472,7 +1517,7 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Gagal cek status.');
-      setHistory((items) => items.map((item) => {
+      const nextHistory = history.map((item) => {
         if (item.id !== entry.id) return item;
         return {
           ...item,
@@ -1484,7 +1529,9 @@ function App() {
             error: data.error || null
           } : p)
         };
-      }));
+      });
+      setHistory(nextHistory);
+      syncProfileSnapshot(nextHistory).catch(() => {});
       if (data.status === 'Accepted') notify('Asset sudah diterima Roblox.');
       else if (data.status === 'Failed') notify(data.error || 'Asset ditolak Roblox.', 'error');
       else notify('Masih dalam review Roblox.', 'info');
