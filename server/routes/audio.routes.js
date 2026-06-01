@@ -254,7 +254,8 @@ router.get('/youtube-cookies-status', infoLimit, async (_req, res, next) => {
       hasVisitorCookie: Boolean(status.hasVisitorCookie),
       requiredMissing: Array.isArray(status.requiredMissing) ? status.requiredMissing : [],
       envSet: status.envSet,
-      hasFile: Boolean(status.file)
+      hasFile: Boolean(status.file),
+      env: status.env || null
     };
     res.json(safe);
   } catch (error) {

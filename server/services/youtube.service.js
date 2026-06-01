@@ -23,6 +23,7 @@ let cachedYtDlpPath;
 let cachedCookiesKey = '';
 let cachedCookiesFile = '';
 let cookieStatus = { state: 'absent', validCount: 0, totalLines: 0, reason: '', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
+let cookieEnvDebug = { source: 'none', rawLength: 0, decodedLength: 0, decodedEncoding: '', decodedLooksBinary: false, decodedHasNetscapeHeader: false, decodedHasTabs: false };
 let cookieLogged = false;
 
 export function getCookieStatus() {
@@ -35,7 +36,8 @@ export function inspectCookies() {
   return {
     ...cookieStatus,
     file: file || null,
-    envSet: hasCookieAttempt()
+    envSet: hasCookieAttempt(),
+    env: { ...cookieEnvDebug }
   };
 }
 
@@ -277,6 +279,18 @@ function looksBinary(text) {
   return bad > Math.max(8, sample.length * 0.01);
 }
 
+function setCookieEnvDebug(source, raw, decoded = '', encoding = 'text') {
+  cookieEnvDebug = {
+    source,
+    rawLength: String(raw || '').length,
+    decodedLength: String(decoded || '').length,
+    decodedEncoding: encoding,
+    decodedLooksBinary: looksBinary(String(decoded || '')),
+    decodedHasNetscapeHeader: String(decoded || '').includes('Netscape HTTP Cookie File'),
+    decodedHasTabs: String(decoded || '').includes('\t')
+  };
+}
+
 function decodeUtf16Be(buffer) {
   const swapped = Buffer.alloc(buffer.length);
   for (let i = 0; i < buffer.length; i += 2) {
@@ -286,21 +300,31 @@ function decodeUtf16Be(buffer) {
   return swapped.toString('utf16le').replace(/^\uFEFF/, '');
 }
 
-function decodeCookieBase64(raw) {
-  const cleaned = String(raw || '')
+function decodeCookieBase64Details(raw) {
+  const rawText = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
+  if (rawText.includes('Netscape HTTP Cookie File') || rawText.includes('\t') || rawText.includes('youtube.com')) {
+    return { text: rawText, encoding: 'plain-text-in-base64-env' };
+  }
+  const maybeUrlDecoded = rawText.includes('%09') || rawText.includes('%0A')
+    ? decodeURIComponent(rawText)
+    : rawText;
+  if (maybeUrlDecoded !== rawText && (maybeUrlDecoded.includes('\t') || maybeUrlDecoded.includes('Netscape HTTP Cookie File'))) {
+    return { text: maybeUrlDecoded, encoding: 'url-encoded-text-in-base64-env' };
+  }
+
+  const cleaned = maybeUrlDecoded
     .trim()
     .replace(/^data:[^,]+,/, '')
-    .replace(/^['"]|['"]$/g, '')
     .replace(/\s+/g, '');
-  if (!cleaned) return '';
+  if (!cleaned) return { text: '', encoding: 'empty' };
   const buffer = Buffer.from(cleaned, 'base64');
-  if (!buffer.length) return '';
+  if (!buffer.length) return { text: '', encoding: 'empty-base64' };
 
   if (buffer[0] === 0xFF && buffer[1] === 0xFE) {
-    return buffer.toString('utf16le').replace(/^\uFEFF/, '');
+    return { text: buffer.toString('utf16le').replace(/^\uFEFF/, ''), encoding: 'utf16le-bom' };
   }
   if (buffer[0] === 0xFE && buffer[1] === 0xFF) {
-    return decodeUtf16Be(buffer.subarray(2));
+    return { text: decodeUtf16Be(buffer.subarray(2)), encoding: 'utf16be-bom' };
   }
 
   const sampleLength = Math.min(buffer.length, 4000);
@@ -313,13 +337,31 @@ function decodeCookieBase64(raw) {
   }
   const pairCount = Math.max(1, Math.floor(sampleLength / 2));
   if (oddNulls > pairCount * 0.3 && evenNulls < pairCount * 0.05) {
-    return buffer.toString('utf16le').replace(/^\uFEFF/, '');
+    return { text: buffer.toString('utf16le').replace(/^\uFEFF/, ''), encoding: 'utf16le' };
   }
   if (evenNulls > pairCount * 0.3 && oddNulls < pairCount * 0.05) {
-    return decodeUtf16Be(buffer);
+    return { text: decodeUtf16Be(buffer), encoding: 'utf16be' };
   }
 
-  return buffer.toString('utf8');
+  const text = buffer.toString('utf8');
+  const compact = text.trim().replace(/\s+/g, '');
+  if (
+    !text.includes('\t')
+    && !text.includes('Netscape HTTP Cookie File')
+    && compact.length > 40
+    && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+  ) {
+    const nested = decodeCookieBase64Details(compact);
+    if (nested.text && !looksBinary(nested.text)) {
+      return { text: nested.text, encoding: `double-base64-${nested.encoding}` };
+    }
+  }
+
+  return { text, encoding: 'utf8' };
+}
+
+function decodeCookieBase64(raw) {
+  return decodeCookieBase64Details(raw).text;
 }
 
 function jsonCookiesToNetscape(raw) {
@@ -460,18 +502,31 @@ function normalizeCookieText(raw) {
 
 function envCookieText() {
   const rawText = process.env.YTDLP_COOKIES_TEXT || process.env.YOUTUBE_COOKIES_TEXT || '';
-  if (rawText) return normalizeCookieText(rawText);
+  if (rawText) {
+    setCookieEnvDebug(process.env.YTDLP_COOKIES_TEXT ? 'YTDLP_COOKIES_TEXT' : 'YOUTUBE_COOKIES_TEXT', rawText, rawText, 'text');
+    return normalizeCookieText(rawText);
+  }
   const rawBase64 = process.env.YTDLP_COOKIES_BASE64 || process.env.YOUTUBE_COOKIES_BASE64 || '';
   if (rawBase64) {
     try {
-      return normalizeCookieText(decodeCookieBase64(rawBase64));
+      const decoded = decodeCookieBase64Details(rawBase64);
+      setCookieEnvDebug(process.env.YTDLP_COOKIES_BASE64 ? 'YTDLP_COOKIES_BASE64' : 'YOUTUBE_COOKIES_BASE64', rawBase64, decoded.text, decoded.encoding);
+      return normalizeCookieText(decoded.text);
     } catch {
+      setCookieEnvDebug(process.env.YTDLP_COOKIES_BASE64 ? 'YTDLP_COOKIES_BASE64' : 'YOUTUBE_COOKIES_BASE64', rawBase64, '', 'base64-decode-failed');
       cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'base64-decode-failed', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
       return '';
     }
   }
-  if (process.env.YOUTUBE_COOKIES_JSON) return normalizeCookieText(process.env.YOUTUBE_COOKIES_JSON);
-  if (process.env.YOUTUBE_COOKIE) return normalizeCookieText(process.env.YOUTUBE_COOKIE);
+  if (process.env.YOUTUBE_COOKIES_JSON) {
+    setCookieEnvDebug('YOUTUBE_COOKIES_JSON', process.env.YOUTUBE_COOKIES_JSON, process.env.YOUTUBE_COOKIES_JSON, 'json');
+    return normalizeCookieText(process.env.YOUTUBE_COOKIES_JSON);
+  }
+  if (process.env.YOUTUBE_COOKIE) {
+    setCookieEnvDebug('YOUTUBE_COOKIE', process.env.YOUTUBE_COOKIE, process.env.YOUTUBE_COOKIE, 'cookie-header');
+    return normalizeCookieText(process.env.YOUTUBE_COOKIE);
+  }
+  setCookieEnvDebug('none', '', '', '');
   return '';
 }
 
