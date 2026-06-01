@@ -175,6 +175,23 @@ function fallbackYoutubeMeta(sourceUrl) {
   };
 }
 
+async function hydrateYoutubeMeta(sourceUrl, meta = {}) {
+  if (Number(meta.duration || 0) > 0) return meta;
+  try {
+    const info = await getYoutubeInfo(sourceUrl);
+    return {
+      ...meta,
+      ...info,
+      title: info.title || meta.title,
+      thumbnail: info.thumbnail || meta.thumbnail,
+      duration: Number(info.duration || meta.duration || 0),
+      durationSource: info.durationSource || meta.durationSource || 'youtube-info'
+    };
+  } catch {
+    return meta;
+  }
+}
+
 function sourceFileNameFromPath(filePath) {
   return path.basename(filePath || '');
 }
@@ -323,6 +340,9 @@ router.post('/download-source', processLimit, upload.single('audio'), async (req
           meta = await getSoundCloudInfo(sourceUrl);
         } else {
           meta = fallbackYoutubeMeta(sourceUrl);
+        }
+        if (sourceKind === 'youtube') {
+          meta = await hydrateYoutubeMeta(sourceUrl, meta);
         }
       }
 
@@ -552,6 +572,9 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
           meta = await getSoundCloudInfo(sourceUrl);
         } else {
           meta = fallbackYoutubeMeta(sourceUrl);
+        }
+        if (sourceKind === 'youtube') {
+          meta = await hydrateYoutubeMeta(sourceUrl, meta);
         }
       }
 

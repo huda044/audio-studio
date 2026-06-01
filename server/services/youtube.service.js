@@ -582,7 +582,7 @@ function botCheckMessage() {
 }
 
 function getYtdlOptions() {
-  const proxy = resolveYoutubeProxy();
+  const proxy = options.noProxy ? '' : resolveYoutubeProxy();
   const key = JSON.stringify({
     cookieJson: process.env.YOUTUBE_COOKIES_JSON || '',
     cookie: process.env.YOUTUBE_COOKIE || '',
@@ -1364,9 +1364,21 @@ function orderedStrategies(options = {}) {
   }
 
   if (proxyStrict) {
-    const proxied = strategies.filter((strategy) => strategy.startsWith('yt-dlp'));
+    const proxiedSections = strategies.filter((strategy) => strategy.startsWith('yt-dlp-section'));
+    const proxiedFull = strategies.filter((strategy) => strategy.startsWith('yt-dlp') && !strategy.startsWith('yt-dlp-section'));
+    const proxied = options.sectionEnd
+      ? [...proxiedSections, ...proxiedFull]
+      : [...proxiedFull, ...proxiedSections];
     for (const fallback of ['yt-dlp-section', 'yt-dlp']) {
       if (!proxied.includes(fallback)) proxied.push(fallback);
+    }
+    if (!envEnabled('YOUTUBE_PROXY_REQUIRED', false) && envEnabled('YOUTUBE_PROXY_ALLOW_DIRECT_FALLBACK', true)) {
+      const directFallbacks = options.sectionEnd
+        ? ['direct-section-noproxy-mweb', 'direct-section-noproxy-ios', 'direct-section-noproxy', 'direct-url-noproxy-mweb', 'direct-url-noproxy', 'ytdl-core']
+        : ['direct-url-noproxy-mweb', 'direct-url-noproxy', 'ytdl-core'];
+      for (const fallback of directFallbacks) {
+        if (!proxied.includes(fallback)) proxied.push(fallback);
+      }
     }
     return proxied.length ? proxied : ['yt-dlp-section-mweb', 'yt-dlp-mweb', 'yt-dlp'];
   }
@@ -1376,15 +1388,17 @@ function orderedStrategies(options = {}) {
 
 function strategyOptions(strategy, options = {}) {
   const next = { ...options };
-  if (strategy.endsWith('-default')) {
+  const normalized = strategy.replace('-noproxy', '');
+  if (strategy.includes('-noproxy')) next.noProxy = true;
+  if (normalized.endsWith('-default')) {
     next.extractorArgs = 'youtube:player_client=default';
-  } else if (strategy.endsWith('-tv')) {
+  } else if (normalized.endsWith('-tv')) {
     next.extractorArgs = 'youtube:player_client=tv_embedded,web';
-  } else if (strategy.endsWith('-mweb')) {
+  } else if (normalized.endsWith('-mweb')) {
     next.extractorArgs = 'youtube:player_client=mweb';
-  } else if (strategy.endsWith('-ios')) {
+  } else if (normalized.endsWith('-ios')) {
     next.extractorArgs = 'youtube:player_client=ios';
-  } else if (strategy.endsWith('-web-embedded')) {
+  } else if (normalized.endsWith('-web-embedded')) {
     next.extractorArgs = 'youtube:player_client=web_embedded';
   }
   return next;
@@ -1411,7 +1425,7 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy, options));
         return { path: outputPath, method: strategy, failures, sectionEnd: options.sectionEnd || 0 };
       }
-      if (strategy === 'yt-dlp' || strategy === 'yt-dlp-default' || strategy === 'yt-dlp-tv' || strategy === 'yt-dlp-mweb' || strategy === 'yt-dlp-ios') {
+      if (strategy.startsWith('yt-dlp')) {
         const outputPath = await downloadWithYtDlp(url, uploadsDir, strategyOptions(strategy));
         return { path: outputPath, method: strategy, failures };
       }
