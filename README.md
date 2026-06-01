@@ -49,43 +49,55 @@ npm run dev
 
 Buka URL Vite yang muncul, biasanya `http://localhost:5173`.
 
-## Deploy Gratis
+## Deploy
 
-Frontend React bisa dipublish ke Vercel gratis dari folder `client`.
+Project ini dideploy dalam dua bagian: frontend React di Vercel, backend Express di Hugging Face Space (Docker).
+
+### Frontend di Vercel
 
 1. Push project ke GitHub.
-2. Buka Vercel, pilih **Add New Project**.
-3. Pilih repository project ini.
-4. Set **Root Directory** ke `client`.
-5. Tambahkan Environment Variable:
+2. Buka Vercel, pilih **Add New Project**, lalu pilih repo ini.
+3. Set **Root Directory** ke `client`.
+4. Tambahkan Environment Variable:
 
-```bash
-VITE_API_BASE=https://url-backend-kamu
-```
+   ```bash
+   VITE_API_BASE=https://<username>-<space-name>.hf.space
+   VITE_GOOGLE_CLIENT_ID=<opsional>
+   ```
 
-Backend Express sebaiknya dipublish ke hosting Node terpisah seperti Render, Railway, Fly.io, atau VPS kecil, karena proses audio memakai FFmpeg, upload file, temporary storage, dan request yang bisa lama. Setelah backend online, isi URL frontend Vercel ke env backend:
+5. Deploy. Vercel akan build folder `client` dengan Vite dan publish `dist`.
 
-```bash
-CLIENT_ORIGIN=https://nama-project.vercel.app
-```
+### Backend di Hugging Face Space (Docker)
 
-Untuk akun dan konfigurasi Roblox yang tidak reset saat redeploy, backend harus punya storage persisten. Cara paling aman sekarang adalah isi env `DATABASE_URL` dari PostgreSQL gratis/managed dan isi `SECRETS_MASTER_KEY` tetap. Kalau `DATABASE_URL` kosong, backend jatuh ke file JSON di `DATA_DIR`; ini bisa hilang di hosting/container gratis saat rebuild.
+Backend memakai FFmpeg, yt-dlp, dan upload file, jadi tidak cocok untuk Vercel serverless. Repo ini sudah punya `Dockerfile` dan front-matter HF Space di `README.md` (`sdk: docker`, `app_port: 7860`).
+
+1. Buat Space baru di Hugging Face dengan SDK **Docker**.
+2. Push repo ini ke Space (atau hubungkan dari GitHub).
+3. Di Space Settings → Variables and secrets, isi minimal:
+
+   ```bash
+   CLIENT_ORIGIN=https://<frontend-vercel>.vercel.app
+   APP_PUBLIC_URL=https://<frontend-vercel>.vercel.app
+   JWT_SECRET=<random-panjang-stabil>
+   SECRETS_MASTER_KEY=<output node server/scripts/generate-master-key.mjs>
+   DATABASE_URL=postgres://user:pass@host:5432/db
+   GOOGLE_CLIENT_ID=<opsional>
+   ADMIN_BOOTSTRAP_USERNAME=admin
+   ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+   ADMIN_BOOTSTRAP_PASSWORD=<password-admin-kuat>
+   ```
+
+4. Build Space. Container akan listen di port `7860` dan expose API di URL Space, contoh `https://<username>-<space-name>.hf.space`.
+5. Pakai URL itu sebagai `VITE_API_BASE` di Vercel, lalu redeploy frontend.
+
+Catatan penting:
+
+- HF Space free tidak punya persistent disk untuk `/data`. Selalu isi `DATABASE_URL` dari PostgreSQL managed (Neon/Supabase/Railway/Render DB) supaya akun, API key Roblox terenkripsi, group/creator id, history, dan invoice tidak hilang saat Space rebuild atau restart.
+- `SECRETS_MASTER_KEY` wajib tetap sama antar deploy, kalau berubah API key Roblox lama tidak bisa didekripsi.
+- HF Space free bisa sleep saat idle. Request pertama setelah idle akan lebih lambat karena cold start container.
+- Detail troubleshooting yt-dlp/cookies/PO token ada di `server/README_DEPLOY.md`.
 
 Untuk lokal, contoh env tersedia di `client/.env.example` dan `server/.env.example`.
-
-Deployment saat ini:
-
-- Frontend: `https://client-daax4042s-projects.vercel.app`
-- Backend API: `https://server-eight-nu-65.vercel.app`
-
-Catatan Vercel gratis: backend audio berjalan sebagai serverless function. File pendek sampai sedang cocok untuk testing, preview, dan upload ringan.
-
-Untuk mode public yang lebih kuat dan masih gratis, gunakan:
-
-- Frontend: Vercel Free
-- Backend: Render Free Web Service
-
-Saya sudah menambahkan `render.yaml` untuk deploy backend ke Render. Backend Render default menerima upload sampai `250MB` melalui env `MAX_UPLOAD_MB=250`. Lihat panduan ringkas di `server/README_DEPLOY.md`.
 
 ## Endpoint Backend
 

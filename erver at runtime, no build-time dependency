@@ -1,5 +1,0 @@
-[33mc454ef3[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31mhf/main[m[33m)[m trigger rebuild with VITE_GOOGLE_CLIENT_ID
-[33m5c0417e[m fix: SMTP timeout, non-blocking email, forgot password, hide Google btn when not configured
-[33mf65a784[m feat: forgot password flow, rate limit fix, debounce admin, full audit
-[33m91022e5[m fix: remove orphan code in account.service, fallback writable uploads/data dir, fix Dockerfile APP_NAME
-[33ma9406c4[m fix: restore adminStats body, add promote-to-admin endpoint and CMS toolbar

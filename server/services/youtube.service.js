@@ -581,8 +581,8 @@ function botCheckMessage() {
   return 'YouTube menolak request dari hosting ini karena bot-check. Tambahkan cookie YouTube ke secret YTDLP_COOKIES_TEXT/YTDLP_COOKIES_BASE64/YTDLP_COOKIES_FILE di backend, lalu restart Space. Atau upload file audio langsung.';
 }
 
-function getYtdlOptions() {
-  const proxy = options.noProxy ? '' : resolveYoutubeProxy();
+function getYtdlOptions(opts = {}) {
+  const proxy = opts.noProxy ? '' : resolveYoutubeProxy();
   const key = JSON.stringify({
     cookieJson: process.env.YOUTUBE_COOKIES_JSON || '',
     cookie: process.env.YOUTUBE_COOKIE || '',
@@ -591,7 +591,7 @@ function getYtdlOptions() {
   if (cachedYtdlOptions && cachedYtdlOptionsKey === key) return cachedYtdlOptions;
 
   const cookies = parseCookiesJson(process.env.YOUTUBE_COOKIES_JSON);
-  const options = {
+  const ytdlOpts = {
     requestOptions: {
       headers: {
         'user-agent': USER_AGENT,
@@ -601,16 +601,16 @@ function getYtdlOptions() {
   };
 
   if (proxy) {
-    options.agent = ytdl.createProxyAgent({ uri: proxy }, cookies);
+    ytdlOpts.agent = ytdl.createProxyAgent({ uri: proxy }, cookies);
   } else if (cookies.length) {
-    options.agent = ytdl.createAgent(cookies);
+    ytdlOpts.agent = ytdl.createAgent(cookies);
   } else if (process.env.YOUTUBE_COOKIE) {
-    options.requestOptions.headers.cookie = process.env.YOUTUBE_COOKIE;
+    ytdlOpts.requestOptions.headers.cookie = process.env.YOUTUBE_COOKIE;
   }
 
   cachedYtdlOptionsKey = key;
-  cachedYtdlOptions = options;
-  return options;
+  cachedYtdlOptions = ytdlOpts;
+  return ytdlOpts;
 }
 
 function execFileAsync(file, args, timeoutMs) {
@@ -1439,10 +1439,8 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
       }
     } catch (error) {
       failures.push(`${strategy}: ${cleanErrorText(error.message)}`);
-      // Jangan berhenti di bot-check/timeout pertama. Client extractor lain
-      // atau direct media URL masih bisa berhasil untuk video yang sama.
-      if (isBotCheckError(error) && !hasCookieSupport()) continue;
-      if (isTimeoutError(error) && strategy.startsWith('yt-dlp')) continue;
+      // Selalu lanjut ke strategi berikutnya agar semua fallback dicoba.
+      continue;
     }
   }
 
