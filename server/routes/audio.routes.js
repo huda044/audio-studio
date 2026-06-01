@@ -274,7 +274,7 @@ router.get('/youtube-runtime-status', infoLimit, async (_req, res, next) => {
 router.get('/youtube-info', infoLimit, async (req, res, next) => {
   try {
     if (!req.query.url) return res.status(400).json({ error: 'URL YouTube wajib diisi.' });
-    const info = await getYoutubeInfo(String(req.query.url));
+    const info = await getYoutubeInfo(String(req.query.url), { fast: true });
     res.json(info);
   } catch (error) {
     next(error);

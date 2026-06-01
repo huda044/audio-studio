@@ -16,6 +16,7 @@ const isWindows = process.platform === 'win32';
 const localYtDlp = path.join(serverRoot, 'bin', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
 const USER_AGENT = process.env.YOUTUBE_USER_AGENT
   || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const PREVIEW_TIMEOUT_MS = Number(process.env.YOUTUBE_PREVIEW_TIMEOUT_MS || 4000);
 
 let cachedYtdlOptionsKey = '';
 let cachedYtdlOptions = null;
@@ -803,7 +804,83 @@ async function runYtDlp(args, timeoutMs = 25000) {
   return execFileAsync(binary, args, timeoutMs);
 }
 
-async function getYoutubeApiInfo(url, videoId) {
+function decodeHtmlText(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+function htmlAttribute(tag, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = tag.match(new RegExp(`${escaped}\\s*=\\s*["']([^"']*)["']`, 'i'));
+  return match ? decodeHtmlText(match[1]) : '';
+}
+
+function metaContent(html, key) {
+  const tags = html.match(/<meta\s+[^>]*>/gi) || [];
+  for (const tag of tags) {
+    const name = htmlAttribute(tag, 'property') || htmlAttribute(tag, 'name') || htmlAttribute(tag, 'itemprop');
+    if (name === key) return htmlAttribute(tag, 'content');
+  }
+  return '';
+}
+
+function textFromRenderer(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.simpleText === 'string') return value.simpleText;
+  if (Array.isArray(value.runs)) return value.runs.map((run) => run?.text || '').join('').trim();
+  return '';
+}
+
+function extractBalancedJson(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(startIndex, index + 1);
+    }
+  }
+  return '';
+}
+
+function extractPlayerResponse(html) {
+  const marker = 'ytInitialPlayerResponse';
+  const markerIndex = html.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const jsonStart = html.indexOf('{', markerIndex);
+  if (jsonStart < 0) return null;
+  const jsonText = extractBalancedJson(html, jsonStart);
+  if (!jsonText) return null;
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+}
+
+async function getYoutubeApiInfo(url, videoId, timeoutMs = 12000) {
   const apiKey = String(process.env.YOUTUBE_API_KEY || '').trim();
   if (!apiKey) throw httpError('YOUTUBE_API_KEY belum diisi.', 503);
   const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
@@ -811,7 +888,7 @@ async function getYoutubeApiInfo(url, videoId) {
   endpoint.searchParams.set('id', videoId);
   endpoint.searchParams.set('key', apiKey);
 
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(12000) });
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(timeoutMs) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw httpError(data.error?.message || 'YouTube Data API gagal membaca video.', response.status);
@@ -849,7 +926,7 @@ async function getYtDlpInfo(url, videoId) {
   };
 }
 
-async function getYtDlpPrintedInfo(url, videoId) {
+async function getYtDlpPrintedInfo(url, videoId, timeoutMs = 25000) {
   const output = await runYtDlp([
     ...ytDlpCommonArgs(),
     '--simulate',
@@ -857,7 +934,7 @@ async function getYtDlpPrintedInfo(url, videoId) {
     '--print', '%(duration)s',
     '--print', '%(thumbnail)s',
     url
-  ]);
+  ], timeoutMs);
   const [title, duration, thumbnail] = output.split(/\r?\n/).map((line) => line.trim());
   let base = {};
   if (!title || title.includes('\uFFFD') || !thumbnail) {
@@ -910,10 +987,10 @@ async function getDirectMediaInfo(url, videoId) {
   };
 }
 
-async function getOembedInfo(url, videoId) {
+async function getOembedInfo(url, videoId, timeoutMs = 10000) {
   const response = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`, {
     headers: { 'user-agent': USER_AGENT },
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) throw httpError('Preview YouTube tidak tersedia.', response.status);
   const data = await response.json();
@@ -927,8 +1004,68 @@ async function getOembedInfo(url, videoId) {
   };
 }
 
-export async function getYoutubeInfo(input) {
+async function getYoutubeWebInfo(url, videoId, timeoutMs = PREVIEW_TIMEOUT_MS) {
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': USER_AGENT,
+      'accept-language': 'en-US,en;q=0.9'
+    },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) throw httpError(`Preview halaman YouTube gagal: HTTP ${response.status}.`, response.status);
+  const html = await response.text();
+  const player = extractPlayerResponse(html);
+  const details = player?.videoDetails || {};
+  const microformat = player?.microformat?.playerMicroformatRenderer || {};
+  const title = details.title
+    || textFromRenderer(microformat.title)
+    || metaContent(html, 'og:title')
+    || metaContent(html, 'twitter:title')
+    || 'YouTube Audio';
+  const thumbnail = bestThumbnail(details, videoId)
+    || metaContent(html, 'og:image')
+    || metaContent(html, 'twitter:image')
+    || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  const duration = Number(details.lengthSeconds || microformat.lengthSeconds || 0);
+  return {
+    title,
+    thumbnail,
+    duration,
+    url,
+    videoId,
+    durationSource: duration ? 'youtube-web' : 'youtube-web-meta'
+  };
+}
+
+async function getYoutubeFastInfo(url, videoId) {
+  const apiKey = String(process.env.YOUTUBE_API_KEY || '').trim();
+  const fallback = {
+    title: 'YouTube Audio',
+    thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: 0,
+    url,
+    videoId,
+    durationSource: 'fast-fallback'
+  };
+  const basePromise = getOembedInfo(url, videoId, PREVIEW_TIMEOUT_MS).catch((error) => ({ ...fallback, warning: error.message }));
+  const detailPromise = apiKey
+    ? getYoutubeApiInfo(url, videoId, PREVIEW_TIMEOUT_MS).catch((error) => ({ warning: error.message }))
+    : getYoutubeWebInfo(url, videoId, PREVIEW_TIMEOUT_MS).catch((error) => ({ warning: error.message }));
+  const [base, detail] = await Promise.all([basePromise, detailPromise]);
+  return {
+    title: detail.title || base.title || fallback.title,
+    thumbnail: detail.thumbnail || base.thumbnail || fallback.thumbnail,
+    duration: Number(detail.duration || base.duration || 0),
+    url,
+    videoId,
+    durationSource: detail.duration ? detail.durationSource : (base.durationSource || fallback.durationSource),
+    warning: detail.warning || base.warning || ''
+  };
+}
+
+export async function getYoutubeInfo(input, options = {}) {
   const { url, videoId } = normalizeYoutubeUrl(input);
+  if (options.fast) return getYoutubeFastInfo(url, videoId);
   const attempts = [
     () => getYoutubeApiInfo(url, videoId),
     () => getYtDlpInfo(url, videoId),
