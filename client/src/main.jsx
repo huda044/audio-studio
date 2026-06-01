@@ -1223,6 +1223,56 @@ function App() {
       notify('Link harus YouTube atau SoundCloud yang valid.', 'error');
       return;
     }
+    if (detected === 'youtube') {
+      const videoId = extractYoutubeId(trimmed);
+      if (videoId) {
+        const quickInfo = {
+          title: 'YouTube Audio',
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          duration: 0,
+          url: trimmed,
+          videoId,
+          kind: detected,
+          loadingDetails: true
+        };
+        setLastError(null);
+        setYoutubePreviewError('');
+        setYoutubeInfo(quickInfo);
+        setPreviewedUrl(trimmed);
+        finishPipeline('previewed', 0, 'Preview link siap. Durasi sedang dicek cepat di background.');
+        notify('Preview link siap.');
+
+        fetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(trimmed)}`)
+          .then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw apiError(data, 'Preview gagal dimuat.');
+            setYoutubeInfo((current) => {
+              if (!current || current.videoId !== videoId) return current;
+              return {
+                ...current,
+                ...data,
+                title: data.title || current.title,
+                thumbnail: data.thumbnail || current.thumbnail,
+                duration: Number(data.duration || current.duration || 0),
+                url: trimmed,
+                videoId,
+                kind: detected,
+                loadingDetails: false
+              };
+            });
+            if (data.duration) {
+              finishPipeline('previewed', 0, `Preview siap: ${data.title || 'YouTube Audio'} (${formatDuration(data.duration)}).`);
+            }
+          })
+          .catch((error) => {
+            setYoutubeInfo((current) => (
+              current?.videoId === videoId ? { ...current, loadingDetails: false, warning: error.message } : current
+            ));
+            setYoutubePreviewError('Durasi belum bisa terbaca cepat. Kamu tetap bisa klik Download & Potong.');
+          });
+        return;
+      }
+    }
     try {
       setLastError(null);
       setYoutubePreviewError('');
@@ -2517,7 +2567,7 @@ function App() {
                         <img src={youtubeInfo.thumbnail} alt="" />
                         <div>
                           <b>{youtubeInfo.title}</b>
-                          <p className="muted">Durasi: {youtubeInfo.duration ? formatDuration(youtubeInfo.duration) : 'tidak tersedia'}</p>
+                          <p className="muted">Durasi: {youtubeInfo.duration ? formatDuration(youtubeInfo.duration) : (youtubeInfo.loadingDetails ? 'sedang dicek...' : 'tidak tersedia')}</p>
                           <p className="muted small">{youtubeUrl}</p>
                         </div>
                       </div>
