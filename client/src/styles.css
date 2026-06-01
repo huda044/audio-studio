@@ -1385,6 +1385,42 @@ body { background: var(--surface-base); }
   box-shadow: 0 2px 8px rgba(83, 74, 183, 0.4);
 }
 
+.source-url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.source-url-row button {
+  min-height: 46px;
+  white-space: nowrap;
+}
+.download-plan {
+  margin-top: 10px;
+  border: 1px solid var(--border-default);
+  background: rgba(127, 119, 221, 0.08);
+  color: var(--brand-100);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.config-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.config-overview .connection-card {
+  margin-top: 0;
+}
+@media (max-width: 820px) {
+  .source-url-row,
+  .config-overview {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Format grid — dropdown 2x2 */
 .format-grid {
   display: grid;

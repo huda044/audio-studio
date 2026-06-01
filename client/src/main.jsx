@@ -82,11 +82,10 @@ const EQ_PRESETS = [
 ];
 
 const PIPELINE_STEPS = [
-  { key: 'info', label: 'Ambil info' },
-  { key: 'download', label: 'Download' },
-  { key: 'convert', label: 'Konversi' },
-  { key: 'upload', label: 'Upload' },
-  { key: 'ready', label: 'Asset siap' }
+  { key: 'preview', label: 'Preview link' },
+  { key: 'download', label: 'Download & potong' },
+  { key: 'convert', label: 'Convert preset' },
+  { key: 'upload', label: 'Upload Roblox' }
 ];
 
 function encrypt(value) {
@@ -198,6 +197,59 @@ function extractYoutubeId(url) {
   return '';
 }
 
+function detectSourceKind(value) {
+  const trimmed = String(value || '').trim();
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'youtu.be' && parsed.pathname.length > 1) return 'youtube';
+    if (host.endsWith('youtube.com')
+      && (parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/'))) {
+      return 'youtube';
+    }
+    if (host === 'soundcloud.com' || host === 'm.soundcloud.com' || host === 'on.soundcloud.com' || host === 'snd.sc') {
+      return 'soundcloud';
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function historyIdentity(entry) {
+  const partKey = (entry.parts || []).map((part) => part.rbxassetid || part.assetId || part.operationId).filter(Boolean).join('|');
+  return entry.id || partKey || `${entry.createdAt || ''}|${entry.youtubeUrl || ''}|${entry.title || ''}`;
+}
+
+function mergeHistory(primary = [], secondary = []) {
+  const seen = new Set();
+  const merged = [];
+  for (const entry of [...compactHistory(primary), ...compactHistory(secondary)]) {
+    const key = historyIdentity(entry);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+  merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  return compactHistory(merged);
+}
+
+function mergeGroups(primary = [], secondary = []) {
+  const byKey = new Map();
+  for (const group of [...compactGroups(secondary), ...compactGroups(primary)]) {
+    const key = group.groupId || group.id;
+    if (!key) continue;
+    const previous = byKey.get(key) || {};
+    byKey.set(key, {
+      ...previous,
+      ...group,
+      hasApiKey: Boolean(previous.hasApiKey || group.hasApiKey),
+      apiKeyFormat: group.apiKeyFormat || previous.apiKeyFormat || (group.hasApiKey || previous.hasApiKey ? 'aes-256-gcm' : 'empty')
+    });
+  }
+  return compactGroups([...byKey.values()]);
+}
+
 function compactGroups(items) {
   return (Array.isArray(items) ? items : []).slice(0, 30).map((group) => ({
     id: group.id,
@@ -236,6 +288,7 @@ function compactHistory(items) {
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [youtubeInfo, setYoutubeInfo] = useState(null);
+  const [previewedUrl, setPreviewedUrl] = useState('');
   const [youtubePreviewError, setYoutubePreviewError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
   const [sourceTab, setSourceTab] = useState('youtube');
@@ -381,6 +434,7 @@ function App() {
         if (cancelled) return;
         applyUserProfile(data.user);
         setSessionStatus('authenticated');
+        setActivePage('pipeline');
       })
       .catch((error) => {
         if (cancelled) return;
@@ -427,6 +481,7 @@ function App() {
             setAuthToken(data.token);
             applyUserProfile(data.user);
             setSessionStatus('authenticated');
+            setActivePage('pipeline');
             notify('Login Google berhasil.');
           } catch (error) {
             notify(error.message, 'error');
@@ -475,44 +530,11 @@ function App() {
 
   useEffect(() => {
     const trimmed = youtubeUrl.trim();
-    const detected = (() => {
-      try {
-        const parsed = new URL(trimmed);
-        const host = parsed.hostname.replace(/^www\./, '');
-        if (host === 'youtu.be' && parsed.pathname.length > 1) return 'youtube';
-        if (host.endsWith('youtube.com')
-          && (parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/'))) {
-          return 'youtube';
-        }
-        if (host === 'soundcloud.com' || host === 'm.soundcloud.com' || host === 'on.soundcloud.com' || host === 'snd.sc') {
-          return 'soundcloud';
-        }
-        return '';
-      } catch {
-        return '';
-      }
-    })();
-
-    if (!detected) {
+    if (!trimmed || trimmed !== previewedUrl) {
       setYoutubeInfo(null);
       setYoutubePreviewError('');
-      return;
     }
-    const timer = setTimeout(async () => {
-      try {
-        setYoutubePreviewError('');
-        const endpoint = detected === 'soundcloud' ? 'soundcloud-info' : 'youtube-info';
-        const response = await fetch(`${API_BASE}/api/${endpoint}?url=${encodeURIComponent(trimmed)}`);
-        if (!response.ok) throw new Error('Preview gagal dimuat.');
-        const info = await response.json();
-        setYoutubeInfo({ ...info, kind: detected });
-      } catch (error) {
-        setYoutubeInfo(null);
-        setYoutubePreviewError('Preview belum bisa dimuat untuk link ini. Konversi masih bisa dicoba jika sumbernya publik.');
-      }
-    }, 550);
-    return () => clearTimeout(timer);
-  }, [youtubeUrl]);
+  }, [youtubeUrl, previewedUrl]);
 
   useEffect(() => {
     const source = processed?.audioDataUrl || (processed?.audioUrl ? `${API_BASE}${processed.audioUrl}` : '');
@@ -737,9 +759,8 @@ function App() {
     };
   }
 
-  async function syncProfileSnapshot(historyOverride = history) {
-    if (!authToken || !currentUser) return null;
-    const profile = profileSnapshot(historyOverride);
+  async function syncProfilePayload(profile) {
+    if (!authToken) return null;
     const response = await fetch(`${API_BASE}/api/profile`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -754,10 +775,16 @@ function App() {
     return data.user || null;
   }
 
+  async function syncProfileSnapshot(historyOverride = history) {
+    return syncProfilePayload(profileSnapshot(historyOverride));
+  }
+
   function applyUserProfile(user) {
     setCurrentUser(user);
     const profile = user.profile || {};
     const config = profile.robloxConfig || {};
+    const mergedGroups = mergeGroups(profile.groups || [], groups);
+    const mergedHistory = mergeHistory(profile.history || [], history);
     setMode(config.mode || 'personal');
     setUserId(config.userId || '');
     setGroupId(config.groupId || '');
@@ -767,9 +794,26 @@ function App() {
       hasApiKey: Boolean(config.hasApiKey),
       format: config.apiKeyFormat || (config.hasApiKey ? 'aes-256-gcm' : 'empty')
     });
-    setGroups(compactGroups(profile.groups));
-    setHistory(compactHistory(profile.history));
-    lastProfileSyncRef.current = profileSignatureFromPublic(profile);
+    setGroups(mergedGroups);
+    setHistory(mergedHistory);
+    const mergedProfile = {
+      robloxConfig: {
+        mode: config.mode || 'personal',
+        userId: config.userId || '',
+        groupId: config.groupId || '',
+        selectedGroupId: config.selectedGroupId || ''
+      },
+      groups: mergedGroups,
+      history: mergedHistory
+    };
+    const serverSignature = profileSignatureFromPublic(profile);
+    const mergedSignature = profileSignatureFromPayload(mergedProfile, profile);
+    lastProfileSyncRef.current = serverSignature;
+    if (serverSignature && mergedSignature !== serverSignature) {
+      syncProfilePayload(mergedProfile).catch((error) => {
+        notify(`Data lokal aman, tapi sinkron profil gagal: ${error.message}`, 'error');
+      });
+    }
   }
 
   async function handleAuth(event) {
@@ -1167,9 +1211,50 @@ function App() {
     }));
   }
 
+  async function previewSourceInfo() {
+    if (loading) return;
+    const trimmed = youtubeUrl.trim();
+    const detected = detectSourceKind(trimmed);
+    if (!trimmed) {
+      notify('Tempel link YouTube atau SoundCloud dulu.', 'error');
+      return;
+    }
+    if (!detected) {
+      notify('Link harus YouTube atau SoundCloud yang valid.', 'error');
+      return;
+    }
+    try {
+      setLastError(null);
+      setYoutubePreviewError('');
+      setLoading(true);
+      setStep(0, detected === 'soundcloud' ? 'Membaca info SoundCloud...' : 'Membaca info video YouTube...');
+      const endpoint = detected === 'soundcloud' ? 'soundcloud-info' : 'youtube-info';
+      const response = await fetch(`${API_BASE}/api/${endpoint}?url=${encodeURIComponent(trimmed)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw apiError(data, 'Preview gagal dimuat.');
+      setYoutubeInfo({ ...data, kind: detected });
+      setPreviewedUrl(trimmed);
+      finishPipeline('previewed', 0, `Preview siap: ${data.title || (detected === 'soundcloud' ? 'SoundCloud Audio' : 'YouTube Audio')}${data.duration ? ` (${formatDuration(data.duration)})` : ''}.`);
+      notify('Preview sumber siap.');
+    } catch (error) {
+      setYoutubeInfo(null);
+      setYoutubePreviewError(error.message || 'Preview belum bisa dimuat untuk link ini.');
+      setLastError(error.message);
+      failPipeline(error, 0);
+      notify(error.message, 'error');
+    } finally {
+      setLoading(false);
+      setLoadingStep('');
+      setLoadingStepIndex(0);
+    }
+  }
+
   async function downloadSourceOnly() {
     if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
     if (!audioFile && !youtubeUrl.trim()) throw new Error('Pilih file audio atau masukkan URL YouTube/SoundCloud dulu.');
+    if (sourceTab === 'youtube' && (!youtubeInfo || previewedUrl !== youtubeUrl.trim())) {
+      throw new Error('Klik Preview Link dulu supaya judul dan durasi sumber terbaca sebelum download.');
+    }
     const form = new FormData();
     if (audioFile) form.append('audio', audioFile);
     if (youtubeUrl) form.append('sourceUrl', youtubeUrl.trim());
@@ -1179,7 +1264,7 @@ function App() {
     form.append('settings', JSON.stringify(settings));
     const sourceLabel = youtubeInfo?.kind === 'soundcloud' ? 'SoundCloud' : (youtubeUrl ? 'YouTube' : '');
     setStep(1, sourceLabel
-      ? `Server mendownload audio ${sourceLabel} sebagai sumber edit...`
+      ? `Server download dan memotong ${sourceLabel} sesuai durasi/preset agar siap dikonversi...`
       : 'Server menyiapkan file audio sebagai sumber edit...');
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1193,7 +1278,7 @@ function App() {
     if (!response.ok) throw apiError(data, 'Download sumber audio gagal.');
     setStagedSource(data);
     setProcessed(null);
-    finishPipeline('downloaded', 1, `Sumber siap diedit: ${data.title || 'Audio'}${data.sourceDuration ? ` (${formatDuration(data.sourceDuration)})` : ''}.`);
+    finishPipeline('downloaded', 1, `Sumber siap diedit: ${data.title || 'Audio'}${data.downloadedSectionEnd ? `, potongan sampai ${formatDuration(data.downloadedSectionEnd)}` : data.sourceDuration ? ` (${formatDuration(data.sourceDuration)})` : ''}.`);
     notify('Sumber audio siap diedit.');
     return data;
   }
@@ -1311,7 +1396,7 @@ function App() {
         const message = uploadSummary.pending
           ? `Upload terkirim ke ${robloxTarget.label}. ${uploadSummary.pending} part masih pending moderasi Roblox.`
           : `Asset berhasil diupload ke ${robloxTarget.label}.`;
-        finishPipeline('uploaded', 4, message);
+        finishPipeline('uploaded', 3, message);
         notify(uploadSummary.pending ? 'Upload terkirim, menunggu moderasi Roblox.' : 'Terunggah ke Roblox.', uploadSummary.pending ? 'info' : 'success');
       }
     } catch (error) {
@@ -1383,7 +1468,11 @@ function App() {
   function retryPipelineStep() {
     const stepIndex = pipelineStatus.stepIndex || 0;
     setLastError(null);
-    if (stepIndex <= 1) {
+    if (stepIndex === 0) {
+      previewSourceInfo();
+      return;
+    }
+    if (stepIndex === 1) {
       handleDownloadSourceClick();
       return;
     }
@@ -1831,6 +1920,10 @@ function App() {
       if (idx <= 1) return 'done';
       return 'pending';
     }
+    if (pipelineStatus.state === 'previewed') {
+      if (idx === 0) return 'done';
+      return 'pending';
+    }
     if (pipelineStatus.state === 'error') {
       if (idx < pipelineStatus.stepIndex) return 'done';
       if (idx === pipelineStatus.stepIndex) return 'error';
@@ -1841,15 +1934,26 @@ function App() {
 
   function actionStatus(kind) {
     const errorText = lastError || pipelineStatus.error || pipelineStatus.message;
+    const hasFreshPreview = sourceTab !== 'youtube' || (Boolean(youtubeInfo) && previewedUrl === youtubeUrl.trim());
+    if (kind === 'preview') {
+      if (sourceTab !== 'youtube') return { state: audioFile ? 'done' : 'pending', text: audioFile ? 'File lokal siap.' : 'Pilih file audio.' };
+      if (loading && loadingStepIndex === 0) return { state: 'active', text: loadingStep || 'Membaca preview...' };
+      if (pipelineStatus.state === 'error' && pipelineStatus.stepIndex === 0) return { state: 'error', text: errorText };
+      if (hasFreshPreview) return { state: 'done', text: youtubeInfo?.duration ? `Preview siap, durasi ${formatDuration(youtubeInfo.duration)}.` : 'Preview siap.' };
+      if (youtubeUrl.trim()) return { state: 'pending', text: 'Klik Preview Link dulu.' };
+      return { state: 'pending', text: 'Tempel link dulu.' };
+    }
     if (kind === 'download') {
-      if (loading && loadingStepIndex <= 1) {
-        return { state: 'active', text: loadingStep || 'Download sedang berjalan...' };
+      if (loading && loadingStepIndex === 1) {
+        return { state: 'active', text: loadingStep || 'Download/potong sedang berjalan...' };
       }
       if (pipelineStatus.state === 'error' && pipelineStatus.stepIndex <= 1) {
         return { state: 'error', text: errorText };
       }
-      if (stagedSource) return { state: 'done', text: 'Sumber audio sudah siap.' };
-      if (audioFile || youtubeUrl.trim()) return { state: 'pending', text: 'Siap download sumber.' };
+      if (stagedSource) return { state: 'done', text: stagedSource.downloadedSectionEnd ? `Sumber siap sampai ${formatDuration(stagedSource.downloadedSectionEnd)}.` : 'Sumber audio sudah siap.' };
+      if (sourceTab === 'youtube' && hasFreshPreview) return { state: 'pending', text: `Siap download dan potong maks ${MAX_AUDIO_DURATION_SECONDS}s.` };
+      if (audioFile) return { state: 'pending', text: 'Siap menyiapkan file.' };
+      if (youtubeUrl.trim()) return { state: 'pending', text: 'Preview link dulu.' };
       return { state: 'pending', text: 'Pilih file atau tempel link dulu.' };
     }
 
@@ -2112,6 +2216,7 @@ function App() {
   }
 
   if (!currentUser) {
+    if (sessionStatus === 'checking' || sessionStatus === 'authenticated') return renderAuthScreen();
     if (activePage === 'privacy') return renderLegalPage('privacy');
     if (activePage === 'terms') return renderLegalPage('terms');
     if (activePage === 'login') return renderAuthScreen();
@@ -2134,6 +2239,9 @@ function App() {
     );
   }
 
+  const currentSourceUrl = youtubeUrl.trim();
+  const hasFreshPreview = sourceTab !== 'youtube' || (Boolean(youtubeInfo) && previewedUrl === currentSourceUrl);
+  const previewActionStatus = actionStatus('preview');
   const downloadActionStatus = actionStatus('download');
   const convertActionStatus = actionStatus('convert');
   const uploadActionStatus = actionStatus('upload');
@@ -2382,7 +2490,7 @@ function App() {
                 <button
                   type="button"
                   className={sourceTab === 'upload' ? 'active' : ''}
-                  onClick={() => { setSourceTab('upload'); setYoutubeUrl(''); setYoutubeInfo(null); }}
+                  onClick={() => { setSourceTab('upload'); setYoutubeUrl(''); setYoutubeInfo(null); setPreviewedUrl(''); }}
                 >
                   <Upload size={15} /> Upload File
                 </button>
@@ -2392,11 +2500,16 @@ function App() {
                 <>
                   <label className="field">
                     <span>URL YouTube / SoundCloud</span>
-                    <input
-                      value={youtubeUrl}
-                      onChange={(e) => setYoutubeUrl(e.target.value)}
-                      placeholder="https://youtube.com/watch?v=... atau https://soundcloud.com/..."
-                    />
+                    <div className="source-url-row">
+                      <input
+                        value={youtubeUrl}
+                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                        placeholder="https://youtube.com/watch?v=... atau https://soundcloud.com/..."
+                      />
+                      <button type="button" className="secondary" onClick={previewSourceInfo} disabled={loading || !youtubeUrl.trim()}>
+                        {loading && loadingStepIndex === 0 ? <Loader2 className="spin" size={16} /> : <Youtube size={16} />} Preview
+                      </button>
+                    </div>
                   </label>
                   {youtubeInfo && (
                     <div className="input-preview youtube">
@@ -2436,6 +2549,9 @@ function App() {
                           ))}
                         </div>
                       )}
+                      <div className="download-plan">
+                        <span>Download akan mengambil bagian yang dibutuhkan, lalu hasil OGG dipotong per part sekitar 3 menit dan dijaga di bawah 20 MB saat upload Roblox.</span>
+                      </div>
                     </div>
                   )}
                 </>
@@ -2678,10 +2794,20 @@ function App() {
                 <div className="side-action-row">
                   <button
                     className="secondary"
-                    onClick={handleDownloadSourceClick}
-                    disabled={loading || (!audioFile && !youtubeUrl) || Boolean(stagedSource)}
+                    onClick={previewSourceInfo}
+                    disabled={loading || sourceTab !== 'youtube' || !youtubeUrl.trim()}
                   >
-                    {loading && loadingStepIndex <= 1 ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />} Next: Download
+                    {loading && loadingStepIndex === 0 ? <Loader2 className="spin" size={16} /> : <Youtube size={16} />} 1. Preview Link
+                  </button>
+                  <span className={`action-status ${previewActionStatus.state}`}>{previewActionStatus.text}</span>
+                </div>
+                <div className="side-action-row">
+                  <button
+                    className="secondary"
+                    onClick={handleDownloadSourceClick}
+                    disabled={loading || Boolean(stagedSource) || (sourceTab === 'youtube' ? !hasFreshPreview : !audioFile)}
+                  >
+                    {loading && loadingStepIndex === 1 ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />} 2. Download & Potong
                   </button>
                   <span className={`action-status ${downloadActionStatus.state}`}>{downloadActionStatus.text}</span>
                 </div>
@@ -2689,10 +2815,10 @@ function App() {
                   <button
                     className="secondary"
                     onClick={handleProcessClick}
-                    disabled={loading || !stagedSource || (Boolean(processed) && pipelineStatus.state !== 'stale')}
-                  >
-                    {loading && loadingStepIndex === 2 ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />}
-                    {pipelineStatus.state === 'stale' ? 'Konversi Ulang OGG' : 'Next: Konversi OGG'}
+                  disabled={loading || !stagedSource || (Boolean(processed) && pipelineStatus.state !== 'stale')}
+                >
+                  {loading && loadingStepIndex === 2 ? <Loader2 className="spin" size={16} /> : <Music2 size={16} />}
+                    {pipelineStatus.state === 'stale' ? '3. Konversi Ulang OGG' : '3. Convert Preset'}
                   </button>
                   <span className={`action-status ${convertActionStatus.state}`}>{convertActionStatus.text}</span>
                 </div>
@@ -2700,9 +2826,9 @@ function App() {
                   <button
                     className="primary"
                     onClick={convertAndUpload}
-                    disabled={loading || !processed || pipelineStatus.state === 'stale'}
-                  >
-                    {loading && loadingStepIndex >= 3 ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Next: Upload Roblox
+                  disabled={loading || !processed || pipelineStatus.state === 'stale'}
+                >
+                    {loading && loadingStepIndex >= 3 ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} 4. Upload Roblox
                   </button>
                   <span className={`action-status ${uploadActionStatus.state}`}>{uploadActionStatus.text}</span>
                 </div>
@@ -2864,6 +2990,20 @@ function App() {
         {activePage === 'keys' && (
           <section className="panel">
             <h2><Upload size={20} /> Konfigurasi Upload Roblox</h2>
+            <div className="config-overview">
+              <div className={`connection-card ${mode === 'personal' && userId && hasStoredApiKeyForMode ? 'ok' : 'wait'}`}>
+                <b>Personal</b>
+                <p>{userId ? `User ID ${userId}` : 'Isi Roblox User ID jika upload ke akun personal.'}</p>
+              </div>
+              <div className={`connection-card ${mode === 'group' && activeGroupId && hasStoredApiKeyForMode ? 'ok' : 'wait'}`}>
+                <b>Group</b>
+                <p>{activeGroupId ? `Group ID ${activeGroupId}` : 'Pilih grup tersimpan atau isi Group ID manual.'}</p>
+              </div>
+              <div className={`connection-card ${hasStoredApiKeyForMode ? 'ok' : 'wait'}`}>
+                <b>API Key</b>
+                <p>{hasStoredApiKeyForMode ? 'Tersimpan terenkripsi di server.' : 'Tempel key sekali lalu klik Simpan.'}</p>
+              </div>
+            </div>
             <div className="segmented">
               <button className={mode === 'personal' ? 'active' : ''} onClick={() => setMode('personal')}>Personal Account</button>
               <button className={mode === 'group' ? 'active' : ''} onClick={() => setMode('group')}>Group</button>

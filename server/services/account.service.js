@@ -846,6 +846,18 @@ export async function updateUserProfile(id, profile) {
         youtubeUrl: String(entry.youtubeUrl || '').slice(0, 500),
         settings: entry.settings || {},
         speedNormal: String(entry.speedNormal || '').slice(0, 16),
+        uploadSummary: entry.uploadSummary && typeof entry.uploadSummary === 'object' ? {
+          partCount: Number(entry.uploadSummary.partCount || 0) || 0,
+          accepted: Number(entry.uploadSummary.accepted || 0) || 0,
+          failed: Number(entry.uploadSummary.failed || 0) || 0,
+          pending: Number(entry.uploadSummary.pending || 0) || 0,
+          split: Boolean(entry.uploadSummary.split)
+        } : null,
+        conversion: entry.conversion && typeof entry.conversion === 'object' ? {
+          sourceDuration: Number(entry.conversion.sourceDuration || 0) || 0,
+          duration: Number(entry.conversion.duration || 0) || 0,
+          effects: Array.isArray(entry.conversion.effects) ? entry.conversion.effects.slice(0, 20).map((item) => String(item).slice(0, 80)) : []
+        } : null,
         expired: Boolean(entry.expired),
         parts: Array.isArray(entry.parts) ? entry.parts.slice(0, 30).map((part) => ({
           part: part.part,
