@@ -1256,7 +1256,6 @@ function strategyOptions(strategy, options = {}) {
 export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
   const { url } = normalizeYoutubeUrl(input);
   const failures = [];
-  const poProviderEnabled = Boolean(buildPoProviderArgs());
   const proxy = youtubeProxyStatus();
   if (!proxy.valid) {
     throw httpError('YOUTUBE_PROXY sudah diisi, tapi formatnya tidak valid. Pakai http://user:pass@host:port atau isi YOUTUBE_PROXY_HOST + YOUTUBE_PROXY_PORT.', 400);
@@ -1289,7 +1288,6 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
       }
     } catch (error) {
       failures.push(`${strategy}: ${cleanErrorText(error.message)}`);
-      if (poProviderEnabled && isTimeoutError(error)) break;
       // Jangan berhenti di bot-check/timeout pertama. Client extractor lain
       // atau direct media URL masih bisa berhasil untuk video yang sama.
       if (isBotCheckError(error) && !hasCookieSupport()) continue;
@@ -1306,6 +1304,8 @@ export async function downloadYoutubeAudio(input, uploadsDir, options = {}) {
     } else {
       finalMessage = failures.some((item) => isNetworkTlsErrorText(item))
         ? 'Download YouTube gagal walau cookie sudah dikonfigurasi. Ada error SSL/TLS dari jaringan hosting ke YouTube; backend sudah paksa IPv4 dan retry, jadi langkah berikutnya adalah pakai YOUTUBE_PROXY atau deploy di provider/IP lain.'
+        : failures.some((item) => item.toLowerCase().includes('timeout'))
+          ? 'Download YouTube timeout walau cookie sudah dikonfigurasi. Backend sudah mencoba fallback lain; coba kecilkan durasi/trim, naikkan YTDLP_SECTION_TIMEOUT_MS, atau pakai YOUTUBE_PROXY karena IP hosting bisa dibatasi YouTube.'
         : 'Download YouTube gagal walau cookie sudah dikonfigurasi. Cookie bisa sudah rotated/kurang lengkap, atau YouTube meminta PO Token. Coba export cookie ulang dari incognito, atau isi YOUTUBE_PO_TOKEN dan YOUTUBE_VISITOR_DATA.';
     }
   } else if (failures.some((item) => item.toLowerCase().includes('timeout'))) {
