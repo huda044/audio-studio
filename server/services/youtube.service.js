@@ -277,6 +277,51 @@ function looksBinary(text) {
   return bad > Math.max(8, sample.length * 0.01);
 }
 
+function decodeUtf16Be(buffer) {
+  const swapped = Buffer.alloc(buffer.length);
+  for (let i = 0; i < buffer.length; i += 2) {
+    swapped[i] = buffer[i + 1] || 0;
+    swapped[i + 1] = buffer[i] || 0;
+  }
+  return swapped.toString('utf16le').replace(/^\uFEFF/, '');
+}
+
+function decodeCookieBase64(raw) {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/^data:[^,]+,/, '')
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\s+/g, '');
+  if (!cleaned) return '';
+  const buffer = Buffer.from(cleaned, 'base64');
+  if (!buffer.length) return '';
+
+  if (buffer[0] === 0xFF && buffer[1] === 0xFE) {
+    return buffer.toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  if (buffer[0] === 0xFE && buffer[1] === 0xFF) {
+    return decodeUtf16Be(buffer.subarray(2));
+  }
+
+  const sampleLength = Math.min(buffer.length, 4000);
+  let evenNulls = 0;
+  let oddNulls = 0;
+  for (let i = 0; i < sampleLength; i += 1) {
+    if (buffer[i] !== 0) continue;
+    if (i % 2 === 0) evenNulls += 1;
+    else oddNulls += 1;
+  }
+  const pairCount = Math.max(1, Math.floor(sampleLength / 2));
+  if (oddNulls > pairCount * 0.3 && evenNulls < pairCount * 0.05) {
+    return buffer.toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  if (evenNulls > pairCount * 0.3 && oddNulls < pairCount * 0.05) {
+    return decodeUtf16Be(buffer);
+  }
+
+  return buffer.toString('utf8');
+}
+
 function jsonCookiesToNetscape(raw) {
   let parsed;
   try {
@@ -419,7 +464,7 @@ function envCookieText() {
   const rawBase64 = process.env.YTDLP_COOKIES_BASE64 || process.env.YOUTUBE_COOKIES_BASE64 || '';
   if (rawBase64) {
     try {
-      return normalizeCookieText(Buffer.from(rawBase64, 'base64').toString('utf8'));
+      return normalizeCookieText(decodeCookieBase64(rawBase64));
     } catch {
       cookieStatus = { state: 'invalid', validCount: 0, totalLines: 0, reason: 'base64-decode-failed', hasLoginCookies: false, hasVisitorCookie: false, requiredMissing: [] };
       return '';
