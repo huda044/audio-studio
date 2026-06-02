@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/data
+server/data
+server/bin/yt-dlp*
+uploads/*
+!uploads/.gitkeep
+**/*.log
+.git
+.github
+.vscode
+*.md
+!README.md

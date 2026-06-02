@@ -99,6 +99,25 @@ Catatan penting:
 
 Untuk lokal, contoh env tersedia di `client/.env.example` dan `server/.env.example`.
 
+## Pengembangan
+
+Lint, format, dan test tersedia di masing-masing folder:
+
+```bash
+# Server (Express)
+cd server
+npm run lint          # ESLint
+npm run format        # Prettier (tulis ulang)
+npm test              # node --test (unit test)
+
+# Client (React + Vite)
+cd client
+npm run lint          # ESLint (+ React Hooks)
+npm run build         # build produksi
+```
+
+CI di GitHub Actions (`.github/workflows/ci.yml`) menjalankan lint + test untuk server dan lint + build untuk client pada setiap push ke `main` dan setiap pull request.
+
 ## Endpoint Backend
 
 - `GET /api/youtube-info?url=...` mengambil judul, thumbnail, dan durasi YouTube.
@@ -109,5 +128,6 @@ Untuk lokal, contoh env tersedia di `client/.env.example` dan `server/.env.examp
 
 - API key Roblox tidak dilog server dan tidak dikirim balik ke browser.
 - API key Roblox disimpan terenkripsi server-side memakai `SECRETS_MASTER_KEY`.
+- `JWT_SECRET` wajib di-set ke string random panjang saat `NODE_ENV=production`. Server akan menolak start kalau `JWT_SECRET` kosong atau masih nilai default, supaya token auth tidak bisa dipalsukan.
 - Pastikan `SECRETS_MASTER_KEY` tidak berubah antar deploy, supaya API key lama masih bisa didekripsi.
 - File sementara di folder `uploads` dibersihkan otomatis secara berkala.

@@ -41,7 +41,7 @@ ENV DATABASE_URL=
 ENV POSTGRES_SSL=
 ENV DATA_STORE_NAMESPACE=audio-studio
 ENV DATA_STORE_TABLE=audio_studio_kv
-ENV JWT_SECRET=audio-studio-change-this-secret
+ENV JWT_SECRET=
 ENV SECRETS_MASTER_KEY=
 ENV GOOGLE_CLIENT_ID=
 ENV ADMIN_BOOTSTRAP_USERNAME=
@@ -105,5 +105,8 @@ ENV MIDTRANS_CLIENT_KEY=
 ENV MIDTRANS_PRODUCTION=false
 
 EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:7860/health || exit 1
 
 CMD ["node", "server/scripts/start-server.mjs"]

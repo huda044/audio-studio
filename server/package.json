@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test",
     "postinstall": "node scripts/install-yt-dlp.mjs || echo yt-dlp install skipped"
   },
   "dependencies": {
@@ -22,12 +26,16 @@
     "form-data": "^4.0.1",
     "google-auth-library": "^10.6.2",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.1.1",
     "nanoid": "^5.0.9",
     "nodemailer": "^8.0.9",
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "globals": "^17.6.0",
+    "nodemon": "^3.1.9",
+    "prettier": "^3.8.3"
   }
 }

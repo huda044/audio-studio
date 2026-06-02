@@ -403,7 +403,7 @@ function repairFlattenedNetscape(text) {
   // Pakai lookahead ketat: setelah domain harus ada TAB + TRUE/FALSE + TAB + path.
   // Lookbehind [^.\n\t] memastikan kita tidak split di awal file atau tengah domain.
   return text.replace(
-    /(?<=[A-Za-z0-9_+\/=%&\-])(?=\.(?:youtube|google|googlevideo|ytimg)\.com\t(?:TRUE|FALSE)\t\/\t)/g,
+    /(?<=[A-Za-z0-9_+/=%&-])(?=\.(?:youtube|google|googlevideo|ytimg)\.com\t(?:TRUE|FALSE)\t\/\t)/g,
     '\n'
   );
 }
