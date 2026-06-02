@@ -10,6 +10,11 @@ const binDir = path.join(serverRoot, 'bin');
 const platform = process.platform;
 const arch = process.arch;
 
+if (String(process.env.YTDLP_SKIP_INSTALL || 'false').toLowerCase() === 'true') {
+  console.log('YTDLP_SKIP_INSTALL=true, skipping yt-dlp download.');
+  process.exit(0);
+}
+
 function targetInfo() {
   if (platform === 'win32') {
     return {

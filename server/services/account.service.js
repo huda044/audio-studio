@@ -7,7 +7,26 @@ import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js'
 import { encryptSecret, decryptSecret, isEncryptedSecret, isCryptoConfigured, maskSecret } from './crypto.service.js';
 import { readJsonStore, writeJsonStore, getDataStoreInfo } from './dataStore.service.js';
 
-const jwtSecret = process.env.JWT_SECRET || 'audio-studio-dev-secret-change-me';
+const WEAK_JWT_SECRETS = new Set([
+  'audio-studio-dev-secret-change-me',
+  'audio-studio-change-this-secret'
+]);
+const DEV_JWT_SECRET = 'audio-studio-dev-secret-change-me';
+
+function resolveJwtSecret() {
+  const raw = String(process.env.JWT_SECRET || '').trim();
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (!raw || WEAK_JWT_SECRETS.has(raw)) {
+    if (isProduction) {
+      throw new Error('JWT_SECRET wajib di-set ke string random panjang di production (jangan pakai nilai default). Token auth tidak aman tanpa ini.');
+    }
+    console.warn('[security] JWT_SECRET belum di-set/masih default. Memakai secret dev sementara — JANGAN dipakai di production.');
+    return DEV_JWT_SECRET;
+  }
+  return raw;
+}
+
+const jwtSecret = resolveJwtSecret();
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '365d';
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;

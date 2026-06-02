@@ -707,13 +707,9 @@ async function resolveApiKeyFromRequest(req, body = {}) {
   const keyRef = String(body.keyRef || '').trim();
   if (auth?.sub && keyRef) {
     const groupId = keyRef === 'personal' ? '' : keyRef;
-    try {
-      const apiKey = await getServerApiKeyForUser(auth.sub, { groupId });
-      if (apiKey) return { apiKey, source: 'server-stored' };
-    } catch (error) {
-      // Bubble up "legacy / decrypt error" supaya UI bisa minta user re-enter
-      throw error;
-    }
+    // Bubble up "legacy / decrypt error" supaya UI bisa minta user re-enter
+    const apiKey = await getServerApiKeyForUser(auth.sub, { groupId });
+    if (apiKey) return { apiKey, source: 'server-stored' };
   }
   // 2) Klien lama kirim plaintext apiKey langsung (one-shot, tidak disimpan)
   const plain = String(body.apiKey || '').trim();
