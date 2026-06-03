@@ -15,6 +15,7 @@ import {
   registerUser,
   requestPasswordReset,
   resendVerification,
+  revokeToken,
   signUser,
   updateUserProfile,
   verifyEmailCode,
@@ -163,6 +164,17 @@ router.get('/auth/me', authMiddleware, async (req, res, next) => {
   }
 });
 
+router.post('/auth/logout', authMiddleware, async (req, res, next) => {
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (token) revokeToken(token);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.put('/profile', authMiddleware, async (req, res, next) => {
   try {
     const user = await updateUserProfile(req.auth.sub, req.body.profile || {});
@@ -227,11 +239,11 @@ router.post('/billing/webhook/midtrans', async (req, res) => {
       grossAmount: payload.gross_amount,
       signatureKey: payload.signature_key
     });
-    if (!valid) return res.status(401).json({ error: 'Signature tidak valid.' });
+    if (!valid) return res.status(401).json({ error: 'Signature tidak valid.', status: 401 });
     await handleMidtransWebhook(payload);
     res.json({ ok: true });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message, status: error.status || 500 });
   }
 });
 

@@ -1,10 +1,12 @@
 node_modules/
 dist/
 .env
-.env.oracle
+.env.*
+!.env.example
 data/
 uploads/*
 !uploads/.gitkeep
 server/data/
 server/bin/yt-dlp*
 *.log
+server/.env

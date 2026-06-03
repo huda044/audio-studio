@@ -41,8 +41,8 @@ const port = process.env.PORT || 4000;
 warnIfEphemeralDataStore();
 try {
   const bootstrap = await ensureBootstrapAdmin();
-  if (bootstrap.created) console.log(`[admin-bootstrap] admin account created: ${bootstrap.user.username}`);
-  else if (bootstrap.updated) console.log(`[admin-bootstrap] admin account updated: ${bootstrap.user.username}`);
+  if (bootstrap.created) console.log('[admin-bootstrap] admin account created');
+  else if (bootstrap.updated) console.log('[admin-bootstrap] admin account updated');
   else if (bootstrap.configured && bootstrap.reason) console.warn(`[admin-bootstrap] skipped: ${bootstrap.reason}`);
 } catch (error) {
   console.error('[admin-bootstrap-error]', error.message);
@@ -54,6 +54,12 @@ const allowedOrigins = configuredOrigins
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+// Validasi: di production, jangan allow wildcard
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && (allowedOrigins.includes('*') || allowedOrigins.length === 0)) {
+  console.warn('[security] CLIENT_ORIGIN tidak di-set atau mengandung wildcard di production. CORS mungkin tidak ketat.');
+}
+
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -62,19 +68,46 @@ app.use((req, res, next) => {
   req.requestId = requestId;
   res.setHeader('X-Request-Id', requestId);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
 app.use(compression());
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    // Di development, allow localhost
+    if (!isProduction && origin.startsWith('http://localhost:')) return callback(null, true);
+
+    // Cek apakah origin diizinkan
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Jangan allow wildcard di production
     return callback(new Error('Origin tidak diizinkan oleh CORS.'));
   }
 }));
 app.use(express.json({ limit: process.env.JSON_LIMIT || '512kb' }));
+
+// Middleware untuk validasi path traversal pada file serving
+app.use('/api/files', (req, res, next) => {
+  const requestedFile = path.basename(decodeURIComponent(req.path));
+  if (requestedFile.includes('..') || requestedFile.includes('/') || requestedFile.includes('\\')) {
+    return res.status(400).json({ error: 'Nama file tidak valid.' });
+  }
+  const fullPath = path.resolve(uploadsDir, requestedFile);
+  if (!fullPath.startsWith(path.resolve(uploadsDir))) {
+    return res.status(403).json({ error: 'Akses file ditolak.' });
+  }
+  next();
+});
+
 app.use('/api/files', express.static(uploadsDir, {
+  index: false,
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-store');
   }

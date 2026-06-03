@@ -2157,3 +2157,400 @@ body { background: #000; }
   .legal-header { flex-direction: column; align-items: flex-start; }
   .legal-header h1 { text-align: left; }
 }
+
+/* ==========================================
+   ANIMATED COMPONENTS - framer-motion styles
+   ========================================== */
+
+/* Animated Card */
+.animated-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+/* Animated Button */
+.animated-btn {
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+/* Sidebar active indicator bar */
+.sidebar-active-bar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 4px 4px 0;
+  background: linear-gradient(180deg, var(--brand-400), var(--brand-600));
+  box-shadow: 0 0 12px rgba(105, 97, 208, 0.6);
+}
+
+.sidebar-item {
+  position: relative;
+}
+
+/* Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal-content {
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 560px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+/* Skeleton loaders */
+.skeleton-line {
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+}
+
+.skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+}
+
+/* ==========================================
+   GLASSMORPHISM & GRADIENT ENHANCEMENTS
+   ========================================== */
+
+/* Glassmorphism panel variant */
+.panel-glass {
+  background: rgba(14, 14, 16, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+}
+
+/* Gradient border effect */
+.gradient-border {
+  position: relative;
+  background: var(--surface-1);
+  border-radius: 12px;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--brand-500), transparent 50%, var(--color-success));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.gradient-border:hover::before {
+  opacity: 1;
+}
+
+/* Glow effect on hover */
+.glow-hover {
+  transition: box-shadow 0.3s ease;
+}
+
+.glow-hover:hover {
+  box-shadow: 0 0 24px rgba(105, 97, 208, 0.2), var(--shadow-card);
+}
+
+/* Topbar glass effect */
+.app-topbar {
+  background: rgba(5, 5, 5, 0.75) !important;
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+}
+
+/* ==========================================
+   ENHANCED SIDEBAR
+   ========================================== */
+
+.app-sidebar {
+  background: var(--surface-1) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.sidebar-logo {
+  box-shadow: 0 4px 20px rgba(105, 97, 208, 0.5) !important;
+  transition: box-shadow 0.3s ease;
+}
+
+.sidebar-logo:hover {
+  box-shadow: 0 4px 28px rgba(105, 97, 208, 0.7) !important;
+}
+
+.sidebar-item.active {
+  background: rgba(127, 119, 221, 0.15) !important;
+  color: var(--brand-100) !important;
+  box-shadow: inset 0 0 20px rgba(105, 97, 208, 0.08);
+}
+
+.sidebar-badge {
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ==========================================
+   ENHANCED BUTTONS & INPUTS
+   ========================================== */
+
+button {
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+input, select, textarea {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--brand-500) !important;
+  box-shadow: 0 0 0 3px rgba(105, 97, 208, 0.2);
+}
+
+/* ==========================================
+   TOAST ENHANCEMENT
+   ========================================== */
+
+.toast {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 10px !important;
+}
+
+.toast.error {
+  border-color: var(--color-danger) !important;
+  background: rgba(226, 75, 74, 0.12) !important;
+}
+
+.toast.success {
+  border-color: var(--color-success) !important;
+  background: rgba(29, 158, 117, 0.12) !important;
+}
+
+/* ==========================================
+   ENHANCED PANELS
+   ========================================== */
+
+.panel {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.panel:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ==========================================
+   LANDING PAGE ANIMATIONS
+   ========================================== */
+
+.landing-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.landing-hero::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 50% 50%, rgba(105, 97, 208, 0.08) 0%, transparent 60%);
+  animation: hero-glow 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes hero-glow {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(5%, 3%); }
+}
+
+.landing-card {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  transition: transform 0.2s ease, border-color 0.3s ease, box-shadow 0.3s ease !important;
+}
+
+.landing-card:hover {
+  border-color: rgba(105, 97, 208, 0.4) !important;
+  box-shadow: 0 8px 40px rgba(105, 97, 208, 0.12);
+}
+
+.landing-plan.featured {
+  border-color: rgba(105, 97, 208, 0.5) !important;
+  box-shadow: 0 18px 60px rgba(105, 97, 208, 0.2) !important;
+}
+
+/* ==========================================
+   RESPONSIVE IMPROVEMENTS
+   ========================================== */
+
+/* Tablet */
+@media (max-width: 900px) {
+  .app-sidebar:not(.mobile) {
+    display: none !important;
+  }
+
+  .sidebar-mobile-toggle {
+    display: flex !important;
+  }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .panel {
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  .panel h2 {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+
+  .summary {
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+
+  .modal-content {
+    padding: 16px;
+    border-radius: 12px;
+  }
+
+  .toast {
+    right: 10px;
+    left: 10px;
+    top: auto;
+    bottom: 16px;
+  }
+}
+
+/* Large screens */
+@media (min-width: 1400px) {
+  .app-content {
+    max-width: 1400px;
+  }
+}
+
+/* ==========================================
+   SCROLLBAR STYLING (webkit)
+   ========================================== */
+
+.app-sidebar::-webkit-scrollbar,
+.app-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.app-sidebar::-webkit-scrollbar-track,
+.app-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-sidebar::-webkit-scrollbar-thumb,
+.app-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.app-sidebar::-webkit-scrollbar-thumb:hover,
+.app-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ==========================================
+   WAVEFORM GLOW EFFECT
+   ========================================== */
+
+.waveform-container {
+  position: relative;
+}
+
+.waveform-container::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--brand-400), var(--color-info), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.waveform-container.active::after {
+  opacity: 1;
+  animation: waveform-glow 2s ease-in-out infinite;
+}
+
+@keyframes waveform-glow {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* ==========================================
+   PIPELINE STEP ANIMATIONS
+   ========================================== */
+
+.step.active .dot {
+  animation: step-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes step-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(105, 97, 208, 0.2); }
+  50% { box-shadow: 0 0 0 8px rgba(105, 97, 208, 0.1); }
+}
+
+/* ==========================================
+   LOADING OVERLAY ENHANCEMENT
+   ========================================== */
+
+.loading-overlay {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.loading-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}

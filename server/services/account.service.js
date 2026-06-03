@@ -1,11 +1,16 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { nanoid } from 'nanoid';
 import { sendVerificationCode, sendInvoiceCreated, sendPaidActivated, sendPasswordResetCode, isSmtpConfigured } from './email.service.js';
 import { createMidtransSnap, isMidtransConfigured } from './midtrans.service.js';
 import { encryptSecret, decryptSecret, isEncryptedSecret, isCryptoConfigured, maskSecret } from './crypto.service.js';
 import { readJsonStore, writeJsonStore, getDataStoreInfo } from './dataStore.service.js';
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 const WEAK_JWT_SECRETS = new Set([
   'audio-studio-dev-secret-change-me',
@@ -27,7 +32,8 @@ function resolveJwtSecret() {
 }
 
 const jwtSecret = resolveJwtSecret();
-const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '365d';
+const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '7d';
+const refreshTokenExpiresIn = process.env.REFRESH_TOKEN_EXPIRES_IN || '30d';
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 const discordClientId = process.env.DISCORD_CLIENT_ID || '';
@@ -38,25 +44,110 @@ const FREE_CONVERT_LIMIT = Number(process.env.FREE_CONVERT_LIMIT || 3);
 const FREE_DURATION_LIMIT = Number(process.env.FREE_DURATION_LIMIT_SECONDS || 600);
 const AUDIT_LOG_MAX = 80;
 const SUBSCRIPTION_HISTORY_MAX = 30;
+const MAX_VERIFICATION_ATTEMPTS = 5;
+const VERIFICATION_LOCKOUT_MS = 15 * 60 * 1000; // 15 menit
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 menit
+
+// Track verification attempts untuk brute force protection
+const verificationAttempts = new Map();
+
+// Track login attempts untuk brute force protection
+const loginAttempts = new Map();
+
+function getVerificationAttempts(email) {
+  const data = verificationAttempts.get(email);
+  if (!data) return { count: 0, lockedUntil: 0 };
+  if (Date.now() > data.lockedUntil) {
+    verificationAttempts.delete(email);
+    return { count: 0, lockedUntil: 0 };
+  }
+  return data;
+}
+
+function getLoginAttempts(identifier) {
+  const data = loginAttempts.get(identifier);
+  if (!data) return { count: 0, lockedUntil: 0 };
+  if (Date.now() > data.lockedUntil) {
+    loginAttempts.delete(identifier);
+    return { count: 0, lockedUntil: 0 };
+  }
+  return data;
+}
+
+function recordLoginAttempt(identifier, success) {
+  if (success) {
+    loginAttempts.delete(identifier);
+    return;
+  }
+  const data = getLoginAttempts(identifier);
+  data.count += 1;
+  if (data.count >= MAX_LOGIN_ATTEMPTS) {
+    data.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+  }
+  loginAttempts.set(identifier, data);
+}
+
+function recordVerificationAttempt(email, success) {
+  if (success) {
+    verificationAttempts.delete(email);
+    return;
+  }
+  const data = getVerificationAttempts(email);
+  data.count += 1;
+  if (data.count >= MAX_VERIFICATION_ATTEMPTS) {
+    data.lockedUntil = Date.now() + VERIFICATION_LOCKOUT_MS;
+  }
+  verificationAttempts.set(email, data);
+}
 
 let writeQueue = Promise.resolve();
 
+// In-memory cache untuk users store
+let usersCache = null;
+let usersCacheTimestamp = 0;
+const USERS_CACHE_TTL_MS = 2000; // 2 detik
+
 async function readStore() {
+  // Cek cache terlebih dahulu
+  if (usersCache && Date.now() - usersCacheTimestamp < USERS_CACHE_TTL_MS) {
+    return cloneJson(usersCache);
+  }
+
   const parsed = await readJsonStore('users', { users: [] });
   parsed.users = (parsed.users || []).map(migrateUser);
-  return parsed;
+  usersCache = parsed;
+  usersCacheTimestamp = Date.now();
+  return cloneJson(parsed);
 }
 
 async function writeStore(store) {
+  usersCache = cloneJson(store);
+  usersCacheTimestamp = Date.now();
   writeQueue = writeQueue.then(() => writeJsonStore('users', store));
   await writeQueue;
 }
 
+// In-memory cache untuk payments store
+let paymentsCache = null;
+let paymentsCacheTimestamp = 0;
+const PAYMENTS_CACHE_TTL_MS = 2000; // 2 detik
+
 async function readPayments() {
-  return readJsonStore('payments', { payments: [] });
+  // Cek cache terlebih dahulu
+  if (paymentsCache && Date.now() - paymentsCacheTimestamp < PAYMENTS_CACHE_TTL_MS) {
+    return cloneJson(paymentsCache);
+  }
+
+  const parsed = await readJsonStore('payments', { payments: [] });
+  paymentsCache = parsed;
+  paymentsCacheTimestamp = Date.now();
+  return cloneJson(parsed);
 }
 
 async function writePayments(store) {
+  paymentsCache = cloneJson(store);
+  paymentsCacheTimestamp = Date.now();
   writeQueue = writeQueue.then(() => writeJsonStore('payments', store));
   await writeQueue;
 }
@@ -112,7 +203,8 @@ function activePlan(user) {
 }
 
 function makeCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // Gunakan crypto.randomInt untuk keamanan kriptografi (bukan Math.random)
+  return String(100000 + crypto.randomInt(0, 900000));
 }
 
 async function sendVerificationEmail(email, code) {
@@ -182,16 +274,35 @@ function publicUser(user) {
   };
 }
 
+// Token blacklist untuk revocation
+const tokenBlacklist = new Set();
+
 export function signUser(user) {
+  const jti = nanoid(21);
   return jwt.sign(
-    { sub: user.id, username: user.username, role: user.role || 'user' },
+    { sub: user.id, username: user.username, role: user.role || 'user', jti },
     jwtSecret,
     { expiresIn: jwtExpiresIn }
   );
 }
 
 export function verifyToken(token) {
-  return jwt.verify(token, jwtSecret);
+  const decoded = jwt.verify(token, jwtSecret);
+  if (decoded.jti && tokenBlacklist.has(decoded.jti)) {
+    const error = new Error('Token sudah dicabut.');
+    error.status = 401;
+    throw error;
+  }
+  return decoded;
+}
+
+export function revokeToken(token) {
+  try {
+    const decoded = jwt.verify(token, jwtSecret, { ignoreExpiration: true });
+    if (decoded.jti) tokenBlacklist.add(decoded.jti);
+  } catch {
+    // ignore invalid tokens
+  }
 }
 
 export async function ensureBootstrapAdmin() {
@@ -203,7 +314,7 @@ export async function ensureBootstrapAdmin() {
   if (!username || !email || !password) {
     return { configured: false, created: false, updated: false, reason: 'missing_admin_bootstrap_env' };
   }
-  if (username.length < 3 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 6) {
+  if (username.length < 3 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) {
     return { configured: true, created: false, updated: false, reason: 'invalid_admin_bootstrap_env' };
   }
 
@@ -301,8 +412,14 @@ export async function registerUser({ username, email, password }, context = {}) 
     error.status = 400;
     throw error;
   }
-  if (String(password || '').length < 6) {
-    const error = new Error('Password minimal 6 karakter.');
+  const cleanPassword = String(password || '');
+  if (cleanPassword.length < 8) {
+    const error = new Error('Password minimal 8 karakter.');
+    error.status = 400;
+    throw error;
+  }
+  if (!/[a-zA-Z]/.test(cleanPassword) || !/[0-9]/.test(cleanPassword)) {
+    const error = new Error('Password harus mengandung huruf dan angka.');
     error.status = 400;
     throw error;
   }
@@ -346,13 +463,29 @@ export async function loginUser({ username, password }, context = {}) {
     console.error('[admin-bootstrap-login-error]', error.message);
   });
   const cleanUsername = String(username || '').trim().toLowerCase();
+
+  // Cek brute force protection
+  const attempts = getLoginAttempts(cleanUsername);
+  if (attempts.lockedUntil > Date.now()) {
+    const remainingMinutes = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
+    const error = new Error(`Terlalu banyak percobaan salah. Coba lagi dalam ${remainingMinutes} menit.`);
+    error.status = 429;
+    throw error;
+  }
+
   const store = await readStore();
   const user = store.users.find((item) => item.username === cleanUsername || item.email === cleanUsername);
   if (!user || !(await bcrypt.compare(String(password || ''), user.passwordHash || ''))) {
-    const error = new Error('Username atau password salah.');
+    recordLoginAttempt(cleanUsername, false);
+    const remainingAttempts = MAX_LOGIN_ATTEMPTS - getLoginAttempts(cleanUsername).count;
+    const error = new Error(`Username atau password salah. Sisa percobaan: ${remainingAttempts}.`);
     error.status = 401;
     throw error;
   }
+
+  // Success - clear login attempts
+  recordLoginAttempt(cleanUsername, true);
+
   ensureAccountUsable(user);
   if (!user.emailVerified) {
     const error = new Error('Akun belum diverifikasi. Masukkan kode verifikasi email dulu.');
@@ -370,6 +503,16 @@ export async function loginUser({ username, password }, context = {}) {
 
 export async function verifyEmailCode({ email, code }, context = {}) {
   const cleanEmail = String(email || '').trim().toLowerCase();
+
+  // Cek brute force protection
+  const attempts = getVerificationAttempts(cleanEmail);
+  if (attempts.lockedUntil > Date.now()) {
+    const remainingMinutes = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
+    const error = new Error(`Terlalu banyak percobaan salah. Coba lagi dalam ${remainingMinutes} menit.`);
+    error.status = 429;
+    throw error;
+  }
+
   const store = await readStore();
   const user = store.users.find((item) => item.email === cleanEmail);
   if (!user) {
@@ -383,10 +526,16 @@ export async function verifyEmailCode({ email, code }, context = {}) {
     throw error;
   }
   if (!(await bcrypt.compare(String(code || ''), user.verificationCodeHash || ''))) {
-    const error = new Error('Kode verifikasi salah.');
+    recordVerificationAttempt(cleanEmail, false);
+    const remainingAttempts = MAX_VERIFICATION_ATTEMPTS - getVerificationAttempts(cleanEmail).count;
+    const error = new Error(`Kode verifikasi salah. Sisa percobaan: ${remainingAttempts}.`);
     error.status = 400;
     throw error;
   }
+
+  // Success - clear attempts
+  recordVerificationAttempt(cleanEmail, true);
+
   user.emailVerified = true;
   user.verificationCodeHash = '';
   user.verificationExpiresAt = '';
@@ -436,11 +585,28 @@ export async function requestPasswordReset({ email }) {
 
 export async function confirmPasswordReset({ email, code, password }, context = {}) {
   const cleanEmail = String(email || '').trim().toLowerCase();
-  if (String(password || '').length < 6) {
-    const error = new Error('Password baru minimal 6 karakter.');
+  const cleanPassword = String(password || '');
+  if (cleanPassword.length < 8) {
+    const error = new Error('Password baru minimal 8 karakter.');
     error.status = 400;
     throw error;
   }
+  if (!/[a-zA-Z]/.test(cleanPassword) || !/[0-9]/.test(cleanPassword)) {
+    const error = new Error('Password harus mengandung huruf dan angka.');
+    error.status = 400;
+    throw error;
+  }
+
+  // Cek brute force protection untuk reset code
+  const resetKey = `reset:${cleanEmail}`;
+  const attempts = getVerificationAttempts(resetKey);
+  if (attempts.lockedUntil > Date.now()) {
+    const remainingMinutes = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
+    const error = new Error(`Terlalu banyak percobaan salah. Coba lagi dalam ${remainingMinutes} menit.`);
+    error.status = 429;
+    throw error;
+  }
+
   const store = await readStore();
   const user = store.users.find((item) => item.email === cleanEmail);
   if (!user) {
@@ -454,10 +620,16 @@ export async function confirmPasswordReset({ email, code, password }, context = 
     throw error;
   }
   if (!(await bcrypt.compare(String(code || ''), user.resetCodeHash))) {
-    const error = new Error('Kode reset salah.');
+    recordVerificationAttempt(resetKey, false);
+    const remainingAttempts = MAX_VERIFICATION_ATTEMPTS - getVerificationAttempts(resetKey).count;
+    const error = new Error(`Kode reset salah. Sisa percobaan: ${remainingAttempts}.`);
     error.status = 400;
     throw error;
   }
+
+  // Success - clear attempts
+  recordVerificationAttempt(resetKey, true);
+
   user.passwordHash = await bcrypt.hash(password, 10);
   user.resetCodeHash = '';
   user.resetExpiresAt = '';
@@ -765,8 +937,8 @@ export async function createPayment(id, { plan, method }) {
   }
   await mutateUser(id, (user) => {
     pushAudit(user, 'invoice_created', { invoiceId: invoice.id, plan, method, gateway: invoice.gateway || 'manual' });
-    sendInvoiceCreated(user.email, invoice).catch(() => {});
-  }).catch(() => {});
+    sendInvoiceCreated(user.email, invoice).catch((err) => console.error('[email-error] invoice_created:', err.message));
+  }).catch((err) => console.error('[mutate-error] invoice_created:', err.message));
   return invoice;
 }
 
@@ -813,7 +985,7 @@ export async function confirmPayment(invoiceId, actor = 'admin') {
   };
   pushAudit(user, 'paid_activated', { invoiceId: invoice.id, plan: invoice.plan, expiresAt, by: actor });
   await writeStore(store);
-  sendPaidActivated(user.email, { ...invoice, expiresAt }).catch(() => {});
+  sendPaidActivated(user.email, { ...invoice, expiresAt }).catch((err) => console.error('[email-error] paid_activated:', err.message));
   return invoice;
 }
 
@@ -1113,7 +1285,7 @@ export async function adminUpdateUser(id, patch = {}, actor = 'admin') {
       user.emailVerified = patch.emailVerified;
       changed.push('emailVerified');
     }
-    if (patch.password && String(patch.password).length >= 6) {
+    if (patch.password && String(patch.password).length >= 8) {
       user.passwordHash = await bcrypt.hash(String(patch.password), 10);
       changed.push('password');
     }
@@ -1239,7 +1411,7 @@ export async function adminRejectPayment(invoiceId, actor = 'admin') {
   await writePayments(paymentStore);
   await mutateUser(invoice.userId, (user) => {
     pushAudit(user, 'invoice_rejected', { invoiceId: invoice.id, by: actor });
-  }).catch(() => {});
+  }).catch((err) => console.error('[mutate-error] invoice_rejected:', err.message));
   return invoice;
 }
 

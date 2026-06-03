@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { motion, AnimatePresence } from 'framer-motion';
 import WaveSurfer from 'wavesurfer.js';
 import CryptoJS from 'crypto-js';
+import ErrorBoundary from './ErrorBoundary.jsx';
 import {
   ArrowRight,
   CheckCircle2,
@@ -105,12 +107,21 @@ function useStoredState(key, fallback) {
   const [value, setValue] = useState(() => {
     return safeParse(localStorage.getItem(key), fallback);
   });
+  const timeoutRef = useRef(null);
+
   useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // Storage can be full on public/mobile browsers; app should keep running.
-    }
+    // Debounce localStorage writes
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch {
+        // Storage can be full on public/mobile browsers; app should keep running.
+      }
+    }, 300);
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, [key, value]);
   return [value, setValue];
 }
@@ -123,12 +134,23 @@ function safeParse(raw, fallback) {
   }
 }
 
-function Toast({ toast }) {
-  if (!toast) return null;
-  return <div className={`toast ${toast.type}`}>{toast.message}</div>;
+function isTokenExpired(token) {
+  if (!token) return true;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const expiresAt = payload.exp * 1000;
+    return Date.now() >= expiresAt;
+  } catch {
+    return true;
+  }
 }
 
-function Slider({ label, value, min, max, step, suffix, onChange }) {
+const Toast = React.memo(function Toast({ toast }) {
+  if (!toast) return null;
+  return <div className={`toast ${toast.type}`}>{toast.message}</div>;
+});
+
+const Slider = React.memo(function Slider({ label, value, min, max, step, suffix, onChange }) {
   return (
     <label className="field">
       <span>{label}: <b>{value}{suffix}</b></span>
@@ -143,13 +165,13 @@ function Slider({ label, value, min, max, step, suffix, onChange }) {
       />
     </label>
   );
-}
+});
 
-function StatusBadge({ status }) {
+const StatusBadge = React.memo(function StatusBadge({ status }) {
   const cls = status === 'Accepted' ? 'ok' : status === 'Failed' ? 'bad' : 'wait';
   const label = status === 'Accepted' ? 'Diterima' : status === 'Failed' ? 'Gagal' : 'Pending';
   return <span className={`badge ${cls}`}>{label}</span>;
-}
+});
 
 function robloxPlaybackSpeed(speed) {
   return (1 / Number(speed)).toFixed(2);
@@ -345,15 +367,31 @@ function App() {
   const waveRef = useRef(null);
   const waveBoxRef = useRef(null);
 
-  const summary = `Speed: ${settings.speed}x | Amplify: ${settings.amplify} dB | Max: ${settings.maxDuration}s`;
-  const selectedGroup = groups.find((group) => group.groupId === selectedGroupId);
-  const manualGroupId = cleanRobloxId(groupId);
-  const manualGroup = manualGroupId ? groups.find((group) => group.groupId === manualGroupId) : null;
-  const activeGroup = selectedGroup || manualGroup || null;
-  const activeGroupId = cleanRobloxId(selectedGroup?.groupId || manualGroupId || activeGroup?.groupId);
-  const hasStoredApiKeyForMode = mode === 'group'
+  // Memoized computed values
+  const summary = useMemo(() => `Speed: ${settings.speed}x | Amplify: ${settings.amplify} dB | Max: ${settings.maxDuration}s`, [settings]);
+  const selectedGroup = useMemo(() => groups.find((group) => group.groupId === selectedGroupId), [groups, selectedGroupId]);
+  const manualGroupId = useMemo(() => cleanRobloxId(groupId), [groupId]);
+  const manualGroup = useMemo(() => manualGroupId ? groups.find((group) => group.groupId === manualGroupId) : null, [groups, manualGroupId]);
+  const activeGroup = useMemo(() => selectedGroup || manualGroup || null, [selectedGroup, manualGroup]);
+  const activeGroupId = useMemo(() => cleanRobloxId(selectedGroup?.groupId || manualGroupId || activeGroup?.groupId), [selectedGroup, manualGroupId, activeGroup]);
+  const hasStoredApiKeyForMode = useMemo(() => mode === 'group'
     ? Boolean(activeGroup?.hasApiKey || (activeGroupId && apiKeyStored?.hasApiKey))
-    : Boolean(apiKeyStored?.hasApiKey);
+    : Boolean(apiKeyStored?.hasApiKey), [mode, activeGroup, activeGroupId, apiKeyStored]);
+
+  // Request deduplication
+  const pendingRequests = useRef(new Map());
+
+  const deduplicatedFetch = useCallback(async (url, options = {}) => {
+    const key = `${options.method || 'GET'}:${url}:${options.body || ''}`;
+    if (pendingRequests.current.has(key)) {
+      return pendingRequests.current.get(key);
+    }
+    const promise = fetch(url, options).finally(() => {
+      pendingRequests.current.delete(key);
+    });
+    pendingRequests.current.set(key, promise);
+    return promise;
+  }, []);
 
   useEffect(() => {
     // Hapus key lama plain/CryptoJS yang dulu pernah disimpan di localStorage.
@@ -423,6 +461,16 @@ function App() {
       setSessionStatus('guest');
       return;
     }
+
+    // Cek apakah token sudah expired
+    if (isTokenExpired(authToken)) {
+      setAuthToken('');
+      setCurrentUser(null);
+      setSessionStatus('guest');
+      notify('Sesi login sudah expired. Silakan login kembali.', 'error');
+      return;
+    }
+
     let cancelled = false;
     setSessionStatus('checking');
     fetch(`${API_BASE}/api/auth/me`, {
@@ -444,6 +492,20 @@ function App() {
       });
     return () => { cancelled = true; };
   }, [authToken]);
+
+  // Auto-logout jika token expired
+  useEffect(() => {
+    if (!authToken || !currentUser) return;
+    const interval = setInterval(() => {
+      if (isTokenExpired(authToken)) {
+        setAuthToken('');
+        setCurrentUser(null);
+        setSessionStatus('guest');
+        notify('Sesi login sudah expired. Silakan login kembali.', 'error');
+      }
+    }, 60000); // Cek setiap 1 menit
+    return () => clearInterval(interval);
+  }, [authToken, currentUser]);
 
   useEffect(() => {
     if (!googleClientId) return;
@@ -1044,6 +1106,13 @@ function App() {
   }
 
   function logout() {
+    // Revoke token di server (fire-and-forget)
+    if (authToken) {
+      fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` }
+      }).catch(() => {});
+    }
     setAuthToken('');
     setCurrentUser(null);
     setSessionStatus('guest');
@@ -1242,7 +1311,7 @@ function App() {
         finishPipeline('previewed', 0, 'Preview link siap. Durasi sedang dicek cepat di background.');
         notify('Preview link siap.');
 
-        fetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(trimmed)}`)
+        deduplicatedFetch(`${API_BASE}/api/youtube-info?url=${encodeURIComponent(trimmed)}`)
           .then(async (response) => {
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw apiError(data, 'Preview gagal dimuat.');
@@ -1279,7 +1348,7 @@ function App() {
       setLoading(true);
       setStep(0, detected === 'soundcloud' ? 'Membaca info SoundCloud...' : 'Membaca info video YouTube...');
       const endpoint = detected === 'soundcloud' ? 'soundcloud-info' : 'youtube-info';
-      const response = await fetch(`${API_BASE}/api/${endpoint}?url=${encodeURIComponent(trimmed)}`);
+      const response = await deduplicatedFetch(`${API_BASE}/api/${endpoint}?url=${encodeURIComponent(trimmed)}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw apiError(data, 'Preview gagal dimuat.');
       setYoutubeInfo({ ...data, kind: detected });
@@ -1298,6 +1367,14 @@ function App() {
       setLoadingStepIndex(0);
     }
   }
+
+  const previewSourceInfoDebounced = useMemo(() => {
+    let timeoutId;
+    return (...args) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => previewSourceInfo(...args), 500);
+    };
+  }, [previewSourceInfo]);
 
   async function downloadSourceOnly() {
     if (!authToken) throw new Error('Login dulu sebelum konversi audio.');
@@ -2274,9 +2351,22 @@ function App() {
   }
 
   if (adminMode) {
-    return (
-      <>
-        <Toast toast={toast} />
+  return (
+    <>
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            key="toast"
+            className={`toast ${toast.type}`}
+            initial={{ opacity: 0, x: 80, scale: 0.9 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 80, scale: 0.9 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          >
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
         <AdminPanel
           apiBase={API_BASE}
           token={authToken}
@@ -2350,6 +2440,14 @@ function App() {
         libraryCount={libraryAssets.length}
         pageActions={<div className="summary">{summary}</div>}
       >
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activePage}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+          >
 
         {(!currentUser || activePage === 'settings' || activePage === 'billing') && (
         <section className="panel">
@@ -3337,6 +3435,8 @@ function App() {
           </div>
         </section>
         )}
+          </motion.div>
+        </AnimatePresence>
       </AppShell>
     </>
   );
@@ -3354,4 +3454,4 @@ const PAGE_TITLES = {
   settings: 'Pengaturan Akun'
 };
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

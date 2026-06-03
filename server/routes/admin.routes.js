@@ -20,7 +20,7 @@ const router = express.Router();
 
 const adminLimit = rateLimit({
   windowMs: 1000 * 60,
-  max: 600,
+  max: 60,
   message: 'Terlalu banyak request admin. Tunggu sebentar.'
 });
 
@@ -39,10 +39,10 @@ router.use(adminLimit, adminGuard);
 
 router.get('/check', (_req, res) => res.json({ ok: true }));
 
-router.post('/test-email', async (req, res) => {
+router.post('/test-email', async (req, res, next) => {
   try {
     const { sendEmail, isSmtpConfigured } = await import('../services/email.service.js');
-    if (!isSmtpConfigured()) return res.json({ ok: false, reason: 'smtp_not_configured', env: { SMTP_HOST: process.env.SMTP_HOST || '(empty)' } });
+    if (!isSmtpConfigured()) return res.json({ ok: false, reason: 'smtp_not_configured' });
     const to = String(req.body?.to || '').trim();
     if (!to) return res.status(400).json({ error: 'Field "to" wajib.' });
     const result = await sendEmail({
@@ -53,16 +53,10 @@ router.post('/test-email', async (req, res) => {
     });
     res.json({
       ok: result.sent,
-      reason: result.reason || null,
-      env: {
-        SMTP_HOST: process.env.SMTP_HOST || '(empty)',
-        SMTP_PORT: process.env.SMTP_PORT || '(default 587)',
-        SMTP_USER: process.env.SMTP_USER || '(empty)',
-        EMAIL_FROM: process.env.EMAIL_FROM || process.env.SMTP_USER || '(empty)'
-      }
+      reason: result.reason || null
     });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    next(error);
   }
 });
 

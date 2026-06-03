@@ -1,5 +1,6 @@
 FROM node:20-bookworm-slim
 
+# Install system dependencies in one layer with cleanup
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git python3 python3-pip python3-venv \
   && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
@@ -12,23 +13,29 @@ RUN apt-get update \
   && cd /opt/bgutil-ytdlp-pot-provider/server \
   && npm ci \
   && npx tsc \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
 
 WORKDIR /app
 
+# Install server dependencies first (better layer caching)
 COPY server/package*.json ./server/
-COPY server/scripts ./server/scripts
 RUN cd server && npm ci --omit=dev
 
+# Install client dependencies
 COPY client/package*.json ./client/
 RUN cd client && npm ci
 
+# Copy source code
 COPY server ./server
 COPY client ./client
 
+# Build client
 ARG VITE_GOOGLE_CLIENT_ID=
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN cd client && npm run build
+
+# Clean up npm caches
+RUN rm -rf /root/.npm /tmp/*
 
 ENV NODE_ENV=production
 ENV PORT=7860

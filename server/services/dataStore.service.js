@@ -8,6 +8,52 @@ const STORE_FILES = {
   payments: 'payments.json'
 };
 
+// Lock mechanism untuk mencegah race condition pada read/write
+const locks = new Map();
+
+async function withLock(key, fn) {
+  if (!locks.has(key)) locks.set(key, Promise.resolve());
+  const prev = locks.get(key);
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  locks.set(key, current);
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+    locks.delete(key);
+  }
+}
+
+// In-memory cache untuk mengurangi file I/O
+const cache = new Map();
+const CACHE_TTL_MS = 5000; // 5 detik
+const MAX_CACHE_SIZE = 1000; // Maksimal 1000 entries
+
+function getCached(key) {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setCache(key, value) {
+  // Hapus entry tertua jika cache penuh
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
+  cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+function invalidateCache(key) {
+  cache.delete(key);
+}
+
 let poolPromise = null;
 let postgresReady = false;
 let fallbackWarned = false;
@@ -120,19 +166,31 @@ async function atomicWriteJson(filePath, value) {
 }
 
 async function readLocalJson(key, defaultValue) {
-  const filePath = filePathFor(key);
-  try {
-    const raw = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(raw || JSON.stringify(defaultValue));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await atomicWriteJson(filePath, defaultValue);
-    return cloneJson(defaultValue);
-  }
+  // Cek cache terlebih dahulu
+  const cached = getCached(`local:${key}`);
+  if (cached !== undefined) return cloneJson(cached);
+
+  return withLock(key, async () => {
+    const filePath = filePathFor(key);
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw || JSON.stringify(defaultValue));
+      setCache(`local:${key}`, parsed);
+      return cloneJson(parsed);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      await atomicWriteJson(filePath, defaultValue);
+      setCache(`local:${key}`, defaultValue);
+      return cloneJson(defaultValue);
+    }
+  });
 }
 
 async function writeLocalJson(key, value) {
-  await atomicWriteJson(filePathFor(key), value);
+  return withLock(key, async () => {
+    await atomicWriteJson(filePathFor(key), value);
+    invalidateCache(`local:${key}`);
+  });
 }
 
 async function readPostgresJson(key) {
@@ -170,56 +228,72 @@ function decorateStoreError(error) {
 }
 
 export async function readJsonStore(key, defaultValue) {
-  if (postgresUrl()) {
-    try {
-      const remoteValue = await readPostgresJson(key);
-      if (remoteValue !== undefined && remoteValue !== null) {
-        await writeLocalJson(key, remoteValue).catch((error) => {
-          console.warn(`[data-store] gagal mirror ${key} ke file lokal: ${error.message}`);
-        });
-        return cloneJson(remoteValue);
-      }
+  // Cek cache terlebih dahulu
+  const cached = getCached(`store:${key}`);
+  if (cached !== undefined) return cloneJson(cached);
 
-      const localValue = await readLocalJson(key, defaultValue);
-      await writePostgresJson(key, localValue);
-      return cloneJson(localValue);
-    } catch (error) {
-      if (shouldFallbackToLocal()) {
-        if (!fallbackWarned) {
-          console.warn(`[data-store] postgres tidak tersedia, fallback file lokal aktif: ${error.message}`);
-          fallbackWarned = true;
+  return withLock(`store:${key}`, async () => {
+    if (postgresUrl()) {
+      try {
+        const remoteValue = await readPostgresJson(key);
+        if (remoteValue !== undefined && remoteValue !== null) {
+          await writeLocalJson(key, remoteValue).catch((error) => {
+            console.warn(`[data-store] gagal mirror ${key} ke file lokal: ${error.message}`);
+          });
+          setCache(`store:${key}`, remoteValue);
+          return cloneJson(remoteValue);
         }
-        return readLocalJson(key, defaultValue);
-      }
-      throw decorateStoreError(error);
-    }
-  }
 
-  return readLocalJson(key, defaultValue);
+        const localValue = await readLocalJson(key, defaultValue);
+        await writePostgresJson(key, localValue);
+        setCache(`store:${key}`, localValue);
+        return cloneJson(localValue);
+      } catch (error) {
+        if (shouldFallbackToLocal()) {
+          if (!fallbackWarned) {
+            console.warn(`[data-store] postgres tidak tersedia, fallback file lokal aktif: ${error.message}`);
+            fallbackWarned = true;
+          }
+          return readLocalJson(key, defaultValue);
+        }
+        throw decorateStoreError(error);
+      }
+    }
+
+    return readLocalJson(key, defaultValue);
+  });
 }
 
 export async function writeJsonStore(key, value) {
-  if (postgresUrl()) {
-    try {
-      await writePostgresJson(key, value);
-      await writeLocalJson(key, value).catch((error) => {
-        console.warn(`[data-store] gagal mirror ${key} ke file lokal: ${error.message}`);
-      });
-      return;
-    } catch (error) {
-      if (shouldFallbackToLocal()) {
-        if (!fallbackWarned) {
-          console.warn(`[data-store] postgres tidak tersedia, fallback file lokal aktif: ${error.message}`);
-          fallbackWarned = true;
-        }
-        await writeLocalJson(key, value);
-        return;
-      }
-      throw decorateStoreError(error);
-    }
-  }
+  return withLock(`store:${key}`, async () => {
+    invalidateCache(`store:${key}`);
+    invalidateCache(`local:${key}`);
 
-  await writeLocalJson(key, value);
+    if (postgresUrl()) {
+      try {
+        await writePostgresJson(key, value);
+        await writeLocalJson(key, value).catch((error) => {
+          console.warn(`[data-store] gagal mirror ${key} ke file lokal: ${error.message}`);
+        });
+        setCache(`store:${key}`, value);
+        return;
+      } catch (error) {
+        if (shouldFallbackToLocal()) {
+          if (!fallbackWarned) {
+            console.warn(`[data-store] postgres tidak tersedia, fallback file lokal aktif: ${error.message}`);
+            fallbackWarned = true;
+          }
+          await writeLocalJson(key, value);
+          setCache(`store:${key}`, value);
+          return;
+        }
+        throw decorateStoreError(error);
+      }
+    }
+
+    await writeLocalJson(key, value);
+    setCache(`store:${key}`, value);
+  });
 }
 
 export function getDataStoreInfo() {

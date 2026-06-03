@@ -65,5 +65,7 @@ export function verifyMidtransSignature({ orderId, statusCode, grossAmount, sign
     .createHash('sha512')
     .update(`${orderId}${statusCode}${grossAmount}${serverKey}`)
     .digest('hex');
-  return expected === signatureKey;
+  // Gunakan timing-safe comparison untuk mencegah timing attack
+  if (expected.length !== signatureKey?.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signatureKey || ''));
 }
