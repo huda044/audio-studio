@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
@@ -13,7 +16,6 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
-    "crypto-js": "^4.2.0",
     "framer-motion": "^12.40.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

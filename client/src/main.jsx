@@ -2,18 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import { motion, AnimatePresence } from 'framer-motion';
 import WaveSurfer from 'wavesurfer.js';
-import CryptoJS from 'crypto-js';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import {
   ArrowRight,
-  CheckCircle2,
   Copy,
   HelpCircle,
-  KeyRound,
   Loader2,
-  LockKeyhole,
-  LogIn,
-  Mail,
   Music2,
   ShieldCheck,
   Trash2,
@@ -21,7 +15,6 @@ import {
   Youtube,
   User,
   Link as LinkIcon,
-  Crown,
   ListMusic,
   Library,
   Receipt,
@@ -32,76 +25,33 @@ import {
 import './styles.css';
 import AdminPanel from './AdminPanel.jsx';
 import AppShell from './AppShell.jsx';
-
-const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
-const VITE_GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
-const KEY_SECRET = 'audio-studio-local-key';
-const MAX_AUDIO_DURATION_SECONDS = 200;
-const presets = [
-  ['Lambat', 2.1],
-  ['Default', 2.3],
-  ['Cepat', 2.5],
-  ['Lebih Cepat', 2.7],
-  ['Ultra', 2.9]
-];
-
-const defaultSettings = {
-  speed: 2.3,
-  amplify: -4,
-  maxDuration: MAX_AUDIO_DURATION_SECONDS,
-  pitch: 0,
-  bassBoost: false,
-  reverb: false,
-  normalize: false,
-  echo: false,
-  fadeIn: 0,
-  fadeOut: 0,
-  trimStart: 0,
-  trimEnd: 0,
-  eqPreset: ''
-};
-
-function clampMaxDuration(value) {
-  const numeric = Number(value || MAX_AUDIO_DURATION_SECONDS);
-  return Math.min(Math.max(numeric, 30), MAX_AUDIO_DURATION_SECONDS);
-}
-
-function normalizeSettings(settings = {}) {
-  return {
-    ...defaultSettings,
-    ...settings,
-    maxDuration: clampMaxDuration(settings.maxDuration),
-    maxDurationLimit: MAX_AUDIO_DURATION_SECONDS
-  };
-}
-
-const EQ_PRESETS = [
-  { value: '', label: 'Flat (default)' },
-  { value: 'bass_heavy', label: 'Bass Heavy' },
-  { value: 'vocal_clear', label: 'Vocal Clear' },
-  { value: 'lo_fi', label: 'Lo-Fi' },
-  { value: 'podcast', label: 'Podcast' }
-];
-
-const PIPELINE_STEPS = [
-  { key: 'preview', label: 'Preview link' },
-  { key: 'download', label: 'Download & potong' },
-  { key: 'convert', label: 'Convert preset' },
-  { key: 'upload', label: 'Upload Roblox' }
-];
-
-function encrypt(value) {
-  return CryptoJS.AES.encrypt(value || '', KEY_SECRET).toString();
-}
-
-function decrypt(value) {
-  if (!value) return '';
-  try {
-    return CryptoJS.AES.decrypt(value, KEY_SECRET).toString(CryptoJS.enc.Utf8);
-  } catch {
-    return '';
-  }
-}
+import LandingPage from './components/LandingPage.jsx';
+import LegalPage from './components/LegalPage.jsx';
+import AuthScreen from './components/AuthScreen.jsx';
+import {
+  API_BASE,
+  VITE_GOOGLE_CLIENT_ID,
+  MAX_AUDIO_DURATION_SECONDS,
+  presets,
+  defaultSettings,
+  EQ_PRESETS,
+  PIPELINE_STEPS
+} from './lib/constants.js';
+import { robloxPlaybackSpeed, formatDuration, formatBytes } from './lib/format.js';
+import {
+  clampMaxDuration,
+  normalizeSettings,
+  safeParse,
+  isTokenExpired,
+  cleanRobloxId,
+  apiError,
+  extractYoutubeId,
+  detectSourceKind,
+  compactGroups,
+  compactHistory,
+  mergeHistory,
+  mergeGroups
+} from './lib/utils.js';
 
 function useStoredState(key, fallback) {
   const [value, setValue] = useState(() => {
@@ -124,25 +74,6 @@ function useStoredState(key, fallback) {
     };
   }, [key, value]);
   return [value, setValue];
-}
-
-function safeParse(raw, fallback) {
-  try {
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function isTokenExpired(token) {
-  if (!token) return true;
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    const expiresAt = payload.exp * 1000;
-    return Date.now() >= expiresAt;
-  } catch {
-    return true;
-  }
 }
 
 const Toast = React.memo(function Toast({ toast }) {
@@ -172,140 +103,6 @@ const StatusBadge = React.memo(function StatusBadge({ status }) {
   const label = status === 'Accepted' ? 'Diterima' : status === 'Failed' ? 'Gagal' : 'Pending';
   return <span className={`badge ${cls}`}>{label}</span>;
 });
-
-function robloxPlaybackSpeed(speed) {
-  return (1 / Number(speed)).toFixed(2);
-}
-
-function formatDuration(seconds) {
-  const total = Math.max(0, Math.round(Number(seconds) || 0));
-  const min = Math.floor(total / 60);
-  const sec = total % 60;
-  return `${min}:${sec.toString().padStart(2, '0')}`;
-}
-
-function formatBytes(bytes) {
-  const value = Number(bytes) || 0;
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
-}
-
-function cleanRobloxId(value) {
-  const text = String(value || '').trim();
-  return /^\d{2,32}$/.test(text) ? text : '';
-}
-
-function apiError(data, fallback) {
-  const error = new Error(data?.error || fallback);
-  error.details = Array.isArray(data?.details)
-    ? data.details.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5)
-    : [];
-  return error;
-}
-
-function extractYoutubeId(url) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname.includes('youtu.be')) return parsed.pathname.split('/').filter(Boolean)[0] || '';
-    if (parsed.searchParams.get('v')) return parsed.searchParams.get('v');
-    const m1 = parsed.pathname.match(/\/shorts\/([^/?]+)/);
-    if (m1) return m1[1];
-    const m2 = parsed.pathname.match(/\/embed\/([^/?]+)/);
-    if (m2) return m2[1];
-  } catch {
-    return '';
-  }
-  return '';
-}
-
-function detectSourceKind(value) {
-  const trimmed = String(value || '').trim();
-  try {
-    const parsed = new URL(trimmed);
-    const host = parsed.hostname.replace(/^www\./, '');
-    if (host === 'youtu.be' && parsed.pathname.length > 1) return 'youtube';
-    if (host.endsWith('youtube.com')
-      && (parsed.searchParams.has('v') || parsed.pathname.includes('/shorts/') || parsed.pathname.includes('/embed/'))) {
-      return 'youtube';
-    }
-    if (host === 'soundcloud.com' || host === 'm.soundcloud.com' || host === 'on.soundcloud.com' || host === 'snd.sc') {
-      return 'soundcloud';
-    }
-  } catch {
-    return '';
-  }
-  return '';
-}
-
-function historyIdentity(entry) {
-  const partKey = (entry.parts || []).map((part) => part.rbxassetid || part.assetId || part.operationId).filter(Boolean).join('|');
-  return entry.id || partKey || `${entry.createdAt || ''}|${entry.youtubeUrl || ''}|${entry.title || ''}`;
-}
-
-function mergeHistory(primary = [], secondary = []) {
-  const seen = new Set();
-  const merged = [];
-  for (const entry of [...compactHistory(primary), ...compactHistory(secondary)]) {
-    const key = historyIdentity(entry);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    merged.push(entry);
-  }
-  merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  return compactHistory(merged);
-}
-
-function mergeGroups(primary = [], secondary = []) {
-  const byKey = new Map();
-  for (const group of [...compactGroups(secondary), ...compactGroups(primary)]) {
-    const key = group.groupId || group.id;
-    if (!key) continue;
-    const previous = byKey.get(key) || {};
-    byKey.set(key, {
-      ...previous,
-      ...group,
-      hasApiKey: Boolean(previous.hasApiKey || group.hasApiKey),
-      apiKeyFormat: group.apiKeyFormat || previous.apiKeyFormat || (group.hasApiKey || previous.hasApiKey ? 'aes-256-gcm' : 'empty')
-    });
-  }
-  return compactGroups([...byKey.values()]);
-}
-
-function compactGroups(items) {
-  return (Array.isArray(items) ? items : []).slice(0, 30).map((group) => ({
-    id: group.id,
-    name: group.name,
-    groupId: group.groupId,
-    creatorUserId: group.creatorUserId,
-    hasApiKey: Boolean(group.hasApiKey || group.encryptedApiKey),
-    apiKeyFormat: group.apiKeyFormat || (group.encryptedApiKey ? 'legacy' : 'empty')
-  }));
-}
-
-function compactHistory(items) {
-  return (Array.isArray(items) ? items : []).slice(0, 75).map((entry) => ({
-    id: entry.id,
-    createdAt: entry.createdAt,
-    title: entry.title,
-    thumbnail: entry.thumbnail,
-    youtubeUrl: entry.youtubeUrl,
-    settings: entry.settings,
-    speedNormal: entry.speedNormal,
-    uploadSummary: entry.uploadSummary || null,
-    conversion: entry.conversion || null,
-    parts: (entry.parts || []).slice(0, 30).map((part) => ({
-      part: part.part,
-      status: part.status,
-      assetId: part.assetId,
-      rbxassetid: part.rbxassetid,
-      operationId: part.operationId,
-      error: part.error,
-      trace: (part.trace || []).slice(0, 12)
-    })),
-    expired: Boolean(entry.expired)
-  }));
-}
 
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
@@ -1810,228 +1607,6 @@ function App() {
     setAdminMode(false);
   }
 
-  function renderAuthCard() {
-    if (resetMode) {
-      return resetStep === 'request' ? (
-        <form className="auth-card-form" onSubmit={handleForgotPassword}>
-          <div className="auth-card-heading">
-            <KeyRound size={20} />
-            <div>
-              <h2>Reset Password</h2>
-              <p>Masukkan email akunmu.</p>
-            </div>
-          </div>
-          <label className="auth-field">
-            <span>Email</span>
-            <div>
-              <Mail size={17} />
-              <input
-                type="email"
-                value={authForm.email || authForm.username}
-                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value, username: e.target.value })}
-                autoComplete="email"
-                placeholder="nama@email.com"
-              />
-            </div>
-          </label>
-          <button className="primary auth-main-button" disabled={syncingProfile}>
-            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
-            Kirim Kode Reset
-          </button>
-          <button type="button" className="auth-link-button" onClick={() => { setResetMode(false); setResetStep('request'); }}>
-            Kembali ke Login
-          </button>
-        </form>
-      ) : (
-        <form className="auth-card-form" onSubmit={handleResetPassword}>
-          <div className="auth-card-heading">
-            <KeyRound size={20} />
-            <div>
-              <h2>Password Baru</h2>
-              <p>Kode reset untuk {pendingEmail || authForm.email || authForm.username}.</p>
-            </div>
-          </div>
-          <label className="auth-field">
-            <span>Kode Reset</span>
-            <div>
-              <ShieldCheck size={17} />
-              <input
-                value={authForm.code}
-                onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })}
-                autoComplete="one-time-code"
-                placeholder="6 digit kode"
-              />
-            </div>
-          </label>
-          <label className="auth-field">
-            <span>Password Baru</span>
-            <div>
-              <LockKeyhole size={17} />
-              <input
-                type="password"
-                value={authForm.newPassword}
-                onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
-                autoComplete="new-password"
-                placeholder="Minimal 6 karakter"
-              />
-            </div>
-          </label>
-          <button className="primary auth-main-button" disabled={syncingProfile}>
-            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
-            Reset Password
-          </button>
-          <button type="button" className="auth-link-button" onClick={() => { setResetMode(false); setResetStep('request'); setPendingEmail(''); }}>
-            Kembali ke Login
-          </button>
-        </form>
-      );
-    }
-
-    if (pendingEmail) {
-      return (
-        <form className="auth-card-form" onSubmit={verifyEmail}>
-          <div className="auth-card-heading">
-            <ShieldCheck size={20} />
-            <div>
-              <h2>Verifikasi Email</h2>
-              <p>{pendingEmail}</p>
-            </div>
-          </div>
-          <label className="auth-field">
-            <span>Kode Verifikasi</span>
-            <div>
-              <ShieldCheck size={17} />
-              <input
-                value={authForm.code}
-                onChange={(e) => setAuthForm({ ...authForm, code: e.target.value })}
-                autoComplete="one-time-code"
-                placeholder="6 digit kode"
-              />
-            </div>
-          </label>
-          <button className="primary auth-main-button" disabled={syncingProfile}>
-            {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
-            Verifikasi Email
-          </button>
-          <button type="button" className="secondary auth-secondary-button" onClick={resendCode}>Kirim Ulang Kode</button>
-          <button type="button" className="auth-link-button" onClick={() => { setPendingEmail(''); setAuthMode('login'); }}>
-            Kembali ke Login
-          </button>
-        </form>
-      );
-    }
-
-    return (
-      <form className="auth-card-form" onSubmit={handleAuth}>
-        <div className="auth-card-heading">
-          <LogIn size={20} />
-          <div>
-            <h2>{authMode === 'login' ? 'Masuk ke Audio Studio' : 'Buat Akun'}</h2>
-            <p>{authMode === 'login' ? 'Sesi tersimpan otomatis di browser ini.' : 'Akun baru perlu verifikasi email.'}</p>
-          </div>
-        </div>
-        <div className="auth-toggle" role="tablist" aria-label="Mode autentikasi">
-          <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Login</button>
-          <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Daftar</button>
-        </div>
-        <label className="auth-field">
-          <span>Username / Email</span>
-          <div>
-            <User size={17} />
-            <input
-              value={authForm.username}
-              onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
-              autoComplete="username"
-              placeholder="username atau email"
-            />
-          </div>
-        </label>
-        {authMode === 'register' && (
-          <label className="auth-field">
-            <span>Email</span>
-            <div>
-              <Mail size={17} />
-              <input
-                type="email"
-                value={authForm.email}
-                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
-                autoComplete="email"
-                placeholder="nama@email.com"
-              />
-            </div>
-          </label>
-        )}
-        <label className="auth-field">
-          <span>Password</span>
-          <div>
-            <LockKeyhole size={17} />
-            <input
-              type="password"
-              value={authForm.password}
-              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-              autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-              placeholder="Password"
-            />
-          </div>
-        </label>
-        <button className="primary auth-main-button" disabled={syncingProfile}>
-          {syncingProfile ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
-          {authMode === 'login' ? 'Login' : 'Buat Akun'}
-        </button>
-        {authMode === 'login' && (
-          <button type="button" className="auth-link-button" onClick={() => setResetMode(true)}>
-            Lupa Password?
-          </button>
-        )}
-        {googleClientId && (
-          <>
-            <div className="auth-divider"><span>atau</span></div>
-            <div ref={googleButtonRef} className="google-btn-slot auth-google-slot" />
-          </>
-        )}
-        {gatewayInfo?.discord?.enabled && (
-          <>
-            {!googleClientId && <div className="auth-divider"><span>atau</span></div>}
-            <button type="button" className="discord-button auth-discord-slot" onClick={startDiscordLogin}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.249a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.249.077.077 0 0 0-.079-.037 19.736 19.736 0 0 0-4.885 1.515.07.07 0 0 0-.032.027C.533 9.046-.319 13.58.099 18.057a.082.082 0 0 0 .031.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.027c.462-.63.873-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.371-.291a.074.074 0 0 1 .077-.01c3.927 1.793 8.18 1.793 12.061 0a.073.073 0 0 1 .078.009c.12.099.245.198.371.292a.077.077 0 0 1-.006.128 12.299 12.299 0 0 1-1.873.891.077.077 0 0 0-.04.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.418 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.094 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.974 0c-1.183 0-2.156-1.085-2.156-2.418 0-1.333.955-2.419 2.156-2.419 1.21 0 2.176 1.094 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
-              Lanjut dengan Discord
-            </button>
-          </>
-        )}
-      </form>
-    );
-  }
-
-  function renderAuthScreen() {
-    const checking = sessionStatus === 'checking' || sessionStatus === 'authenticated';
-    return (
-      <main className="auth-page">
-        <Toast toast={toast} />
-        <section className="auth-layout" aria-busy={checking}>
-          <div className="auth-brand-panel">
-            <div className="auth-logo-mark">L</div>
-            <p className="auth-kicker">LuciVoid Audio Studio</p>
-            <h1>Konversi audio dan upload Roblox dalam satu dashboard.</h1>
-            <div className="auth-benefits">
-              <span><CheckCircle2 size={16} /> Preset tersimpan</span>
-              <span><CheckCircle2 size={16} /> Riwayat browser & akun</span>
-              <span><CheckCircle2 size={16} /> Roblox Open Cloud</span>
-            </div>
-          </div>
-          <div className="auth-card">
-            {checking ? (
-              <div className="auth-checking">
-                <Loader2 className="spin" size={32} />
-                <h2>Memuat sesi</h2>
-                <p>Login otomatis dari browser sedang dicek.</p>
-              </div>
-            ) : renderAuthCard()}
-          </div>
-        </section>
-      </main>
-    );
-  }
-
   function pipelineStepStatus(idx) {
     if (loading) {
       if (idx < loadingStepIndex) return 'done';
@@ -2109,245 +1684,38 @@ function App() {
     return { state: 'pending', text: 'Konversi OGG dulu.' };
   }
 
-  function renderLandingPage() {
-    const features = [
-      {
-        title: 'Konversi & Edit Audio',
-        desc: 'Speed, amplifikasi, pitch, EQ preset, fade, trim, dan efek manual seperti bass boost, reverb, echo, normalize. Output siap dipakai di Roblox.',
-        icon: '🎚️'
-      },
-      {
-        title: 'YouTube + SoundCloud',
-        desc: 'Tempel link YouTube atau SoundCloud, server tarik audionya pakai yt-dlp dengan cookie auth, langsung ke pipeline.',
-        icon: '🔗'
-      },
-      {
-        title: 'Auto Split & Upload',
-        desc: 'Audio panjang otomatis dipecah jadi part 3 menit, upload langsung ke Roblox Open Cloud (Personal atau Group). Status moderasi dipantau realtime.',
-        icon: '🚀'
-      },
-      {
-        title: 'API Key Aman AES-256',
-        desc: 'Roblox API key kamu disimpan terenkripsi AES-256-GCM di server. Plaintext tidak pernah dikirim balik ke browser.',
-        icon: '🔐'
-      },
-      {
-        title: 'Login Fleksibel',
-        desc: gatewayInfo?.discord?.enabled
-          ? 'Email/password, Google, atau Discord — pilih cara login yang paling cocok.'
-          : 'Email/password atau Google. Verifikasi via email code.',
-        icon: '👤'
-      },
-      {
-        title: 'Pembayaran Lokal',
-        desc: 'QRIS, DANA, GoPay, ShopeePay, virtual account — via Midtrans. Aktivasi paket otomatis setelah pembayaran sukses.',
-        icon: '💳'
-      }
-    ];
-    const plans = [
-      { id: 'seven', label: 'Paid 7 Hari', price: 'Rp 35.000', perks: ['Konversi tanpa batas', `Durasi maks ${MAX_AUDIO_DURATION_SECONDS} detik per lagu`, 'Upload Roblox Personal & Group', 'Cek moderasi realtime'] },
-      { id: 'thirty', label: 'Paid 30 Hari', price: 'Rp 100.000', perks: ['Semua benefit 7 hari', 'Lebih hemat untuk produksi rutin', 'Prioritas dukungan'], featured: true }
-    ];
-    return (
-      <main className="landing-page">
-        <Toast toast={toast} />
-        <header className="landing-header">
-          <div className="landing-brand">
-            <div className="sidebar-logo">L</div>
-            <div>
-              <p className="sidebar-brand-name">LuciVoid Audio Studio</p>
-              <p className="sidebar-brand-tag">Konversi & Upload Audio Roblox</p>
-            </div>
-          </div>
-          <div className="landing-cta">
-            <button type="button" className="secondary" onClick={() => setActivePage('terms')}>Terms</button>
-            <button type="button" className="secondary" onClick={() => setActivePage('privacy')}>Privacy</button>
-            <button type="button" className="primary" onClick={() => setActivePage('login')}>Masuk</button>
-          </div>
-        </header>
-
-        <section className="landing-hero">
-          <h1>Konversi audio dari YouTube &amp; SoundCloud, langsung upload ke Roblox.</h1>
-          <p>
-            Pipeline lengkap: download → edit (speed, EQ, pitch, efek) → split otomatis → upload Roblox
-            Open Cloud → pantau moderasi. API key kamu disimpan terenkripsi AES-256.
-          </p>
-          <div className="landing-cta">
-            <button type="button" className="primary" onClick={() => setActivePage('login')}>Mulai Sekarang</button>
-            {gatewayInfo?.discord?.enabled && (
-              <button type="button" className="discord-button" onClick={startDiscordLogin} style={{ width: 'auto' }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.249a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.249.077.077 0 0 0-.079-.037 19.736 19.736 0 0 0-4.885 1.515.07.07 0 0 0-.032.027C.533 9.046-.319 13.58.099 18.057a.082.082 0 0 0 .031.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.027c.462-.63.873-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.371-.291a.074.074 0 0 1 .077-.01c3.927 1.793 8.18 1.793 12.061 0a.073.073 0 0 1 .078.009c.12.099.245.198.371.292a.077.077 0 0 1-.006.128 12.299 12.299 0 0 1-1.873.891.077.077 0 0 0-.04.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.418 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.094 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.974 0c-1.183 0-2.156-1.085-2.156-2.418 0-1.333.955-2.419 2.156-2.419 1.21 0 2.176 1.094 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
-                Lanjut dengan Discord
-              </button>
-            )}
-          </div>
-        </section>
-
-        <section className="landing-features">
-          <h2>Fitur</h2>
-          <div className="landing-grid">
-            {features.map((f) => (
-              <div className="landing-card" key={f.title}>
-                <div className="landing-icon" aria-hidden>{f.icon}</div>
-                <h3>{f.title}</h3>
-                <p>{f.desc}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="landing-pricing">
-          <h2>Paket</h2>
-          <div className="landing-plans">
-            {plans.map((plan) => (
-              <div className={`landing-plan${plan.featured ? ' featured' : ''}`} key={plan.id}>
-                {plan.featured && <span className="plan-tag">Populer</span>}
-                <h3>{plan.label}</h3>
-                <p className="plan-price">{plan.price}</p>
-                <ul>{plan.perks.map((perk) => <li key={perk}>{perk}</li>)}</ul>
-                <button type="button" className="primary" onClick={() => setActivePage('login')}>Mulai</button>
-              </div>
-            ))}
-          </div>
-          <p className="muted small landing-free-note">Akun Free dapat 3 konversi gratis untuk uji coba (maks {MAX_AUDIO_DURATION_SECONDS} detik per lagu).</p>
-        </section>
-
-        <section className="landing-security">
-          <h2>Keamanan</h2>
-          <div className="landing-grid">
-            <div className="landing-card">
-              <div className="landing-icon" aria-hidden>🔒</div>
-              <h3>AES-256 untuk Credential</h3>
-              <p>API key Roblox disimpan terenkripsi pakai AES-256-GCM. Master key hanya ada di server, bukan di browser.</p>
-            </div>
-            <div className="landing-card">
-              <div className="landing-icon" aria-hidden>🌐</div>
-              <h3>HTTPS Only</h3>
-              <p>Semua trafik aplikasi melalui HTTPS. Token JWT untuk session, refresh tiap login.</p>
-            </div>
-            <div className="landing-card">
-              <div className="landing-icon" aria-hidden>📜</div>
-              <h3>Audit Log</h3>
-              <p>Setiap aksi penting (login, konversi, perubahan API key) tercatat di audit log akun kamu.</p>
-            </div>
-          </div>
-        </section>
-
-        <footer className="landing-footer">
-          <p>© {new Date().getFullYear()} LuciVoid Audio Studio.</p>
-          <p>
-            <button type="button" className="auth-link-button" onClick={() => setActivePage('privacy')}>Privacy Policy</button>
-            {' · '}
-            <button type="button" className="auth-link-button" onClick={() => setActivePage('terms')}>Terms of Service</button>
-            {' · '}
-            <a href={gatewayInfo?.admin?.discord || 'https://discord.com'} target="_blank" rel="noreferrer">Support Discord</a>
-          </p>
-        </footer>
-      </main>
-    );
-  }
-
-  function renderLegalPage(kind) {
-    const isPrivacy = kind === 'privacy';
-    return (
-      <main className="legal-page">
-        <Toast toast={toast} />
-        <header className="legal-header">
-          <button type="button" className="auth-link-button" onClick={() => setActivePage('landing')}>← Kembali</button>
-          <h1>{isPrivacy ? 'Privacy Policy' : 'Terms of Service'}</h1>
-          <p className="muted small">Berlaku per {new Date().toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-        </header>
-        <article className="legal-article">
-          {isPrivacy ? (
-            <>
-              <h2>Data yang kami simpan</h2>
-              <p>
-                Saat kamu mendaftar, kami menyimpan username, email, hash password (bcrypt), dan opsional
-                ID profil dari penyedia OAuth (Google sub, Discord ID). Saat kamu melakukan konversi atau
-                upload Roblox, kami menyimpan riwayat berisi judul lagu, link sumber, durasi, status part,
-                dan operation ID Roblox.
-              </p>
-              <h2>Roblox API Key</h2>
-              <p>
-                Roblox Open Cloud API key kamu disimpan terenkripsi pakai AES-256-GCM. Master key hanya
-                ada di server, plaintext API key tidak pernah dikirim balik ke browser. Kami pakai key ini
-                hanya untuk upload audio kamu ke Roblox dan cek status moderasi.
-              </p>
-              <h2>Pembayaran</h2>
-              <p>
-                Pembayaran diproses oleh Midtrans. Kami tidak menyimpan nomor kartu, PIN, atau detail bank
-                kamu. Yang kami terima dari Midtrans hanya status invoice dan order id.
-              </p>
-              <h2>YouTube cookies</h2>
-              <p>
-                Cookie YouTube yang dipasang admin di server hanya digunakan oleh yt-dlp untuk men-download
-                audio dari URL yang diminta user. Cookie tidak diakses oleh user atau dikirim ke pihak
-                ketiga selain YouTube.
-              </p>
-              <h2>Penyimpanan</h2>
-              <p>
-                File audio yang sudah diproses disimpan sementara di disk server selama proses upload, lalu
-                dihapus. Asset yang sudah ke-upload ke Roblox menjadi milik kamu di akun Roblox kamu.
-              </p>
-              <h2>Hak kamu</h2>
-              <p>
-                Kamu bisa menghapus akun via halaman Pengaturan; semua data riwayat dan API key yang
-                tersimpan akan ikut terhapus.
-              </p>
-              <h2>Kontak</h2>
-              <p>Pertanyaan privasi: <a href={gatewayInfo?.admin?.discord || '#'} target="_blank" rel="noreferrer">Support Discord</a>.</p>
-            </>
-          ) : (
-            <>
-              <h2>Penerimaan</h2>
-              <p>Dengan menggunakan LuciVoid Audio Studio, kamu setuju dengan ketentuan ini.</p>
-              <h2>Penggunaan yang diizinkan</h2>
-              <ul>
-                <li>Konversi audio dari YouTube/SoundCloud yang kamu punya hak / lisensi-nya.</li>
-                <li>Upload audio ke akun Roblox kamu sendiri atau group yang kamu kelola.</li>
-                <li>Tidak melakukan upload konten ilegal, melanggar hak cipta, atau melanggar TOS Roblox/YouTube/SoundCloud.</li>
-              </ul>
-              <h2>Tanggung jawab pengguna</h2>
-              <p>
-                Kamu bertanggung jawab atas konten yang kamu konversi dan upload. Kami tidak bertanggung
-                jawab atas pelanggaran hak cipta atau pemblokiran asset oleh moderasi Roblox.
-              </p>
-              <h2>Pembayaran &amp; refund</h2>
-              <p>
-                Paket berlaku sesuai durasi yang dipilih. Refund hanya diberikan jika kami gagal
-                mengaktifkan paket karena kesalahan sistem; refund tidak berlaku untuk perubahan kebijakan
-                pihak ketiga (Roblox/YouTube) atau untuk konten yang ditolak moderasi.
-              </p>
-              <h2>Penghentian akun</h2>
-              <p>
-                Kami dapat menangguhkan atau memblokir akun yang melanggar ketentuan ini, terdeteksi
-                melakukan penyalahgunaan API key Roblox, atau mengupload konten ilegal.
-              </p>
-              <h2>Perubahan ketentuan</h2>
-              <p>
-                Ketentuan ini bisa kami perbarui sewaktu-waktu. Versi terbaru selalu tersedia di halaman
-                ini.
-              </p>
-            </>
-          )}
-        </article>
-        <footer className="landing-footer">
-          <p>
-            <button type="button" className="auth-link-button" onClick={() => setActivePage('landing')}>Beranda</button>
-            {' · '}
-            <button type="button" className="auth-link-button" onClick={() => setActivePage('login')}>Masuk</button>
-          </p>
-        </footer>
-      </main>
-    );
-  }
-
   if (!currentUser) {
-    if (sessionStatus === 'checking' || sessionStatus === 'authenticated') return renderAuthScreen();
-    if (activePage === 'privacy') return renderLegalPage('privacy');
-    if (activePage === 'terms') return renderLegalPage('terms');
-    if (activePage === 'login') return renderAuthScreen();
-    return renderLandingPage();
+    const authScreen = (
+      <AuthScreen
+        sessionStatus={sessionStatus}
+        toast={toast}
+        authMode={authMode}
+        authForm={authForm}
+        resetMode={resetMode}
+        resetStep={resetStep}
+        pendingEmail={pendingEmail}
+        syncingProfile={syncingProfile}
+        googleClientId={googleClientId}
+        gatewayInfo={gatewayInfo}
+        googleButtonRef={googleButtonRef}
+        setAuthMode={setAuthMode}
+        setAuthForm={setAuthForm}
+        setResetMode={setResetMode}
+        setResetStep={setResetStep}
+        setPendingEmail={setPendingEmail}
+        onAuth={handleAuth}
+        onForgotPassword={handleForgotPassword}
+        onResetPassword={handleResetPassword}
+        onVerifyEmail={verifyEmail}
+        onResendCode={resendCode}
+        onDiscordLogin={startDiscordLogin}
+      />
+    );
+    if (sessionStatus === 'checking' || sessionStatus === 'authenticated') return authScreen;
+    if (activePage === 'privacy') return <LegalPage kind="privacy" toast={toast} gatewayInfo={gatewayInfo} onNavigate={setActivePage} />;
+    if (activePage === 'terms') return <LegalPage kind="terms" toast={toast} gatewayInfo={gatewayInfo} onNavigate={setActivePage} />;
+    if (activePage === 'login') return authScreen;
+    return <LandingPage toast={toast} gatewayInfo={gatewayInfo} onNavigate={setActivePage} onDiscordLogin={startDiscordLogin} />;
   }
 
   if (adminMode) {
