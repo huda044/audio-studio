@@ -1,16 +1,16 @@
-// Konstanta global aplikasi. Dipisah dari main.jsx agar mudah dirawat dan diuji.
+// Konstanta global aplikasi (mode upload-only, tanpa login).
 
 export const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
-export const VITE_GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 export const MAX_AUDIO_DURATION_SECONDS = 200;
 
-export const presets = [
-  ['Lambat', 2.1],
-  ['Default', 2.3],
-  ['Cepat', 2.5],
-  ['Lebih Cepat', 2.7],
-  ['Ultra', 2.9]
+// Preset konversi simpel tapi jelas. speed = kecepatan tempo audio.
+export const PRESETS = [
+  { id: 'slow', label: 'Lambat', speed: 2.1, desc: 'Lebih santai, durasi output lebih panjang.' },
+  { id: 'default', label: 'Default', speed: 2.3, desc: 'Setelan seimbang, rekomendasi.' },
+  { id: 'fast', label: 'Cepat', speed: 2.5, desc: 'Tempo naik, output lebih ringkas.' },
+  { id: 'faster', label: 'Lebih Cepat', speed: 2.7, desc: 'Untuk audio yang ingin padat.' },
+  { id: 'ultra', label: 'Ultra', speed: 2.9, desc: 'Tempo maksimum.' }
 ];
 
 export const defaultSettings = {
@@ -37,9 +37,12 @@ export const EQ_PRESETS = [
   { value: 'podcast', label: 'Podcast' }
 ];
 
-export const PIPELINE_STEPS = [
-  { key: 'preview', label: 'Preview link' },
-  { key: 'download', label: 'Download & potong' },
-  { key: 'convert', label: 'Convert preset' },
-  { key: 'upload', label: 'Upload Roblox' }
-];
+export const ACCEPTED_EXT = '.mp3,.wav,.ogg,.m4a,.aac,.flac';
+
+// Kunci localStorage.
+export const STORAGE_KEYS = {
+  roblox: 'audio-studio-roblox',
+  groups: 'audio-studio-groups',
+  history: 'audio-studio-history',
+  settings: 'audio-studio-settings'
+};
