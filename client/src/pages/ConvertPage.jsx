@@ -51,9 +51,9 @@ export default function ConvertPage() {
 
   async function handleUploadAll() {
     if (!processed?.parts?.length) { notify('Konversi audio dulu.', 'error'); return; }
-    if (!roblox.apiKey) { notify('Isi API key Roblox dulu di Pengaturan.', 'error'); goto('settings'); return; }
+    if (!roblox.apiKey) { notify('Isi API key Roblox dulu di Pengaturan.', 'error'); goto('roblox'); return; }
     const creator = resolveCreator();
-    if (!creator.groupId && !creator.userId) { notify('Isi User ID / Group ID dulu di Pengaturan.', 'error'); goto('settings'); return; }
+    if (!creator.groupId && !creator.userId) { notify('Isi User ID / Group ID dulu di Pengaturan.', 'error'); goto('roblox'); return; }
 
     setBusy('upload');
     const collected = [];
@@ -177,9 +177,23 @@ export default function ConvertPage() {
       <div>
         <Card icon={<Rocket size={18} />} title="3. Hasil & Upload Roblox" desc="Tiap part bisa diputar, lalu diupload jadi asset Roblox terpisah.">
           {!processed ? (
-            <div className="empty">
-              <div className="e-ico"><FileAudio size={26} /></div>
-              <p className="small muted" style={{ margin: 0 }}>Hasil konversi (part-part) akan muncul di sini.</p>
+            <div className="result-empty">
+              <div className="re-hero">
+                <div className="e-ico"><FileAudio size={26} /></div>
+                <h3>Hasil konversi muncul di sini</h3>
+                <p className="small muted">Upload file lalu klik <b>Konversi Audio</b>. Lagu panjang otomatis dipotong jadi beberapa part siap-upload.</p>
+              </div>
+              <div className="how-steps">
+                <div className="how-step"><span className="how-num">1</span><div><b>Upload</b><small>Pilih file audio dari perangkat.</small></div></div>
+                <div className="how-step"><span className="how-num">2</span><div><b>Atur preset & split</b><small>Tempo, efek, dan durasi per part.</small></div></div>
+                <div className="how-step"><span className="how-num">3</span><div><b>Upload ke Roblox</b><small>Tiap part jadi asset terpisah.</small></div></div>
+              </div>
+              <div className="divider" />
+              <div className="chips">
+                <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
+                <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan ✓' : 'belum diisi'}</b></span>
+              </div>
+              {!roblox.apiKey && <button className="btn ghost block" style={{ marginTop: 12 }} onClick={() => goto('roblox')}><Rocket size={15} /> Atur Roblox dulu</button>}
             </div>
           ) : (
             <>

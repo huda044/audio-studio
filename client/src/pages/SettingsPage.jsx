@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Wand2 } from 'lucide-react';
+import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Trace } from '../components/ui.jsx';
 import { robloxTest } from '../lib/api.js';
@@ -56,7 +56,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div className="grid-3 settings-grid">
       <Card icon={<KeyRound size={18} />} title="Roblox Open Cloud API Key" desc="Tersimpan di browser ini (disamarkan), dikirim ke server hanya saat upload — tidak disimpan di server.">
         <label className="field">
           <span>API Key</span>
@@ -73,6 +73,9 @@ export default function SettingsPage() {
           {testing ? 'Mengecek...' : 'Test Koneksi'}
         </button>
         {trace.length > 0 && <><div className="divider" /><Trace items={trace} /></>}
+        <div className="divider" />
+        <p className="small muted" style={{ margin: 0 }}>API key & data hanya tersimpan di perangkat ini.</p>
+        <button className="btn ghost block" style={{ marginTop: 10 }} onClick={clearAll}><Trash2 size={16} /> Hapus semua data</button>
       </Card>
 
       <Card icon={<User size={18} />} title="Target Creator" desc="Pilih upload sebagai akun pribadi atau atas nama grup.">
@@ -124,11 +127,6 @@ export default function SettingsPage() {
             ))}
           </div>
         )}
-      </Card>
-
-      <Card icon={<Wand2 size={18} />} title="Data Browser">
-        <p className="small muted" style={{ marginTop: 0 }}>Semua data (API key, grup, riwayat, preset) hanya tersimpan di browser/perangkat ini. Hapus kapan saja.</p>
-        <button className="btn ghost block" onClick={clearAll}><Trash2 size={16} /> Hapus semua data tersimpan</button>
       </Card>
     </div>
   );
