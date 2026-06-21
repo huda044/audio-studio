@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff } from 'lucide-react';
+import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Info, ExternalLink } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Trace } from '../components/ui.jsx';
 import { robloxTest } from '../lib/api.js';
@@ -58,6 +58,22 @@ export default function SettingsPage() {
   return (
     <div className="grid-3 settings-grid">
       <Card icon={<KeyRound size={18} />} title="Roblox Open Cloud API Key" desc="Tersimpan di browser ini (disamarkan), dikirim ke server hanya saat upload — tidak disimpan di server.">
+        <a className="guide-link" href="https://create.roblox.com/dashboard/credentials" target="_blank" rel="noopener noreferrer">
+          Buat API Key di Roblox Creator Hub <ExternalLink size={14} />
+        </a>
+
+        <div className="guide-box">
+          <div className="guide-head"><Info size={16} /> Cara Mendapatkan API Key</div>
+          <ol className="guide-steps">
+            <li>Tekan tombol <b>&quot;Create API Key&quot;</b> di Roblox Creator Hub.</li>
+            <li>Buat nama untuk API key kamu (contoh: <b>&quot;CENZ STUDIO&quot;</b>).</li>
+            <li>Beri permission <b>read</b> dan <b>write</b> (<b>Assets:Read</b> dan <b>Assets:Write</b>) supaya deteksi moderasi aktif.</li>
+            <li>Klik tombol <b>&quot;Save &amp; Generate Key&quot;</b>.</li>
+            <li>Salin API key yang dihasilkan (kamu <b>tidak akan bisa melihatnya lagi</b> setelah ini).</li>
+            <li>Tempel API key ke form di bawah lalu klik <b>&quot;Test Koneksi&quot;</b> / simpan.</li>
+          </ol>
+        </div>
+
         <label className="field">
           <span>API Key</span>
           <div style={{ display: 'flex', gap: 8 }}>
