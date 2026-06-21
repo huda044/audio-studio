@@ -6,10 +6,12 @@ export default function CyberBackground() {
 
   useEffect(() => {
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let raf = 0;
+    let running = false;
     let w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const mouse = { x: -999, y: -999 };
     let particles = [];
@@ -18,7 +20,10 @@ export default function CyberBackground() {
       w = canvas.clientWidth; h = canvas.clientHeight;
       canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const target = Math.min(150, Math.floor((w * h) / 14000));
+      // Lebih sedikit partikel di layar kecil / mobile supaya tetap ringan & hemat baterai.
+      const divisor = coarse ? 22000 : 14000;
+      const cap = coarse ? 80 : 150;
+      const target = Math.min(cap, Math.floor((w * h) / divisor));
       particles = Array.from({ length: reduce ? Math.min(40, target) : target }, () => ({
         x: Math.random() * w, y: Math.random() * h,
         vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25,
@@ -60,22 +65,39 @@ export default function CyberBackground() {
           }
         }
       }
-      raf = requestAnimationFrame(step);
+      if (running) raf = requestAnimationFrame(step);
     }
 
     const onMove = (e) => { mouse.x = e.clientX; mouse.y = e.clientY; };
     const onLeave = () => { mouse.x = -999; mouse.y = -999; };
+
+    function start() {
+      if (running || reduce) return;
+      running = true;
+      raf = requestAnimationFrame(step);
+    }
+    function stop() {
+      running = false;
+      cancelAnimationFrame(raf);
+    }
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+
     resize();
     window.addEventListener('resize', resize);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseout', onLeave);
-    if (!reduce) raf = requestAnimationFrame(step); else step();
+    document.addEventListener('visibilitychange', onVisibility);
+    if (reduce) step(); else start();
 
     return () => {
-      cancelAnimationFrame(raf);
+      stop();
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseout', onLeave);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 

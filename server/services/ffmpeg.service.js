@@ -2,11 +2,24 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import ffprobe from 'ffprobe-static';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobe.path);
+
+// Log ketersediaan binary saat boot — memudahkan diagnosa di log Hugging Face
+// kalau konversi gagal/diam (mis. binary ffmpeg-static tidak ter-unduh di container).
+try {
+  const ffOk = ffmpegPath && fsSync.existsSync(ffmpegPath);
+  const probeOk = ffprobe?.path && fsSync.existsSync(ffprobe.path);
+  console.log(`[ffmpeg] binary: ${ffmpegPath || 'null'} ${ffOk ? 'OK' : 'MISSING'}`);
+  console.log(`[ffmpeg] ffprobe: ${ffprobe?.path || 'null'} ${probeOk ? 'OK' : 'MISSING'}`);
+  if (!ffOk || !probeOk) console.error('[ffmpeg] PERINGATAN: binary FFmpeg/ffprobe tidak ditemukan — konversi tidak akan jalan.');
+} catch (error) {
+  console.error('[ffmpeg] gagal cek binary:', error.message);
+}
 
 // Batas aman total durasi output (setelah efek/speed) supaya tidak membebani server.
 const MAX_OUTPUT_SECONDS = Math.min(Math.max(Number(process.env.MAX_OUTPUT_SECONDS || 3600), 60), 21600);
