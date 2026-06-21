@@ -6,6 +6,8 @@ import {
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import LoadingOverlay from '../components/LoadingOverlay.jsx';
+import WaveBar from '../components/WaveBar.jsx';
+import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
@@ -119,6 +121,29 @@ export default function ConvertPage() {
       await new Promise((r) => setTimeout(r, 400));
     }
     notify(`Mengunduh ${processed.parts.length} part.`);
+  }
+
+  async function downloadZip() {
+    setBusy('zip');
+    try {
+      const base = (meta.title || 'audio').replace(/[^\w-]+/g, '_');
+      const files = [];
+      for (const part of processed.parts) {
+        const blob = await fetchPartBlob(part);
+        files.push({ name: `${base}-part${String(part.index).padStart(2, '0')}.ogg`, data: new Uint8Array(await blob.arrayBuffer()) });
+      }
+      const zip = makeZip(files);
+      const url = URL.createObjectURL(zip);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${base}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      notify(`ZIP berisi ${files.length} part diunduh.`);
+    } catch (e) {
+      notify(`Gagal membuat ZIP: ${e.message}`, 'error');
+    } finally {
+      setBusy('');
+    }
   }
 
   function copy(text) { navigator.clipboard?.writeText(text); notify('Disalin.'); }
@@ -271,6 +296,7 @@ export default function ConvertPage() {
                         {st?.status === 'Failed' && <button className="btn ghost sm" onClick={() => handleRetry(part)} title="Coba lagi"><RotateCw size={13} /></button>}
                         <a className="btn ghost sm" href={part.audioDataUrl || `${API_BASE}${part.audioUrl}`} download={part.fileName} title="Download"><Download size={13} /></a>
                       </div>
+                      <WaveBar src={part.audioDataUrl || `${API_BASE}${part.audioUrl}`} />
                       <audio controls preload="none" src={part.audioDataUrl || `${API_BASE}${part.audioUrl}`} style={{ width: '100%', marginTop: 10, height: 34 }} />
                     </motion.div>
                   );
@@ -282,7 +308,10 @@ export default function ConvertPage() {
                 <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
                 <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
               </div>
-              <button className="btn ghost block" style={{ marginBottom: 10 }} onClick={downloadAll}><Download size={16} /> Download semua part</button>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                <button className="btn ghost" style={{ flex: 1 }} onClick={downloadZip} disabled={busy}>{busy === 'zip' ? <Loader2 className="spin" size={16} /> : <Download size={16} />} Download ZIP</button>
+                <button className="btn ghost" style={{ flex: 1 }} onClick={downloadAll} disabled={busy}><Download size={16} /> Unduh satuan</button>
+              </div>
               <MagneticButton className="primary block neon-border" disabled={busy} onClick={handleUploadAll}>
                 {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
                 {busy === 'upload' ? `Mengupload part ${uploadingIdx}/${processed.partCount}...` : `Upload ${processed.partCount} part ke Roblox`}
