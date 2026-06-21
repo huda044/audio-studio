@@ -581,3 +581,12 @@ body.has-custom-cursor :focus-visible { outline: 2px solid var(--accent) !import
 .cp-title { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; font-size: 15px; }
 .cp-title .spin { color: var(--accent); }
 .cp-msg { margin: 0 0 14px; color: var(--text-soft); font-size: 13px; text-align: center; min-height: 18px; }
+
+/* Batch job list & result groups */
+.job-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 11px; background: var(--surface-2); border: 1px solid var(--border); }
+.job-row .fc-ico { color: var(--accent); flex-shrink: 0; display: grid; place-items: center; }
+.job-title { flex: 1; min-width: 0; padding: 7px 10px; font-size: 13px; }
+.job-group { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.job-group:first-of-type { padding-top: 4px; }
+.job-group:last-of-type { border-bottom: 0; }
+.job-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
