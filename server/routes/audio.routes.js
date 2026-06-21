@@ -149,27 +149,20 @@ function resolveApiKey(body = {}) {
   return String(body.apiKey || '').trim();
 }
 
-// POST /api/process — stream NDJSON: progress events lalu hasil akhir (atau error).
-router.post('/process', processLimit, upload.single('audio'), async (req, res) => {
-  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('X-Accel-Buffering', 'no');
-  const send = (obj) => { try { res.write(`${JSON.stringify(obj)}\n`); } catch { /* client gone */ } };
-  let lastEmit = 0;
-
+// POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
+router.post('/process', processLimit, upload.single('audio'), async (req, res, next) => {
   try {
-    if (!req.file?.path) {
-      send({ type: 'error', error: 'Upload file audio (.mp3, .wav, .ogg, .m4a, .aac, .flac) dulu.', status: 400 });
-      return res.end();
-    }
-    const settings = parseSettings(req.body.settings);
-    const segmentSeconds = cleanNumber(req.body.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
-    const title = String(req.body.title || req.file.originalname || 'Audio Studio').trim().slice(0, 180);
-
-    send({ type: 'progress', percent: 1, stage: 'queue', message: 'Masuk antrian konversi...' });
-
-    await conversionQueue.push(async () => {
+    const responseBody = await conversionQueue.push(async () => {
+      if (!req.file?.path) {
+        const error = new Error('Upload file audio (.mp3, .wav, .ogg, .m4a, .aac, .flac) dulu.');
+        error.status = 400;
+        throw error;
+      }
+      const settings = parseSettings(req.body.settings);
+      const segmentSeconds = cleanNumber(req.body.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
+      const title = String(req.body.title || req.file.originalname || 'Audio Studio').trim().slice(0, 180);
       const warnings = [];
+
       let sourceDuration = 0;
       try {
         const sourceProbe = await probeAudio(req.file.path);
@@ -177,21 +170,13 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res) =
       } catch (error) {
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
       }
-      send({ type: 'progress', percent: 4, stage: 'probe', message: 'Membaca file sumber...' });
 
       const result = await processAudioSegmented({
         inputPath: req.file.path,
         outputDir: uploadsDir,
         settings,
         segmentSeconds,
-        sourceDuration,
-        onProgress: (pct) => {
-          const now = Date.now();
-          if (pct >= 100 || now - lastEmit > 250) {
-            lastEmit = now;
-            send({ type: 'progress', percent: pct, stage: pct < 86 ? 'convert' : 'split', message: pct < 86 ? 'Menerapkan efek ke audio...' : 'Memotong jadi beberapa part...' });
-          }
-        }
+        sourceDuration
       });
       warnings.push(...(result.warnings || []));
 
@@ -211,30 +196,27 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res) =
         };
       }));
 
-      send({
-        type: 'done',
-        payload: {
-          title,
-          parts,
-          partCount: result.partCount,
-          segmentSeconds: result.segmentSeconds,
-          segmentText: formatSeconds(result.segmentSeconds),
-          totalDuration: result.totalDuration,
-          totalDurationText: formatSeconds(result.totalDuration),
-          sourceDuration,
-          sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
-          appliedSettings: result.appliedSettings,
-          appliedEffects: result.effects,
-          warnings,
-          output: { format: result.format, codec: result.codec, bitrate: result.bitrate },
-          queue: conversionQueue.stats()
-        }
-      });
+      return {
+        title,
+        parts,
+        partCount: result.partCount,
+        segmentSeconds: result.segmentSeconds,
+        segmentText: formatSeconds(result.segmentSeconds),
+        totalDuration: result.totalDuration,
+        totalDurationText: formatSeconds(result.totalDuration),
+        sourceDuration,
+        sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+        appliedSettings: result.appliedSettings,
+        appliedEffects: result.effects,
+        warnings,
+        output: { format: result.format, codec: result.codec, bitrate: result.bitrate },
+        queue: conversionQueue.stats()
+      };
     });
+    res.json(responseBody);
   } catch (error) {
-    send({ type: 'error', error: error.message || 'Konversi gagal.', details: error.details || [], status: error.status || 500 });
+    next(error);
   } finally {
-    res.end();
     await removeQuiet(req.file?.path);
   }
 });

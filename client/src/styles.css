@@ -590,3 +590,10 @@ body.has-custom-cursor :focus-visible { outline: 2px solid var(--accent) !import
 .job-group:first-of-type { padding-top: 4px; }
 .job-group:last-of-type { border-bottom: 0; }
 .job-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+/* Indeterminate progress (tanpa persen) */
+.ov-ring.indet { background: conic-gradient(rgba(34,211,238,0.25) 0deg, rgba(124,162,214,0.12) 0); }
+.ov-ring.indet .ov-ring-inner { color: var(--accent); }
+.ov-bar.indet { position: relative; overflow: hidden; }
+.ov-bar.indet .ov-bar-fill { position: absolute; top: 0; left: -42%; width: 42%; height: 100%; animation: indetBar 1.2s ease-in-out infinite; }
+@keyframes indetBar { 0% { left: -42%; } 100% { left: 100%; } }

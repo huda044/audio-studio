@@ -12,7 +12,6 @@ import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
 
-const STAGE_LABEL = { queue: 'Antrian', probe: 'Analisis file', convert: 'Menerapkan efek', split: 'Memotong part' };
 const ACCEPT_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
 
 function newJob(file) {
@@ -60,11 +59,10 @@ export default function ConvertPage() {
     setBusy('convert');
     try {
       for (const job of pendingJobs) {
-        updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'queue', message: 'Menyiapkan...' }, error: '' });
+        updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'convert', message: 'Memproses & memotong audio...' }, error: '' });
         try {
           const result = await processAudio({
-            file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds,
-            onProgress: (m) => updateJob(job.id, { progress: { percent: m.percent ?? 0, stage: m.stage || '', message: m.message || '' } })
+            file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds
           });
           updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
           (result.warnings || []).forEach((w) => notify(`${job.title}: ${w}`, 'info'));
@@ -226,7 +224,7 @@ export default function ConvertPage() {
                   <span className="fc-ico"><FileAudio size={18} /></span>
                   <input className="input job-title" value={job.title} disabled={busy} onChange={(e) => updateJob(job.id, { title: e.target.value })} />
                   <span className={`badge ${job.status === 'done' ? 'ok' : job.status === 'error' ? 'bad' : 'wait'}`}>
-                    {job.status === 'converting' ? `${Math.round(job.progress.percent)}%` : job.status === 'done' ? `${job.processed.partCount} part` : job.status === 'error' ? 'gagal' : 'antri'}
+                    {job.status === 'converting' ? 'proses' : job.status === 'done' ? `${job.processed.partCount} part` : job.status === 'error' ? 'gagal' : 'antri'}
                   </span>
                   {!busy && <button className="btn ghost sm" onClick={() => removeJob(job.id)}><Trash2 size={13} /></button>}
                 </div>
@@ -332,12 +330,11 @@ export default function ConvertPage() {
 
                   {job.status === 'converting' && (
                     <div className="convert-progress">
-                      <div className="ov-ring" style={{ '--p': `${(job.progress.percent || 0) * 3.6}deg` }}>
-                        <div className="ov-ring-inner"><span className="ov-pct">{Math.round(job.progress.percent || 0)}<small>%</small></span></div>
-                      </div>
-                      <h3 className="cp-title"><Loader2 className="spin" size={16} /> {STAGE_LABEL[job.progress.stage] || 'Memproses'}</h3>
-                      <p className="cp-msg">{job.progress.message || 'Sedang memproses...'}</p>
-                      <div className="ov-bar"><div className="ov-bar-fill" style={{ width: `${job.progress.percent || 0}%` }} /></div>
+                      <div className="ov-ring indet"><div className="ov-ring-inner"><Loader2 className="spin" size={26} /></div></div>
+                      <h3 className="cp-title">Memproses</h3>
+                      <p className="cp-msg">{job.progress.message || 'Sedang memproses & memotong audio...'}</p>
+                      <div className="ov-bar indet"><div className="ov-bar-fill" /></div>
+                      <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Jangan tutup tab ini.</p>
                     </div>
                   )}
                   {job.status === 'error' && <p className="small" style={{ color: 'var(--bad)' }}>{job.error}</p>}
