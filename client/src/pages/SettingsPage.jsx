@@ -66,7 +66,7 @@ export default function SettingsPage() {
           <div className="guide-head"><Info size={16} /> Cara Mendapatkan API Key</div>
           <ol className="guide-steps">
             <li>Tekan tombol <b>&quot;Create API Key&quot;</b> di Roblox Creator Hub.</li>
-            <li>Buat nama untuk API key kamu (contoh: <b>&quot;CENZ STUDIO&quot;</b>).</li>
+            <li>Buat nama untuk API key kamu (contoh: <b>&quot;LuciVoid Studio&quot;</b>).</li>
             <li>Beri permission <b>read</b> dan <b>write</b> (<b>Assets:Read</b> dan <b>Assets:Write</b>) supaya deteksi moderasi aktif.</li>
             <li>Klik tombol <b>&quot;Save &amp; Generate Key&quot;</b>.</li>
             <li>Salin API key yang dihasilkan (kamu <b>tidak akan bisa melihatnya lagi</b> setelah ini).</li>
