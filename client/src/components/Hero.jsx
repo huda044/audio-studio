@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Sparkles, ArrowDown, Settings, Music4, Scissors, ShieldCheck, Layers } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { MagneticButton, CountUp } from './ui.jsx';
+import HeroRing from './HeroRing.jsx';
 
 const FLOATING = [
   { t: 'Audio Engine', x: '6%', y: '20%', d: 0 },
@@ -24,6 +25,7 @@ export default function Hero() {
 
   return (
     <section className="hero">
+      <HeroRing />
       {FLOATING.map((f) => (
         <motion.span
           key={f.t} className="float-word" style={{ left: f.x, top: f.y }}

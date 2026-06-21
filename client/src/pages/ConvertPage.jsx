@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download
+  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
@@ -21,6 +21,7 @@ export default function ConvertPage() {
   const [processed, setProcessed] = useState(null);
   const [partStatus, setPartStatus] = useState({});
   const [uploadingIdx, setUploadingIdx] = useState(0);
+  const [meta, setMeta] = useState({ title: '', description: '' });
   const inputRef = useRef(null);
 
   const activePreset = PRESETS.find((p) => Math.abs(p.speed - settings.speed) < 0.001)?.id || '';
@@ -29,6 +30,7 @@ export default function ConvertPage() {
   function pickFile(f) {
     if (!f) return;
     setProcessed(null); setPartStatus({}); setFile(f);
+    setMeta((m) => ({ ...m, title: f.name.replace(/\.[^.]+$/, '') }));
   }
   function update(patch) { setSettings((s) => ({ ...s, ...patch })); }
 
@@ -38,7 +40,7 @@ export default function ConvertPage() {
     setProgress({ percent: 0, stage: 'queue', message: 'Menyiapkan...' });
     try {
       const result = await processAudio({
-        file, settings, title: file.name, segmentSeconds: settings.segmentSeconds,
+        file, settings, title: meta.title || file.name, segmentSeconds: settings.segmentSeconds,
         onProgress: (m) => setProgress({ percent: m.percent ?? 0, stage: m.stage || '', message: m.message || '' })
       });
       setProcessed(result);
@@ -55,6 +57,25 @@ export default function ConvertPage() {
       : { userId: cleanRobloxId(roblox.userId) };
   }
 
+  async function uploadPart(part, creator) {
+    setPartStatus((s) => ({ ...s, [part.index]: { status: 'uploading' } }));
+    try {
+      const blob = await fetchPartBlob(part);
+      const data = await uploadRoblox({
+        blob, fileName: part.fileName,
+        payload: { apiKey: roblox.apiKey, creator, displayName: `${meta.title || 'Audio'} - Part ${part.index}`, description: meta.description || undefined }
+      });
+      const sub = (data.parts || [])[0] || {};
+      const entry = { part: part.index, status: sub.status, rbxassetid: sub.rbxassetid, assetId: sub.assetId, operationId: sub.operationId, error: sub.error };
+      setPartStatus((s) => ({ ...s, [part.index]: entry }));
+      return entry;
+    } catch (e) {
+      const entry = { part: part.index, status: 'Failed', error: e.message };
+      setPartStatus((s) => ({ ...s, [part.index]: entry }));
+      return entry;
+    }
+  }
+
   async function handleUploadAll() {
     if (!processed?.parts?.length) { notify('Konversi audio dulu.', 'error'); return; }
     if (!roblox.apiKey) { notify('Isi API key Roblox dulu di Pengaturan.', 'error'); goto('roblox'); return; }
@@ -66,32 +87,38 @@ export default function ConvertPage() {
     try {
       for (const part of processed.parts) {
         setUploadingIdx(part.index);
-        setPartStatus((s) => ({ ...s, [part.index]: { status: 'uploading' } }));
-        try {
-          const blob = await fetchPartBlob(part);
-          const data = await uploadRoblox({
-            blob, fileName: part.fileName,
-            payload: { apiKey: roblox.apiKey, creator, displayName: `${processed.title || 'Audio'} - Part ${part.index}` }
-          });
-          const sub = (data.parts || [])[0] || {};
-          setPartStatus((s) => ({ ...s, [part.index]: { status: sub.status, rbxassetid: sub.rbxassetid, assetId: sub.assetId, operationId: sub.operationId, error: sub.error } }));
-          collected.push({ part: part.index, status: sub.status, rbxassetid: sub.rbxassetid, assetId: sub.assetId, operationId: sub.operationId, error: sub.error });
-        } catch (e) {
-          setPartStatus((s) => ({ ...s, [part.index]: { status: 'Failed', error: e.message } }));
-          collected.push({ part: part.index, status: 'Failed', error: e.message });
-        }
+        collected.push(await uploadPart(part, creator));
       }
       const accepted = collected.filter((p) => p.status === 'Accepted').length;
       const pending = collected.filter((p) => p.status === 'Pending').length;
       setHistory([{
         id: uid('h'), createdAt: new Date().toISOString(),
-        title: processed.title || file?.name || 'Audio',
+        title: meta.title || file?.name || 'Audio',
         duration: processed.totalDuration, mode: roblox.mode, parts: collected
       }, ...history].slice(0, 100));
       notify(accepted ? `Selesai: ${accepted} asset diterima${pending ? `, ${pending} pending` : ''}.` : pending ? 'Terkirim, menunggu moderasi Roblox.' : 'Upload selesai diproses.', accepted ? 'success' : 'info');
     } finally {
       setBusy(''); setUploadingIdx(0);
     }
+  }
+
+  async function handleRetry(part) {
+    if (!roblox.apiKey) { notify('Isi API key dulu di Pengaturan.', 'error'); goto('roblox'); return; }
+    const creator = resolveCreator();
+    if (!creator.groupId && !creator.userId) { notify('Isi User/Group ID dulu.', 'error'); goto('roblox'); return; }
+    const res = await uploadPart(part, creator);
+    notify(res.status === 'Accepted' ? `Part ${part.index} diterima.` : res.status === 'Pending' ? `Part ${part.index} menunggu moderasi.` : `Part ${part.index} gagal lagi.`, res.status === 'Failed' ? 'error' : 'success');
+  }
+
+  async function downloadAll() {
+    for (const part of processed.parts) {
+      const a = document.createElement('a');
+      a.href = part.audioDataUrl || `${API_BASE}${part.audioUrl}`;
+      a.download = `${(meta.title || 'audio').replace(/[^\w-]+/g, '_')}-part${part.index}.ogg`;
+      document.body.appendChild(a); a.click(); a.remove();
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    notify(`Mengunduh ${processed.parts.length} part.`);
   }
 
   function copy(text) { navigator.clipboard?.writeText(text); notify('Disalin.'); }
@@ -126,6 +153,12 @@ export default function ConvertPage() {
               <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => { setFile(null); setProcessed(null); }}><Trash2 size={15} /></button>
             </div>
           )}
+          {file && (
+            <div style={{ marginTop: 16 }}>
+              <label className="field"><span>Judul asset</span><input className="input" value={meta.title} onChange={(e) => setMeta((m) => ({ ...m, title: e.target.value }))} placeholder="Nama untuk asset Roblox" /></label>
+              <label className="field"><span>Deskripsi (opsional)</span><textarea className="input" rows={2} value={meta.description} onChange={(e) => setMeta((m) => ({ ...m, description: e.target.value }))} placeholder="Deskripsi singkat asset" /></label>
+            </div>
+          )}
         </Card>
 
         <Card icon={<Wand2 size={18} />} title="2. Preset & Split" desc="Pilih preset cepat, atur durasi per part, atau buka pengaturan lanjutan.">
@@ -156,6 +189,10 @@ export default function ConvertPage() {
                   <div className="row">
                     <Slider label="Fade in" value={settings.fadeIn} min={0} max={15} step={1} suffix=" s" onChange={(v) => update({ fadeIn: v })} />
                     <Slider label="Fade out" value={settings.fadeOut} min={0} max={15} step={1} suffix=" s" onChange={(v) => update({ fadeOut: v })} />
+                  </div>
+                  <div className="row">
+                    <Slider label="Trim awal" value={settings.trimStart} min={0} max={3600} step={5} suffix=" s" onChange={(v) => update({ trimStart: v })} />
+                    <Slider label="Trim akhir" value={settings.trimEnd} min={0} max={3600} step={5} suffix=" s" onChange={(v) => update({ trimEnd: v })} />
                   </div>
                   <label className="field">
                     <span>EQ Preset</span>
@@ -231,6 +268,7 @@ export default function ConvertPage() {
                         {st?.status === 'uploading' && <span className="badge wait"><Loader2 className="spin" size={11} /> upload</span>}
                         {st && st.status !== 'uploading' && <span className={`badge ${st.status === 'Accepted' ? 'ok' : st.status === 'Failed' ? 'bad' : 'wait'}`}>{st.status === 'Accepted' ? 'Diterima' : st.status === 'Failed' ? 'Gagal' : 'Pending'}</span>}
                         {st?.rbxassetid && <button className="btn ghost sm" onClick={() => copy(st.rbxassetid)}><Copy size={13} /></button>}
+                        {st?.status === 'Failed' && <button className="btn ghost sm" onClick={() => handleRetry(part)} title="Coba lagi"><RotateCw size={13} /></button>}
                         <a className="btn ghost sm" href={part.audioDataUrl || `${API_BASE}${part.audioUrl}`} download={part.fileName} title="Download"><Download size={13} /></a>
                       </div>
                       <audio controls preload="none" src={part.audioDataUrl || `${API_BASE}${part.audioUrl}`} style={{ width: '100%', marginTop: 10, height: 34 }} />
@@ -244,6 +282,7 @@ export default function ConvertPage() {
                 <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
                 <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
               </div>
+              <button className="btn ghost block" style={{ marginBottom: 10 }} onClick={downloadAll}><Download size={16} /> Download semua part</button>
               <MagneticButton className="primary block neon-border" disabled={busy} onClick={handleUploadAll}>
                 {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
                 {busy === 'upload' ? `Mengupload part ${uploadingIdx}/${processed.partCount}...` : `Upload ${processed.partCount} part ke Roblox`}
