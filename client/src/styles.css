@@ -276,3 +276,48 @@ body::after {
   .topbar { padding: 16px; }
 }
 .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40; }
+
+/* ===================== Refinements / polish ===================== */
+.topbar h1 {
+  background: linear-gradient(90deg, #eaf1ff, #9fb4dd);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.card { transition: border-color 0.25s, transform 0.25s; }
+.card:hover { border-color: var(--border-strong); }
+.list-item { transition: border-color 0.2s, transform 0.15s; }
+.list-item:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+
+/* Native audio player — selaras tema gelap */
+audio {
+  border-radius: 10px;
+  background: rgba(7, 11, 20, 0.7);
+  border: 1px solid var(--border);
+  color-scheme: dark;
+}
+audio::-webkit-media-controls-panel { background: #0d1424; }
+audio::-webkit-media-controls-current-time-display,
+audio::-webkit-media-controls-time-remaining-display { color: var(--text-soft); }
+
+/* Brand logo subtle shine */
+.brand-logo { position: relative; overflow: hidden; }
+.brand-logo::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%);
+  transform: translateX(-120%); animation: shine 5s ease-in-out infinite;
+}
+@keyframes shine { 0%, 70% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+
+/* Buttons get a soft inner highlight */
+.btn.primary { position: relative; overflow: hidden; }
+.btn.primary::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.25), transparent 45%);
+  pointer-events: none;
+}
+
+/* Chips subtle gradient border on hover */
+.chip { transition: border-color 0.2s, color 0.2s; }
+.chip:hover { border-color: var(--border-strong); }
+
+/* Scroll reveal feel for cards already handled by framer; ensure anchors styled */
+a.btn { text-decoration: none; }

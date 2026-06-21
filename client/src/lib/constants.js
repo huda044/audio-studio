@@ -17,6 +17,7 @@ export const defaultSettings = {
   speed: 2.3,
   amplify: -4,
   maxDuration: MAX_AUDIO_DURATION_SECONDS,
+  segmentSeconds: 180,
   pitch: 0,
   bassBoost: false,
   reverb: false,

@@ -5,8 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { nanoid } from 'nanoid';
-import { processAudio, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
+import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
@@ -150,7 +149,7 @@ function resolveApiKey(body = {}) {
   return String(body.apiKey || '').trim();
 }
 
-// POST /api/process — terima file audio + setting efek, kembalikan audio .ogg yang sudah diproses.
+// POST /api/process — terima file audio + setting efek, proses penuh lalu potong jadi beberapa part.
 router.post('/process', processLimit, upload.single('audio'), async (req, res, next) => {
   try {
     const responseBody = await conversionQueue.push(async () => {
@@ -160,70 +159,61 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         throw error;
       }
       const settings = parseSettings(req.body.settings);
-      const requestedMaxDuration = settings.maxDuration;
+      const segmentSeconds = cleanNumber(req.body.segmentSeconds ?? settings.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
       const title = String(req.body.title || req.file.originalname || 'Audio Studio').trim().slice(0, 180);
       const warnings = [];
 
       let sourceDuration = 0;
-      let sourceProbe = null;
       try {
-        sourceProbe = await probeAudio(req.file.path);
+        const sourceProbe = await probeAudio(req.file.path);
         sourceDuration = Number(sourceProbe.format?.duration || 0) || 0;
       } catch (error) {
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
       }
 
-      settings.maxDurationLimit = appMaxDurationSeconds;
-      settings.maxDuration = Math.max(30, Math.ceil(Math.min(requestedMaxDuration || appMaxDurationSeconds, appMaxDurationSeconds)));
-
-      const outputName = `processed-${nanoid(10)}.ogg`;
-      const outputPath = path.join(uploadsDir, outputName);
-      const result = await processAudio({ inputPath: req.file.path, outputPath, settings, sourceDuration });
+      const result = await processAudioSegmented({
+        inputPath: req.file.path,
+        outputDir: uploadsDir,
+        settings,
+        segmentSeconds,
+        sourceDuration
+      });
       warnings.push(...(result.warnings || []));
 
-      const shouldInlineAudio = result.sizeBytes <= inlineAudioLimitBytes;
-      const audioBuffer = shouldInlineAudio ? await fs.readFile(outputPath) : null;
+      const parts = await Promise.all(result.parts.map(async (part) => {
+        const inline = part.sizeBytes <= inlineAudioLimitBytes && result.partCount <= 4;
+        const audioDataUrl = inline
+          ? `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`
+          : '';
+        return {
+          index: part.index,
+          fileName: part.fileName,
+          audioUrl: `/api/files/${part.fileName}`,
+          audioDataUrl,
+          duration: part.duration,
+          durationText: formatSeconds(part.duration),
+          sizeBytes: part.sizeBytes
+        };
+      }));
 
       return {
-        fileName: outputName,
-        audioUrl: `/api/files/${outputName}`,
-        audioDataUrl: audioBuffer ? `data:audio/ogg;base64,${audioBuffer.toString('base64')}` : '',
-        duration: result.duration,
-        sizeBytes: result.sizeBytes,
         title,
+        parts,
+        partCount: result.partCount,
+        segmentSeconds: result.segmentSeconds,
+        segmentText: formatSeconds(result.segmentSeconds),
+        totalDuration: result.totalDuration,
+        totalDurationText: formatSeconds(result.totalDuration),
         sourceDuration,
         sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
-        outputDurationText: formatSeconds(result.duration),
-        sourceProbe: {
-          format: result.source?.format || sourceProbe?.format?.format_name || '',
-          codec: result.source?.codec || ''
-        },
         appliedSettings: result.appliedSettings,
         appliedEffects: result.effects,
         warnings,
-        filterCount: result.filters.length,
-        output: {
-          format: result.format,
-          codec: result.codec,
-          bitrate: result.bitrate,
-          effectiveDuration: result.effectiveDuration
-        },
+        output: { format: result.format, codec: result.codec, bitrate: result.bitrate },
         conversionTrace: [
-          {
-            step: 'Upload',
-            status: 'Accepted',
-            message: sourceDuration ? `File terbaca ${formatSeconds(sourceDuration)}.` : 'File terbaca.'
-          },
-          {
-            step: 'FFmpeg',
-            status: 'Accepted',
-            message: `${result.effects.length} efek/filter diterapkan ke output OGG.`
-          },
-          {
-            step: 'Output',
-            status: 'Accepted',
-            message: `Output ${formatSeconds(result.duration)} (${Math.round(result.sizeBytes / 1024)} KB) siap diputar dan diupload.`
-          }
+          { step: 'Upload', status: 'Accepted', message: sourceDuration ? `File terbaca ${formatSeconds(sourceDuration)}.` : 'File terbaca.' },
+          { step: 'FFmpeg', status: 'Accepted', message: `${result.effects.length} efek diterapkan ke audio penuh.` },
+          { step: 'Split', status: 'Accepted', message: `Output dipotong jadi ${result.partCount} part @ maks ${formatSeconds(result.segmentSeconds)}.` }
         ],
         queue: conversionQueue.stats()
       };

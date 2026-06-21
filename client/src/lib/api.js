@@ -7,23 +7,24 @@ async function parseJson(response) {
   return data;
 }
 
-// Upload file audio + setting → kembalikan hasil konversi (.ogg).
-export async function processAudio({ file, settings, title, signal }) {
+// Upload file audio + setting → kembalikan hasil konversi (beberapa part .ogg).
+export async function processAudio({ file, settings, title, segmentSeconds, signal }) {
   const form = new FormData();
   form.append('audio', file);
   form.append('settings', JSON.stringify(settings));
   if (title) form.append('title', title);
+  if (segmentSeconds) form.append('segmentSeconds', String(segmentSeconds));
   const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', body: form, signal });
   return parseJson(response);
 }
 
-// Ambil blob hasil konversi (untuk dikirim ke upload Roblox).
-export async function fetchProcessedBlob(processed) {
-  if (processed?.audioDataUrl) {
-    const res = await fetch(processed.audioDataUrl);
+// Ambil blob hasil konversi dari sebuah part (untuk dikirim ke upload Roblox).
+export async function fetchPartBlob(part) {
+  if (part?.audioDataUrl) {
+    const res = await fetch(part.audioDataUrl);
     return res.blob();
   }
-  const res = await fetch(`${API_BASE}${processed.audioUrl}`);
+  const res = await fetch(`${API_BASE}${part.audioUrl}`);
   if (!res.ok) throw new Error('File hasil konversi sudah tidak tersedia, konversi ulang dulu.');
   return res.blob();
 }
