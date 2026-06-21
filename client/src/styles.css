@@ -536,3 +536,33 @@ html { scroll-behavior: smooth; }
 .hero-scroll { margin-top: 44px; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: var(--accent); background: rgba(16,24,44,0.5); border: 1px solid var(--border-strong); animation: bob 2s ease-in-out infinite; }
 @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { .hero-scroll { animation: none; } }
+
+/* ===================== Cinematic loading overlay ===================== */
+.overlay-card { position: relative; overflow: hidden; width: min(380px, 92vw); text-align: center; }
+.ov-scan { position: absolute; left: 0; right: 0; height: 80px; top: -80px; background: linear-gradient(180deg, transparent, rgba(34,211,238,0.1), transparent); animation: scan 3s linear infinite; pointer-events: none; }
+.ov-ring { width: 132px; height: 132px; border-radius: 50%; margin: 4px auto 18px; display: grid; place-items: center; background: conic-gradient(var(--accent) var(--p, 0deg), rgba(124,162,214,0.14) 0); box-shadow: 0 0 44px -10px rgba(34,211,238,0.6); transition: background 0.3s; }
+.ov-ring-inner { width: 106px; height: 106px; border-radius: 50%; background: var(--surface-solid); display: grid; place-items: center; border: 1px solid var(--border); }
+.ov-pct { font-size: 32px; font-weight: 800; }
+.ov-pct small { font-size: 14px; color: var(--text-dim); margin-left: 2px; }
+.ov-title { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 0 0 4px; font-size: 16px; }
+.ov-title .spin { color: var(--accent); }
+.ov-msg { margin: 0 0 14px; color: var(--text-soft); font-size: 13px; min-height: 18px; }
+.ov-bar { height: 6px; border-radius: 99px; background: rgba(124,162,214,0.15); overflow: hidden; }
+.ov-bar-fill { display: block; height: 100%; background: var(--grad-accent); width: 0; box-shadow: 0 0 12px rgba(34,211,238,0.7); }
+.ov-hint { margin: 12px 0 0; }
+
+/* ===================== Mobile menu + a11y focus ===================== */
+.nav-menu-btn { display: none; width: 40px; height: 40px; border-radius: 10px; place-items: center; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); cursor: pointer; }
+.nav-mobile { display: none; }
+@media (max-width: 760px) {
+  .nav-menu-btn { display: grid; }
+  .key-chip span { display: none; }
+  .nav-mobile { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 16px; background: rgba(7,11,20,0.95); backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); }
+  .nav-mobile-link { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 11px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-soft); font-size: 14px; font-weight: 500; font-family: var(--font); cursor: pointer; text-align: left; }
+  .nav-mobile-link.active { color: #fff; border-color: var(--accent); box-shadow: inset 0 0 16px rgba(34,211,238,0.18); }
+}
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.btn:focus-visible, .top-link:focus-visible, .preset:focus-visible, .toggle:focus-visible, .key-chip:focus-visible, .nav-brand:focus-visible, .nav-item:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+body.has-custom-cursor :focus-visible { outline: 2px solid var(--accent) !important; }

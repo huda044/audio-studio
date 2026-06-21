@@ -124,18 +124,19 @@ function hasAudioStream(probe) {
   return Array.isArray(probe.streams) && probe.streams.some((s) => s.codec_type === 'audio');
 }
 
-async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration }) {
+async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress }) {
   await fs.unlink(outputPath).catch(() => {});
   await new Promise((resolve, reject) => {
     let cmd = ffmpeg(inputPath);
     let stderr = '';
     let settled = false;
-    const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 300000);
+    const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 600000);
     const settle = (error) => { if (settled) return; settled = true; clearTimeout(timer); error ? reject(error) : resolve(); };
     const timer = setTimeout(() => { cmd.kill('SIGKILL'); settle(httpError('Konversi FFmpeg melewati batas waktu server.', 408)); }, timeoutMs);
     if (trimStart > 0) cmd = cmd.seekInput(trimStart);
     cmd.audioFilters(filters).audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100).format('ogg').outputOptions(['-vn']);
     cmd.duration(effectiveDuration)
+      .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', () => settle())
       .on('stderr', (line) => { stderr = `${stderr}${line}\n`.slice(-4000); })
       .on('error', (error) => {
@@ -154,7 +155,7 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
 }
 
 // Proses audio penuh dengan efek (dipakai sebagai master sebelum dipotong jadi part).
-async function processFull({ inputPath, outputPath, settings, sourceDuration = 0 }) {
+async function processFull({ inputPath, outputPath, settings, sourceDuration = 0, onProgress }) {
   const sourceProbe = await probeAudio(inputPath).catch((error) => {
     throw httpError(`Sumber audio tidak bisa dibaca FFmpeg: ${error.message}`, 422);
   });
@@ -167,14 +168,14 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
   const fallbackDisabled = String(process.env.DISABLE_AUDIO_FALLBACK || '').toLowerCase() === 'true';
 
   try {
-    await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration });
+    await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress });
   } catch (error) {
     if (fallbackDisabled) throw error;
     const level1 = buildFilters({ ...settings, normalize: false, reverb: false, echo: false }, detectedSourceDuration, MAX_OUTPUT_SECONDS);
     let level1Error = null;
     if (level1.filters.join('|') !== filters.join('|')) {
       try {
-        await runFfmpegConversion({ inputPath, outputPath, filters: level1.filters, trimStart: level1.appliedSettings.trimStart, effectiveDuration: level1.effectiveDuration });
+        await runFfmpegConversion({ inputPath, outputPath, filters: level1.filters, trimStart: level1.appliedSettings.trimStart, effectiveDuration: level1.effectiveDuration, onProgress });
         warnings = [...warnings, 'Konversi utama gagal, backend memakai fallback aman tanpa normalize/reverb/echo.'];
         ({ filters, appliedSettings, effects, effectiveDuration } = level1);
       } catch (innerError) { level1Error = innerError; }
@@ -208,7 +209,7 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
 }
 
 // Potong file (sudah berisi efek) menjadi beberapa part berdurasi segmentSeconds.
-async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration }) {
+async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress }) {
   if (totalDuration <= segmentSeconds + 0.5) {
     const single = path.join(outputDir, `processed-${nanoid(10)}.ogg`);
     await fs.copyFile(inputPath, single);
@@ -221,6 +222,7 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
     ffmpeg(inputPath)
       .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
       .outputOptions(['-vn', '-f', 'segment', '-segment_time', String(segmentSeconds), '-reset_timestamps', '1'])
+      .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', resolve)
       .on('error', reject)
       .save(pattern);
@@ -240,12 +242,22 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
 }
 
 // API utama: proses + potong jadi beberapa lagu.
-export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0 }) {
+export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress }) {
   const segSec = clamp(segmentSeconds || 180, SEGMENT_MIN, SEGMENT_MAX);
   const masterPath = path.join(outputDir, `master-${nanoid(10)}.ogg`);
+  const emit = (pct) => { if (onProgress) onProgress(Math.max(0, Math.min(100, Math.round(pct)))); };
   try {
-    const master = await processFull({ inputPath, outputPath: masterPath, settings, sourceDuration });
-    const parts = await segmentFile({ inputPath: masterPath, outputDir, segmentSeconds: segSec, totalDuration: master.duration });
+    emit(3);
+    const master = await processFull({
+      inputPath, outputPath: masterPath, settings, sourceDuration,
+      onProgress: (pct) => emit(5 + pct * 0.8)
+    });
+    emit(86);
+    const parts = await segmentFile({
+      inputPath: masterPath, outputDir, segmentSeconds: segSec, totalDuration: master.duration,
+      onProgress: (pct) => emit(86 + pct * 0.13)
+    });
+    emit(100);
     return {
       parts,
       segmentSeconds: segSec,

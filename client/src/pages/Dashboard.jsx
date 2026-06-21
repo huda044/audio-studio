@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert, Menu, X } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import ConvertSection from './ConvertPage.jsx';
 import RobloxSection from './SettingsPage.jsx';
@@ -35,6 +35,7 @@ export default function Dashboard() {
   const { roblox } = useApp();
   const [scrolled, setScrolled] = useState(false);
   const [activeId, setActiveId] = useState('konversi');
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const onScroll = () => {
@@ -81,7 +82,29 @@ export default function Dashboard() {
             {keyReady ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
             <span>{keyReady ? 'Roblox siap' : 'Set API key'}</span>
           </button>
+
+          <button type="button" className="nav-menu-btn" aria-label="Menu" onClick={() => setMenuOpen((v) => !v)}>
+            {menuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
         </div>
+
+        <AnimatePresence>
+          {menuOpen && (
+            <motion.div
+              className="nav-mobile"
+              initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            >
+              {LINKS.map((l) => {
+                const Icon = l.icon;
+                return (
+                  <button key={l.id} type="button" className={`nav-mobile-link ${activeId === l.id ? 'active' : ''}`} onClick={() => { scrollTo(l.id); setMenuOpen(false); }}>
+                    <Icon size={16} /> {l.label}
+                  </button>
+                );
+              })}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       <main className="container">

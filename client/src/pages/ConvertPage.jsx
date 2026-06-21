@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
+import LoadingOverlay from '../components/LoadingOverlay.jsx';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
@@ -16,6 +17,7 @@ export default function ConvertPage() {
   const [drag, setDrag] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState('');
+  const [progress, setProgress] = useState({ percent: 0, stage: '', message: '' });
   const [processed, setProcessed] = useState(null);
   const [partStatus, setPartStatus] = useState({});
   const [uploadingIdx, setUploadingIdx] = useState(0);
@@ -33,8 +35,12 @@ export default function ConvertPage() {
   async function handleConvert() {
     if (!file) { notify('Pilih file audio dulu.', 'error'); return; }
     setBusy('convert'); setProcessed(null); setPartStatus({});
+    setProgress({ percent: 0, stage: 'queue', message: 'Menyiapkan...' });
     try {
-      const result = await processAudio({ file, settings, title: file.name, segmentSeconds: settings.segmentSeconds });
+      const result = await processAudio({
+        file, settings, title: file.name, segmentSeconds: settings.segmentSeconds,
+        onProgress: (m) => setProgress({ percent: m.percent ?? 0, stage: m.stage || '', message: m.message || '' })
+      });
       setProcessed(result);
       (result.warnings || []).forEach((w) => notify(w, 'info'));
       notify(`Konversi selesai: ${result.partCount} part siap.`);
@@ -91,6 +97,8 @@ export default function ConvertPage() {
   function copy(text) { navigator.clipboard?.writeText(text); notify('Disalin.'); }
 
   return (
+    <>
+    <LoadingOverlay open={busy === 'convert'} percent={progress.percent} stage={progress.stage} message={progress.message} />
     <div className="grid-2">
       {/* LEFT */}
       <div>
@@ -245,5 +253,6 @@ export default function ConvertPage() {
         </Card>
       </div>
     </div>
+    </>
   );
 }

@@ -1,0 +1,17 @@
+{
+  "name": "LuciVoid Audio Studio",
+  "short_name": "LuciVoid",
+  "description": "Konversi audio ke asset Roblox: upload, edit, auto-split, upload Open Cloud.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
