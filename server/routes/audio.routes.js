@@ -213,6 +213,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         queue: conversionQueue.stats()
       };
     });
+    res.setHeader('X-No-Compression', '1');
     res.json(responseBody);
   } catch (error) {
     next(error);

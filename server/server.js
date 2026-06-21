@@ -49,7 +49,14 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
-app.use(compression());
+// Lewati gzip jika route menandai X-No-Compression (mis. /api/process yang isinya
+// base64 audio: gzip-nya berat di CPU & bisa membuat respons seperti "hang" lewat proxy HF).
+app.use(compression({
+  filter(req, res) {
+    if (res.getHeader('X-No-Compression')) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 // Tanpa login/cookie, jadi CORS terbuka aman: API key Roblox dikirim per-request di body,
 // tidak ada session/credential yang bisa dicuri lewat CORS.
@@ -77,6 +84,12 @@ app.use('/api/files', express.static(uploadsDir, {
 }));
 
 app.use('/api', audioRoutes);
+
+// Route /api yang tidak dikenal harus balas JSON 404, BUKAN jatuh ke catch-all SPA
+// (yang akan mengirim index.html dan membuat client gagal parse JSON).
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Endpoint API tidak ditemukan.', status: 404 });
+});
 
 app.get('/health', (_req, res) => {
   res.json({
