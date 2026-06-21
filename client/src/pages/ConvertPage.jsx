@@ -4,7 +4,7 @@ import {
   UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
-import { Card, Slider, Toggle } from '../components/ui.jsx';
+import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
@@ -166,10 +166,10 @@ export default function ConvertPage() {
             )}
           </AnimatePresence>
 
-          <button className="btn primary block" style={{ marginTop: 18 }} disabled={!file || busy} onClick={handleConvert}>
+          <MagneticButton className="primary block neon-border" style={{ marginTop: 18 }} disabled={!file || busy} onClick={handleConvert}>
             {busy === 'convert' ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />}
             {busy === 'convert' ? 'Memproses & memotong...' : 'Konversi Audio'}
-          </button>
+          </MagneticButton>
         </Card>
       </div>
 
@@ -222,10 +222,10 @@ export default function ConvertPage() {
                 <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
                 <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
               </div>
-              <button className="btn primary block" disabled={busy} onClick={handleUploadAll}>
+              <MagneticButton className="primary block neon-border" disabled={busy} onClick={handleUploadAll}>
                 {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
                 {busy === 'upload' ? `Mengupload part ${uploadingIdx}/${processed.partCount}...` : `Upload ${processed.partCount} part ke Roblox`}
-              </button>
+              </MagneticButton>
             </>
           )}
         </Card>

@@ -321,3 +321,130 @@ audio::-webkit-media-controls-time-remaining-display { color: var(--text-soft); 
 
 /* Scroll reveal feel for cards already handled by framer; ensure anchors styled */
 a.btn { text-decoration: none; }
+
+/* ============================================================
+   ULTRA PREMIUM FUTURISTIC LAYER
+   ============================================================ */
+
+/* Matikan aurora lama; diganti background world berlapis */
+body::before, body::after { display: none !important; }
+
+.cyber-bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.cyber-bg > * { position: absolute; inset: 0; }
+
+/* Layer 1: deep space */
+.cb-space {
+  background:
+    radial-gradient(1200px 800px at 70% -10%, #16204a 0%, transparent 55%),
+    radial-gradient(1000px 700px at -10% 110%, #1a1140 0%, transparent 55%),
+    linear-gradient(180deg, #05070f 0%, #070b18 50%, #05060e 100%);
+}
+
+/* Layer 2: aurora bergerak perlahan */
+.cb-aurora {
+  background:
+    radial-gradient(40% 50% at 25% 30%, rgba(34,211,238,0.18), transparent 60%),
+    radial-gradient(45% 55% at 75% 60%, rgba(168,85,247,0.16), transparent 60%),
+    radial-gradient(40% 45% at 55% 85%, rgba(99,102,241,0.16), transparent 60%);
+  filter: blur(30px);
+  animation: auroraShift 24s ease-in-out infinite alternate;
+}
+@keyframes auroraShift {
+  0% { transform: translate3d(0,0,0) scale(1); }
+  100% { transform: translate3d(-4%, -3%, 0) scale(1.12); }
+}
+
+/* Layer 4: cyber grid perspektif 3D */
+.cb-grid {
+  top: 45%; bottom: -10%; left: -25%; right: -25%;
+  background-image:
+    linear-gradient(rgba(34,211,238,0.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34,211,238,0.14) 1px, transparent 1px);
+  background-size: 60px 60px;
+  transform: perspective(420px) rotateX(64deg);
+  transform-origin: center top;
+  mask-image: linear-gradient(180deg, transparent, #000 30%, transparent 92%);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 30%, transparent 92%);
+  animation: gridMove 6s linear infinite;
+  opacity: 0.5;
+}
+@keyframes gridMove { to { background-position: 0 60px, 0 0; } }
+
+/* Layer 5: floating orbs */
+.cb-orb { border-radius: 50%; filter: blur(60px); opacity: 0.55; }
+.cb-orb-1 { width: 34vw; height: 34vw; left: -6vw; top: 8vh; background: radial-gradient(circle, rgba(34,211,238,0.6), transparent 65%); animation: orb1 26s ease-in-out infinite alternate; }
+.cb-orb-2 { width: 30vw; height: 30vw; right: -8vw; top: 30vh; background: radial-gradient(circle, rgba(168,85,247,0.55), transparent 65%); animation: orb2 30s ease-in-out infinite alternate; }
+.cb-orb-3 { width: 26vw; height: 26vw; left: 40vw; bottom: -12vh; background: radial-gradient(circle, rgba(99,102,241,0.5), transparent 65%); animation: orb3 34s ease-in-out infinite alternate; }
+@keyframes orb1 { to { transform: translate(10vw, 12vh) scale(1.2); } }
+@keyframes orb2 { to { transform: translate(-8vw, 16vh) scale(1.15); } }
+@keyframes orb3 { to { transform: translate(6vw, -14vh) scale(1.25); } }
+
+/* Layer 3: particles canvas */
+.cb-particles { width: 100%; height: 100%; opacity: 0.9; }
+
+/* Layer 6: noise */
+.cb-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  opacity: 0.035; mix-blend-mode: overlay;
+}
+
+/* Hologram scan line */
+.cb-scan {
+  background: linear-gradient(180deg, transparent, rgba(34,211,238,0.05) 50%, transparent);
+  height: 180px; top: -180px;
+  animation: scan 7s linear infinite;
+}
+@keyframes scan { 0% { top: -180px; } 100% { top: 100%; } }
+
+/* ---- Custom cursor ---- */
+body.has-custom-cursor, body.has-custom-cursor * { cursor: none !important; }
+.cursor-dot, .cursor-ring { position: fixed; top: 0; left: 0; z-index: 9999; pointer-events: none; border-radius: 50%; margin-left: -3px; margin-top: -3px; }
+.cursor-dot { width: 6px; height: 6px; background: #22d3ee; box-shadow: 0 0 10px #22d3ee, 0 0 20px #22d3ee; }
+.cursor-ring { width: 34px; height: 34px; margin-left: -17px; margin-top: -17px; border: 1.5px solid rgba(34,211,238,0.7); transition: width 0.2s, height 0.2s, border-color 0.2s, background 0.2s; }
+.cursor-ring.hover { width: 52px; height: 52px; margin-left: -26px; margin-top: -26px; border-color: #a855f7; background: rgba(168,85,247,0.08); }
+.cursor-ring.down { width: 24px; height: 24px; margin-left: -12px; margin-top: -12px; }
+@media (pointer: coarse) { .cursor-dot, .cursor-ring { display: none; } }
+
+/* ---- Glassmorphism 2.0 + tilt ---- */
+.card { position: relative; background: rgba(16, 24, 44, 0.55); border-color: rgba(140, 180, 240, 0.16); transform-style: preserve-3d; will-change: transform; transition: transform 0.18s ease, border-color 0.25s, box-shadow 0.25s; box-shadow: 0 20px 50px -22px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.05); }
+.card::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(135deg, rgba(34,211,238,0.5), rgba(168,85,247,0.35) 40%, transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude; opacity: 0.5; transition: opacity 0.25s;
+}
+.card:hover::before { opacity: 1; }
+.card-glow { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(34,211,238,0.14), transparent 45%); }
+.card:hover .card-glow { opacity: 1; }
+.card > * { position: relative; }
+
+/* ---- Magnetic button ---- */
+.btn.magnetic { position: relative; transition: transform 0.15s ease, box-shadow 0.2s; }
+.btn.magnetic .mag-inner { display: inline-flex; align-items: center; gap: 8px; }
+
+/* ---- Neon upgrade ---- */
+.btn.primary { box-shadow: 0 0 24px -6px rgba(34,211,238,0.6), 0 12px 30px -10px rgba(99,102,241,0.5); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 0 34px -4px rgba(168,85,247,0.7), 0 16px 40px -10px rgba(99,102,241,0.7); }
+.brand-logo { box-shadow: 0 0 24px -4px rgba(34,211,238,0.8); }
+.nav-item.active { text-shadow: 0 0 14px rgba(34,211,238,0.6); }
+.nav-active-bar { box-shadow: inset 0 0 18px rgba(34,211,238,0.25); }
+.card-title .ico { filter: drop-shadow(0 0 6px rgba(34,211,238,0.7)); }
+
+/* Animated gradient border helper */
+.neon-border { position: relative; }
+.neon-border::after {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(90deg, #22d3ee, #6366f1, #a855f7, #22d3ee); background-size: 300% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: borderFlow 4s linear infinite;
+}
+@keyframes borderFlow { to { background-position: 300% 0; } }
+
+/* Sidebar/topbar lebih kaca */
+.sidebar { background: linear-gradient(180deg, rgba(10,16,32,0.72), rgba(6,10,20,0.78)); }
+.topbar { background: rgba(8,12,22,0.5); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-aurora, .cb-grid, .cb-orb, .cb-scan, .neon-border::after, .brand-logo::after { animation: none !important; }
+}

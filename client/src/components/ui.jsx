@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { motion } from 'framer-motion';
 
 export const fadeUp = {
@@ -11,20 +11,63 @@ export const stagger = {
   show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } }
 };
 
+const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
 export function Card({ icon, title, desc, children, className = '', delay = 0 }) {
+  const ref = useRef(null);
+
+  function onMove(e) {
+    const el = ref.current;
+    if (!el || reduceMotion()) return;
+    const rect = el.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width;
+    const py = (e.clientY - rect.top) / rect.height;
+    el.style.setProperty('--mx', `${px * 100}%`);
+    el.style.setProperty('--my', `${py * 100}%`);
+    el.style.transform = `perspective(900px) rotateY(${(px - 0.5) * 6}deg) rotateX(${(0.5 - py) * 6}deg) translateY(-2px)`;
+  }
+  function onLeave() {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = '';
+  }
+
   return (
     <motion.section
-      className={`card ${className}`}
-      initial={{ opacity: 0, y: 18 }}
+      ref={ref}
+      className={`card tilt ${className}`}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      initial={{ opacity: 0, y: 22 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: 'spring', stiffness: 240, damping: 26, delay }}
     >
+      <span className="card-glow" aria-hidden="true" />
       {(title || icon) && (
         <h2 className="card-title">{icon && <span className="ico">{icon}</span>}{title}</h2>
       )}
       {desc && <p className="card-desc">{desc}</p>}
       {children}
     </motion.section>
+  );
+}
+
+// Tombol magnet: tertarik ke cursor + glow. Untuk CTA utama.
+export function MagneticButton({ children, className = '', strength = 0.4, ...props }) {
+  const ref = useRef(null);
+  function onMove(e) {
+    const el = ref.current;
+    if (!el || reduceMotion()) return;
+    const r = el.getBoundingClientRect();
+    const x = e.clientX - r.left - r.width / 2;
+    const y = e.clientY - r.top - r.height / 2;
+    el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
+  }
+  function onLeave() { if (ref.current) ref.current.style.transform = ''; }
+  return (
+    <button ref={ref} className={`btn magnetic ${className}`} onMouseMove={onMove} onMouseLeave={onLeave} {...props}>
+      <span className="mag-inner">{children}</span>
+    </button>
   );
 }
 

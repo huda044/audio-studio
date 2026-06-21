@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { AnimatePresence, motion } from 'framer-motion';
 import { Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar.jsx';
+import CyberBackground from './components/CyberBackground.jsx';
+import CustomCursor from './components/CustomCursor.jsx';
 import ConvertPage from './pages/ConvertPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
 import LibraryPage from './pages/LibraryPage.jsx';
@@ -71,6 +73,7 @@ export default function App() {
 
   return (
     <AppContext.Provider value={ctx}>
+      <CyberBackground />
       <div className="shell">
         <Sidebar
           active={active}
@@ -124,6 +127,7 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
+      <CustomCursor />
     </AppContext.Provider>
   );
 }
