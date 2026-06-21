@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { AnimatePresence, motion } from 'framer-motion';
 import CyberBackground from './components/CyberBackground.jsx';
 import CustomCursor from './components/CustomCursor.jsx';
+import LandingHero from './components/LandingHero.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import { STORAGE_KEYS, defaultSettings } from './lib/constants.js';
 import { useStoredState, safeParse, obfuscate, deobfuscate } from './lib/storage.js';
@@ -33,6 +34,7 @@ function useRobloxConfig() {
 
 export default function App() {
   const [toast, setToast] = useState(null);
+  const [entered, setEntered] = useState(() => sessionStorage.getItem('lucivoid-entered') === '1');
   const [roblox, setRoblox] = useRobloxConfig();
   const [groups, setGroups] = useStoredState(STORAGE_KEYS.groups, []);
   const [history, setHistory] = useStoredState(STORAGE_KEYS.history, []);
@@ -48,6 +50,11 @@ export default function App() {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function enterStudio() {
+    sessionStorage.setItem('lucivoid-entered', '1');
+    setEntered(true);
+  }
+
   const ctx = useMemo(() => ({
     roblox, setRoblox, groups, setGroups, history, setHistory, settings, setSettings, notify, goto
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -56,7 +63,15 @@ export default function App() {
   return (
     <AppContext.Provider value={ctx}>
       <CyberBackground />
-      <Dashboard />
+      <AnimatePresence mode="wait">
+        {entered ? (
+          <motion.div key="dashboard" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+            <Dashboard />
+          </motion.div>
+        ) : (
+          <LandingHero key="landing" onEnter={enterStudio} />
+        )}
+      </AnimatePresence>
       <CustomCursor />
 
       <div className="toast-wrap">
