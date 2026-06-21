@@ -90,13 +90,23 @@ app.get('/health', (_req, res) => {
 
 const clientDist = process.env.CLIENT_DIST;
 if (clientDist) {
-  app.use(express.static(clientDist));
-  app.get('*', (_req, res, next) => {
-    try {
-      res.sendFile(path.join(clientDist, 'index.html'));
-    } catch (error) {
-      next(error);
+  // Aset ber-hash (js/css/img) boleh di-cache lama, tapi index.html JANGAN pernah di-cache
+  // supaya browser/CDN HF selalu mengambil bundle terbaru (mencegah bug "stale bundle").
+  app.use(express.static(clientDist, {
+    index: false,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      } else if (/\.(js|css|woff2?|png|jpg|jpeg|svg|webp|ico)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
     }
+  }));
+  app.get('*', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.sendFile(path.join(clientDist, 'index.html'), (error) => {
+      if (error) next(error);
+    });
   });
 }
 
