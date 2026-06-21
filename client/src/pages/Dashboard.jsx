@@ -6,6 +6,7 @@ import ConvertSection from './ConvertPage.jsx';
 import RobloxSection from './SettingsPage.jsx';
 import HistoryPage from './HistoryPage.jsx';
 import LibraryPage from './LibraryPage.jsx';
+import Hero from '../components/Hero.jsx';
 
 const LINKS = [
   { id: 'konversi', label: 'Konversi', icon: Wand2 },
@@ -84,6 +85,8 @@ export default function Dashboard() {
       </header>
 
       <main className="container">
+        <Hero />
+
         <section id="konversi" className="section">
           <SectionHead index="01" icon={<Music2 size={18} />} title="Konversi Audio" desc="Upload file, atur preset & durasi per part, lalu kirim ke Roblox." />
           <ConvertSection />

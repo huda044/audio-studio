@@ -124,3 +124,21 @@ export function Trace({ items = [] }) {
     </div>
   );
 }
+
+// Angka yang menghitung naik (count animation) saat muncul.
+export function CountUp({ value, duration = 1100, suffix = '' }) {
+  const [n, setN] = React.useState(0);
+  React.useEffect(() => {
+    const to = Number(value) || 0;
+    if (reduceMotion()) { const id = requestAnimationFrame(() => setN(to)); return () => cancelAnimationFrame(id); }
+    let raf; const start = performance.now();
+    const tick = (t) => {
+      const p = Math.min(1, (t - start) / duration);
+      setN(Math.round(to * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+  return <span>{n}{suffix}</span>;
+}
