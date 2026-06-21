@@ -5,13 +5,14 @@ import {
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
-import LoadingOverlay from '../components/LoadingOverlay.jsx';
 import WaveBar from '../components/WaveBar.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
 import { formatDuration, formatBytes } from '../lib/format.js';
+
+const STAGE_LABEL = { queue: 'Antrian', probe: 'Analisis file', convert: 'Menerapkan efek', split: 'Memotong part' };
 
 export default function ConvertPage() {
   const { settings, setSettings, roblox, history, setHistory, notify, goto } = useApp();
@@ -150,7 +151,6 @@ export default function ConvertPage() {
 
   return (
     <>
-    <LoadingOverlay open={busy === 'convert'} percent={progress.percent} stage={progress.stage} message={progress.message} />
     <div className="grid-2">
       {/* LEFT */}
       <div>
@@ -246,7 +246,17 @@ export default function ConvertPage() {
       {/* RIGHT */}
       <div>
         <Card icon={<Rocket size={18} />} title="3. Hasil & Upload Roblox" desc="Tiap part bisa diputar, lalu diupload jadi asset Roblox terpisah.">
-          {!processed ? (
+          {busy === 'convert' ? (
+            <div className="convert-progress">
+              <div className="ov-ring" style={{ '--p': `${(progress.percent || 0) * 3.6}deg` }}>
+                <div className="ov-ring-inner"><span className="ov-pct">{Math.round(progress.percent || 0)}<small>%</small></span></div>
+              </div>
+              <h3 className="cp-title"><Loader2 className="spin" size={16} /> {STAGE_LABEL[progress.stage] || 'Memproses'}</h3>
+              <p className="cp-msg">{progress.message || 'Sedang memproses audio...'}</p>
+              <div className="ov-bar"><div className="ov-bar-fill" style={{ width: `${progress.percent || 0}%` }} /></div>
+              <p className="muted small" style={{ marginTop: 14, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Jangan tutup tab ini.</p>
+            </div>
+          ) : !processed ? (
             <div className="result-empty">
               <div className="re-hero">
                 <div className="e-ico"><FileAudio size={26} /></div>
