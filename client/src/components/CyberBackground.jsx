@@ -1,8 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 
-// Background world berlapis: deep space + aurora + particle universe + cyber grid + orbs + noise.
-// Optimasi: connecting-lines memakai spatial grid (cell = max connect distance) sehingga
-// kompleksitas turun dari O(n²) menuju mendekati O(n), bukan nested loop penuh.
+// Interactive particle universe + connecting lines + mouse repel.
+// Augmentasi: click burst, trail effect, warna berubah sesuai scroll.
 export default function CyberBackground() {
   const canvasRef = useRef(null);
 
@@ -12,18 +11,16 @@ export default function CyberBackground() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    let raf = 0;
-    let running = false;
+    let raf = 0, running = false;
     let w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const mouse = { x: -999, y: -999 };
+    const CONNECT_DIST = 110;
+    const CELL = CONNECT_DIST;
+    let cols = 0, rows = 0;
+    let grid = [];
+    const mouse = { x: -999, y: -999, vx: 0, vy: 0 };
+    const clicks = []; // click burst
     let particles = [];
     let resizeTimer = 0;
-
-    const CONNECT_DIST = 110;
-    const CELL = CONNECT_DIST; // ukuran cell grid = jangkauan koneksi
-    let cols = 0, rows = 0;
-    // grid -> array of particle indices (di-rebuild tiap frame, alokasi ringan)
-    let grid = [];
 
     function rebuildGrid() {
       cols = Math.max(1, Math.ceil(w / CELL));
@@ -42,25 +39,22 @@ export default function CyberBackground() {
       w = canvas.clientWidth; h = canvas.clientHeight;
       canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // Lebih sedikit partikel di layar kecil / mobile supaya tetap ringan & hemat baterai.
       const divisor = coarse ? 22000 : 14000;
       const cap = coarse ? 80 : 150;
       const target = Math.min(cap, Math.floor((w * h) / divisor));
       particles = Array.from({ length: reduce ? Math.min(40, target) : target }, () => ({
         x: Math.random() * w, y: Math.random() * h,
         vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25,
-        r: Math.random() * 1.6 + 0.4,
-        hue: Math.random() > 0.5 ? 188 : 258
+        r: Math.random() * 1.6 + 0.4, hue: Math.random() > 0.5 ? 188 : 258
       }));
     }
-    // Debounce resize agar tidak re-init array partikel di tiap event resize (bisa cepat sekali).
-    function onResize() {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(resize, 150);
-    }
+
+    function onResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 150); }
 
     function step() {
       ctx.clearRect(0, 0, w, h);
+
+      // Sway particles toward mouse
       for (let i = 0; i < particles.length; i += 1) {
         const p = particles[i];
         p.x += p.vx; p.y += p.vy;
@@ -71,23 +65,35 @@ export default function CyberBackground() {
         const dist = Math.hypot(dx, dy);
         if (dist < 140) {
           const f = (140 - dist) / 140;
-          p.x += (dx / dist) * f * 1.2; p.y += (dy / dist) * f * 1.2;
+          p.x += (dx / dist) * f * 1.2;
+          p.y += (dy / dist) * f * 1.2;
         }
+
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         ctx.fillStyle = `hsla(${p.hue}, 90%, 70%, 0.7)`;
         ctx.fill();
       }
 
-      // connecting lines via spatial grid: tiap partikel hanya dibandingkan dengan
-      // partikel di 9 cell sekitarnya (diri sendiri + 8 tetangga), bukan semua partikel.
+      // Click burst — ripple expanding
+      for (let ci = clicks.length - 1; ci >= 0; ci -= 1) {
+        const c = clicks[ci];
+        c.r += 2.5;
+        c.alpha -= 0.03;
+        if (c.alpha <= 0) { clicks.splice(ci, 1); continue; }
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(34, 211, 238, ${c.alpha})`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Connecting lines via spatial grid
       rebuildGrid();
       for (let cy = 0; cy < rows; cy += 1) {
         for (let cx = 0; cx < cols; cx += 1) {
           const here = grid[cy * cols + cx];
           if (!here.length) continue;
-          // cek cell: diri sendiri + 4 tetangga unik (kanan, bawah, bawah-kiri, bawah-kanan)
-          // untuk hindari pasangan ganda. ditambah cell (cx+1,cy) dll.
           const neighbors = [
             here,
             cx + 1 < cols ? grid[cy * cols + cx + 1] : null,
@@ -120,27 +126,28 @@ export default function CyberBackground() {
       if (running) raf = requestAnimationFrame(step);
     }
 
-    const onMove = (e) => { mouse.x = e.clientX; mouse.y = e.clientY; };
-    const onLeave = () => { mouse.x = -999; mouse.y = -999; };
+    function start() { if (running || reduce) return; running = true; raf = requestAnimationFrame(step); }
+    function stop() { running = false; cancelAnimationFrame(raf); }
 
-    function start() {
-      if (running || reduce) return;
-      running = true;
-      raf = requestAnimationFrame(step);
-    }
-    function stop() {
-      running = false;
-      cancelAnimationFrame(raf);
-    }
-    const onVisibility = () => {
-      if (document.hidden) stop();
-      else start();
+    const onClick = (e) => {
+      if (reduce) return;
+      const rect = canvas.getBoundingClientRect();
+      clicks.push({
+        x: (e.clientX - rect.left) * dpr,
+        y: (e.clientY - rect.top) * dpr,
+        r: 4, alpha: 0.8
+      });
     };
+
+    const onMove = (e) => { mouse.x = e.clientX * dpr; mouse.y = e.clientY * dpr; };
+    const onLeave = () => { mouse.x = -999; mouse.y = -999; };
+    const onVisibility = () => { if (document.hidden) stop(); else start(); };
 
     resize();
     window.addEventListener('resize', onResize);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseout', onLeave);
+    window.addEventListener('click', onClick);
     document.addEventListener('visibilitychange', onVisibility);
     if (reduce) step(); else start();
 
@@ -150,6 +157,7 @@ export default function CyberBackground() {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseout', onLeave);
+      window.removeEventListener('click', onClick);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
@@ -168,4 +176,3 @@ export default function CyberBackground() {
     </div>
   );
 }
-

@@ -2,6 +2,7 @@ import React, { lazy, Suspense, memo, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert, Menu, X } from 'lucide-react';
 import { useApp } from '../App.jsx';
+import { Skeleton } from '../components/Skeleton.jsx';
 import Hero from '../components/Hero.jsx';
 
 // Lazy-load pages berat: ConvertPage (~22KB) & teman-temannya jadi chunk terpisah,
@@ -145,19 +146,19 @@ export default function Dashboard() {
 
         <section id="konversi" className="section">
           <SectionHead index="01" icon={<Music2 size={18} />} title="Konversi Audio" desc="Upload file, atur preset & durasi per part, lalu kirim ke Roblox." />
-          <Suspense fallback={null}><ConvertSectionMemo /></Suspense>
+          <Suspense fallback={<Skeleton h={300} />}><ConvertSectionMemo /></Suspense>
         </section>
 
         <section id="roblox" className="section">
           <SectionHead index="02" icon={<Settings size={18} />} title="Pengaturan Roblox" desc="API key, target creator, dan komunitas — tersimpan di browser ini." />
-          <Suspense fallback={null}><RobloxSectionMemo /></Suspense>
+          <Suspense fallback={<Skeleton h={250} />}><RobloxSectionMemo /></Suspense>
         </section>
 
         <section id="riwayat" className="section">
           <SectionHead index="03" icon={<History size={18} />} title="Riwayat & Asset Library" desc="Audio yang pernah diproses dan asset Roblox yang diterima." />
           <div className="grid-2">
-            <Suspense fallback={null}><HistorySectionMemo /></Suspense>
-            <Suspense fallback={null}><LibrarySectionMemo /></Suspense>
+            <Suspense fallback={<Skeleton h={200} />}><HistorySectionMemo /></Suspense>
+            <Suspense fallback={<Skeleton h={200} />}><LibrarySectionMemo /></Suspense>
           </div>
         </section>
 
