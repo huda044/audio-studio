@@ -9,7 +9,7 @@ import WaveBar from '../components/WaveBar.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
-import { cleanRobloxId, robloxPlaybackSpeed, uid } from '../lib/utils.js';
+import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
 
 const ACCEPT_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
@@ -67,8 +67,9 @@ export default function ConvertPage() {
           updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
           (result.warnings || []).forEach((w) => notify(`${job.title}: ${w}`, 'info'));
         } catch (e) {
-          updateJob(job.id, { status: 'error', error: e.message || 'Konversi gagal.' });
-          notify(`${job.title}: ${e.message}`, 'error');
+          const msg = formatApiError(e);
+          updateJob(job.id, { status: 'error', error: msg });
+          notify(`${job.title}: ${msg}`, 'error');
         }
       }
       notify('Semua konversi selesai.');
@@ -88,7 +89,7 @@ export default function ConvertPage() {
       setJobPart(job.id, part.index, entry);
       return entry;
     } catch (e) {
-      const entry = { part: part.index, status: 'Failed', error: e.message };
+      const entry = { part: part.index, status: 'Failed', error: formatApiError(e) };
       setJobPart(job.id, part.index, entry);
       return entry;
     }

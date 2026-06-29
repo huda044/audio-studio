@@ -1,12 +1,23 @@
 node_modules/
 dist/
+# Build output & tooling artifacts
+coverage/
+.vercel/
+*.local
+
+# Env files (kecuali contoh)
 .env
 .env.*
 !.env.example
+!.env.oracle.example
+server/.env
+
+# Runtime data
 data/
 uploads/*
 !uploads/.gitkeep
 server/data/
 server/bin/yt-dlp*
+
+# Logs
 *.log
-server/.env

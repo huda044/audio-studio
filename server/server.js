@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import audioRoutes from './routes/audio.routes.js';
+import aiRoutes from './routes/ai.routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,9 @@ async function resolveUploadsDir() {
 
 const uploadsDir = await resolveUploadsDir();
 const port = process.env.PORT || 4000;
+// Tentukan clientDist lebih awal supaya middleware security-header bisa memakainya
+// untuk memutuskan apakah CSP perlu dipasang (hanya saat melayani SPA).
+const clientDist = process.env.CLIENT_DIST;
 
 const app = express();
 app.set('trust proxy', 1);
@@ -47,6 +51,27 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Defense-in-depth untuk SPA. Hanya aktif saat melayani client (CLIENT_DIST ter-set),
+  // supaya tidak mengganggu tooling/dev-only. 'unsafe-inline' diperlukan karena Vite
+  // menyuntikkan script preload & style bootstrap inline.
+  if (clientDist) {
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "object-src 'none'",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "media-src 'self' data: blob:",
+        "style-src 'self' 'unsafe-inline'",
+        "script-src 'self' 'unsafe-inline'",
+        // connect-src: API sendiri + Open Cloud Roblox (untuk future client-side call jika dibutuhkan).
+        "connect-src 'self' https://apis.roblox.com"
+      ].join('; ')
+    );
+  }
   next();
 });
 // Lewati gzip jika route menandai X-No-Compression (mis. /api/process yang isinya
@@ -59,8 +84,14 @@ app.use(compression({
 }));
 
 // Tanpa login/cookie, jadi CORS terbuka aman: API key Roblox dikirim per-request di body,
-// tidak ada session/credential yang bisa dicuri lewat CORS.
-app.use(cors());
+// tidak ada session/credential yang bisa dicuri lewat CORS. Bila env ALLOWED_ORIGINS diisi
+// (comma-separated), maka hanya origin tersebut yang diizinkan — berguna di produksi
+// untuk mencegah situs pihak ketiga memakai API ini. Default tetap terbuka (backward-compatible).
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : undefined));
 app.use(express.json({ limit: process.env.JSON_LIMIT || '512kb' }));
 
 // Proteksi path traversal pada file serving.
@@ -84,6 +115,7 @@ app.use('/api/files', express.static(uploadsDir, {
 }));
 
 app.use('/api', audioRoutes);
+app.use('/api', aiRoutes);
 
 // Route /api yang tidak dikenal harus balas JSON 404, BUKAN jatuh ke catch-all SPA
 // (yang akan mengirim index.html dan membuat client gagal parse JSON).
@@ -101,7 +133,6 @@ app.get('/health', (_req, res) => {
   });
 });
 
-const clientDist = process.env.CLIENT_DIST;
 if (clientDist) {
   // Aset ber-hash (js/css/img) boleh di-cache lama, tapi index.html JANGAN pernah di-cache
   // supaya browser/CDN HF selalu mengambil bundle terbaru (mencegah bug "stale bundle").
@@ -159,8 +190,31 @@ const cleanupTimer = setInterval(async () => {
 }, 1000 * 60 * 30);
 cleanupTimer.unref?.();
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Audio Studio API (upload-only) berjalan di http://localhost:${port}`);
 });
+
+// Graceful shutdown: berhenti menerima koneksi baru, beri waktu drain queue, lalu tutup.
+// Penting untuk HF Space cold-restart & `docker stop` supaya tidak ada request yang dipotong
+// mendadak atau konversi FFmpeg yang tertinggal zombie.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] menerima ${signal}, menghentikan server...`);
+  clearInterval(cleanupTimer);
+  // Beri waktu singkat bagi request in-flight sebelum menutup socket.
+  server.close((err) => {
+    if (err) console.error('[shutdown] error menutup server:', err.message);
+    else console.log('[shutdown] server ditutup dengan bersih.');
+    process.exit(err ? 1 : 0);
+  });
+  // Hard stop bila setelah batas waktu masih ada koneksi nge-hang.
+  setTimeout(() => {
+    console.warn('[shutdown] force-exit (ada koneksi yang tidak mau tutup).');
+    process.exit(1);
+  }, Number(process.env.SHUTDOWN_TIMEOUT_MS || 10000)).unref();
+}
+['SIGTERM', 'SIGINT'].forEach((sig) => process.on(sig, () => shutdown(sig)));
 
 export default app;

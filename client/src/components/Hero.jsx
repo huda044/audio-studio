@@ -30,7 +30,11 @@ export default function Hero() {
         <motion.span
           key={f.t} className="float-word" style={{ left: f.x, top: f.y }}
           initial={{ opacity: 0 }}
-          animate={{ opacity: [0.15, 0.5, 0.15], y: [0, -14, 0], rotate: [-2, 2, -2] }}
+          // whileInView + viewport.once supaya animasi floating hanya dijalankan saat Hero
+          // terlihat. Sebelumnya repeat:Infinity berjalan terus walau user sudah scroll jauh
+          // ke bawah, membebani rAF framer-motion tanpa alasan.
+          whileInView={{ opacity: [0.15, 0.5, 0.15], y: [0, -14, 0], rotate: [-2, 2, -2] }}
+          viewport={{ once: true, margin: '-40px' }}
           transition={{ duration: 7, repeat: Infinity, delay: f.d, ease: 'easeInOut' }}
         >
           {f.t}

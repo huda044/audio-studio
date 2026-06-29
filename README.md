@@ -9,59 +9,126 @@ pinned: false
 license: mit
 ---
 
-# Audio Studio
+# Audio Studio 🎧
+
+![CI](https://img.shields.io/badge/CI-passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Docker](https://img.shields.io/badge/docker-ready-blue)
 
 Aplikasi untuk **upload file audio**, memprosesnya dengan FFmpeg (kecepatan, pitch, EQ, fade, efek), preview waveform, lalu mengunggah hasilnya ke **Roblox Open Cloud Audio API**.
 
 Mode aplikasi: **upload-only, tanpa login**. API key Roblox, creator/User ID, dan daftar komunitas/grup disimpan di **browser/perangkat** pengguna (localStorage) — tidak ada akun, tidak ada database.
 
-## Prasyarat (lokal)
+## ✨ Fitur
+
+- 🎵 **Upload multi-file** — mp3, wav, ogg, m4a, aac, flac
+- ⚡ **FFmpeg processing** — speed (0.5x-3x), pitch, volume, EQ, fade, echo, reverb, normalize
+- ✂️ **Auto-split** — lagu panjang otomatis dipotong sesuai durasi yang diatur
+- 🚀 **Roblox integration** — upload langsung ke Roblox Open Cloud API
+- 📊 **Real-time preview** — waveform, audio player per part
+- 📦 **Download ZIP** — export semua part dalam satu file zip
+- 🤖 **AI integration** — hubungkan model AI (OpenAI, OpenRouter, Groq, dll)
+- 🔒 **No login required** — semua data tersimpan di browser Anda
+
+## 📚 Dokumentasi
+
+| Dokumen | Deskripsi |
+|---------|-----------|
+| [API.md](API.md) | Dokumentasi lengkap endpoint API |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Arsitektur dan alur data |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Panduan deployment (Docker, HF, VPS) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Panduan berkontribusi |
+
+## 🚀 Quick Start
+
+### Prasyarat
 
 - Node.js 18+
-- FFmpeg & ffprobe disediakan otomatis lewat paket npm `ffmpeg-static` & `ffprobe-static`.
+- npm 9+
 
-## Instalasi & menjalankan
+### Instalasi
 
 ```bash
+# 1. Install dependencies
 cd server && npm install
 cd ../client && npm install
-```
 
-Terminal 1 (backend):
-
-```bash
+# 2. Start server (Terminal 1)
 cd server && npm run dev
-```
 
-Terminal 2 (frontend):
-
-```bash
+# 3. Start client (Terminal 2)
 cd client && npm run dev
 ```
 
-Buka URL Vite (default `http://localhost:5173`). Set `VITE_API_BASE=http://localhost:4000` di `client/.env` saat dev terpisah.
+Buka `http://localhost:5173` di browser.
 
-## Deploy (Hugging Face Space / Docker / VPS)
+Atau dengan Makefile:
+```bash
+make setup   # Install dependencies
+make dev     # Start both servers
+```
 
-`Dockerfile` membangun client lalu menyajikannya dari Express (satu container, satu port `7860`). Cukup satu tempat deploy — tidak butuh database.
+### Docker
 
-1. Build image dari root repo.
-2. Container listen di `7860`, serve frontend + API.
-3. Env opsional ada di `server/.env.example` (semua punya default wajar).
+```bash
+docker build -t audio-studio .
+docker run -p 7860:7860 audio-studio
+```
 
-Tidak ada env wajib untuk fungsi dasar. Tinggal jalan.
+## 🧪 Testing
 
-## Endpoint Backend
+```bash
+# Server tests (44 tests)
+cd server && npm test
 
-- `POST /api/process` — upload file audio + setting efek → kembalikan audio `.ogg` yang sudah diproses.
-- `POST /api/upload-roblox` — terima audio hasil proses + API key (sekali pakai) + creator → upload ke Roblox, auto-split bila perlu.
-- `POST /api/roblox-test` — cek validitas API key & target creator.
-- `POST /api/asset-status` — cek status moderasi `operationId`.
-- `GET /health` — status server.
+# Client tests
+cd client && npm test
 
-## Catatan Keamanan
+# Coverage
+cd server && npm run test:coverage
+cd client && npm run test:coverage
+```
 
-- Tanpa login: API key Roblox disimpan di browser pengguna (disamarkan) dan dikirim ke server **hanya saat upload** — server tidak menyimpannya.
-- Karena tersimpan di browser, jangan pakai API key penting di perangkat publik/bersama.
-- Tidak ada sesi/cookie, sehingga CORS dibuka tanpa risiko pencurian sesi.
-- File audio sementara di `uploads` dibersihkan otomatis secara berkala.
+## 📦 Tech Stack
+
+| Bagian | Teknologi |
+|--------|-----------|
+| **Frontend** | React 18, Vite, Framer Motion, TailwindCSS |
+| **Backend** | Express, FFmpeg (fluent-ffmpeg), Multer |
+| **Testing** | Vitest, Testing Library |
+| **CI/CD** | GitHub Actions |
+| **Deploy** | Docker, Hugging Face Spaces |
+
+## 🔌 Endpoint API
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| `POST` | `/api/process` | Upload audio + efek → OGG parts |
+| `POST` | `/api/upload-roblox` | Upload part ke Roblox |
+| `POST` | `/api/roblox-test` | Test API key & creator |
+| `POST` | `/api/asset-status` | Cek status moderasi |
+| `GET` | `/api/ai/status` | Cek konfigurasi AI |
+| `POST` | `/api/ai/chat` | Chat dengan AI |
+| `GET` | `/api/stats` | Monitoring server |
+| `GET` | `/health` | Health check |
+
+Lihat [API.md](API.md) untuk dokumentasi lengkap.
+
+## 🔒 Keamanan
+
+- Tanpa login: API key Roblox disimpan di **browser** (di-obfuscate)
+- API key dikirim ke server **hanya saat upload**
+- Tidak ada sesi/cookie → CORS terbuka aman
+- File sementara dibersihkan otomatis setiap 30 menit
+- Security headers: CSP, HSTS, X-Frame-Options, X-Content-Type-Options
+- Rate limiting per endpoint
+- Proteksi path traversal pada file serving
+
+## 🤝 Kontribusi
+
+Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk panduan kontribusi.
+
+## 📄 Lisensi
+
+MIT License - lihat [LICENSE](LICENSE) untuk detail.

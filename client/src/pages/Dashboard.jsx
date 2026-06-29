@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, memo, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert, Menu, X } from 'lucide-react';
 import { useApp } from '../App.jsx';
-import ConvertSection from './ConvertPage.jsx';
-import RobloxSection from './SettingsPage.jsx';
-import HistoryPage from './HistoryPage.jsx';
-import LibraryPage from './LibraryPage.jsx';
 import Hero from '../components/Hero.jsx';
+
+// Lazy-load pages berat: ConvertPage (~22KB) & teman-temannya jadi chunk terpisah,
+// baru diunduh ketika dibutuhkan, bukan di initial load. Wrapper memo tetap memakai
+// komponen lazy ini dengan Suspense fallback minimal.
+const ConvertSection = lazy(() => import('./ConvertPage.jsx'));
+const RobloxSection = lazy(() => import('./SettingsPage.jsx'));
+const HistoryPage = lazy(() => import('./HistoryPage.jsx'));
+const LibraryPage = lazy(() => import('./LibraryPage.jsx'));
 
 const LINKS = [
   { id: 'konversi', label: 'Konversi', icon: Wand2 },
@@ -31,25 +35,54 @@ function SectionHead({ index, title, desc, icon }) {
   );
 }
 
+// Section-section dibungkus memo supaya tidak ikut re-render ketika state scroll/active
+// di Dashboard berubah (props mereka statis / dari context sendiri).
+const ConvertSectionMemo = memo(function ConvertSectionMemo() { return <ConvertSection />; });
+const RobloxSectionMemo = memo(function RobloxSectionMemo() { return <RobloxSection />; });
+const HistorySectionMemo = memo(function HistorySectionMemo() { return <HistoryPage />; });
+const LibrarySectionMemo = memo(function LibrarySectionMemo() { return <LibraryPage />; });
+
 export default function Dashboard() {
   const { roblox } = useApp();
   const [scrolled, setScrolled] = useState(false);
   const [activeId, setActiveId] = useState('konversi');
   const [menuOpen, setMenuOpen] = useState(false);
+  const sectionRefs = useRef({});
 
   useEffect(() => {
-    const onScroll = () => {
-      setScrolled(window.scrollY > 10);
-      const positions = LINKS.map((l) => {
-        const el = document.getElementById(l.id);
-        return { id: l.id, top: el ? Math.abs(el.getBoundingClientRect().top - 120) : Infinity };
-      });
-      positions.sort((a, b) => a.top - b.top);
-      setActiveId(positions[0].id);
-    };
+    // Deteksi "scrolled" (navbar solid) tetap memakai event sederhana — operasinya O(1).
+    const onScroll = () => setScrolled(window.scrollY > 10);
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
+
+    // Deteksi section aktif memakai IntersectionObserver (jauh lebih efisien daripada
+    // getBoundingClientRect x3 + sort di tiap pixel scroll). Observer hanya callback
+    // saat sebuah section masuk/keluar viewport.
+    const visibleShares = new Map();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) visibleShares.set(entry.target.id, entry.intersectionRatio);
+          else visibleShares.delete(entry.target.id);
+        }
+        if (!visibleShares.size) return;
+        let bestId = null, bestRatio = -1;
+        for (const [id, ratio] of visibleShares) {
+          if (ratio > bestRatio) { bestRatio = ratio; bestId = id; }
+        }
+        if (bestId) setActiveId(bestId);
+      },
+      { rootMargin: '-120px 0px -55% 0px', threshold: [0, 0.15, 0.4, 0.75, 1] }
+    );
+    LINKS.forEach((l) => {
+      const el = document.getElementById(l.id);
+      if (el) { sectionRefs.current[l.id] = el; io.observe(el); }
+    });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      io.disconnect();
+    };
   }, []);
 
   const keyReady = Boolean(roblox.apiKey);
@@ -112,19 +145,19 @@ export default function Dashboard() {
 
         <section id="konversi" className="section">
           <SectionHead index="01" icon={<Music2 size={18} />} title="Konversi Audio" desc="Upload file, atur preset & durasi per part, lalu kirim ke Roblox." />
-          <ConvertSection />
+          <Suspense fallback={null}><ConvertSectionMemo /></Suspense>
         </section>
 
         <section id="roblox" className="section">
           <SectionHead index="02" icon={<Settings size={18} />} title="Pengaturan Roblox" desc="API key, target creator, dan komunitas — tersimpan di browser ini." />
-          <RobloxSection />
+          <Suspense fallback={null}><RobloxSectionMemo /></Suspense>
         </section>
 
         <section id="riwayat" className="section">
           <SectionHead index="03" icon={<History size={18} />} title="Riwayat & Asset Library" desc="Audio yang pernah diproses dan asset Roblox yang diterima." />
           <div className="grid-2">
-            <HistoryPage />
-            <LibraryPage />
+            <Suspense fallback={null}><HistorySectionMemo /></Suspense>
+            <Suspense fallback={null}><LibrarySectionMemo /></Suspense>
           </div>
         </section>
 

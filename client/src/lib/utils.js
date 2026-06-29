@@ -27,6 +27,16 @@ export function apiError(data, fallback) {
   return error;
 }
 
+// Gabungkan pesan utama dengan details dari server (mis. info queue penuh) menjadi satu
+// string user-friendly. Dipakai di toast/notifikasi agar user tidak kehilangan konteks
+// tambahan yang sudah dikirim server.
+export function formatApiError(error) {
+  const base = String(error?.message || 'Terjadi kesalahan.').trim();
+  const details = Array.isArray(error?.details) ? error.details : [];
+  if (!details.length) return base;
+  return `${base} — ${details.join(' · ')}`;
+}
+
 export function uid(prefix = 'id') {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

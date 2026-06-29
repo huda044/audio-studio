@@ -12,19 +12,34 @@ export const stagger = {
 };
 
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+// Cache hasil matchMedia: nilai ini stabil untuk session (user jarang toggle setting
+// sembari app dipakai). Menghindari pemanggilan matchMedia di tiap event mousemove.
+let _reduceMotionCache = null;
+function prefersReducedMotion() {
+  if (_reduceMotionCache === null) _reduceMotionCache = reduceMotion();
+  return _reduceMotionCache;
+}
 
 export function Card({ icon, title, desc, children, className = '', delay = 0 }) {
   const ref = useRef(null);
-
+  // rafRef menyimpan id frame terjadwal — flag throttle yang persist lintas render.
+  // Coalescing 1x per frame (~60fps) jauh lebih murah daripada getBoundingClientRect +
+  // setTransform di tiap pixel mouse-move. Didefinisikan inline (bukan via HOF) supaya
+  // aturan react-hooks/refs yakin ref hanya diakses dalam event handler, bukan saat render.
+  const rafRef = useRef(0);
   function onMove(e) {
-    const el = ref.current;
-    if (!el || reduceMotion()) return;
-    const rect = el.getBoundingClientRect();
-    const px = (e.clientX - rect.left) / rect.width;
-    const py = (e.clientY - rect.top) / rect.height;
-    el.style.setProperty('--mx', `${px * 100}%`);
-    el.style.setProperty('--my', `${py * 100}%`);
-    el.style.transform = `perspective(900px) rotateY(${(px - 0.5) * 6}deg) rotateX(${(0.5 - py) * 6}deg) translateY(-2px)`;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      const el = ref.current;
+      if (!el || prefersReducedMotion()) return;
+      const rect = el.getBoundingClientRect();
+      const px = (e.clientX - rect.left) / rect.width;
+      const py = (e.clientY - rect.top) / rect.height;
+      el.style.setProperty('--mx', `${px * 100}%`);
+      el.style.setProperty('--my', `${py * 100}%`);
+      el.style.transform = `perspective(900px) rotateY(${(px - 0.5) * 6}deg) rotateX(${(0.5 - py) * 6}deg) translateY(-2px)`;
+    });
   }
   function onLeave() {
     const el = ref.current;
@@ -55,13 +70,18 @@ export function Card({ icon, title, desc, children, className = '', delay = 0 })
 // Tombol magnet: tertarik ke cursor + glow. Untuk CTA utama.
 export function MagneticButton({ children, className = '', strength = 0.4, ...props }) {
   const ref = useRef(null);
+  const rafRef = useRef(0);
   function onMove(e) {
-    const el = ref.current;
-    if (!el || reduceMotion()) return;
-    const r = el.getBoundingClientRect();
-    const x = e.clientX - r.left - r.width / 2;
-    const y = e.clientY - r.top - r.height / 2;
-    el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      const el = ref.current;
+      if (!el || prefersReducedMotion()) return;
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left - r.width / 2;
+      const y = e.clientY - r.top - r.height / 2;
+      el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
+    });
   }
   function onLeave() { if (ref.current) ref.current.style.transform = ''; }
   return (
@@ -130,7 +150,7 @@ export function CountUp({ value, duration = 1100, suffix = '' }) {
   const [n, setN] = React.useState(0);
   React.useEffect(() => {
     const to = Number(value) || 0;
-    if (reduceMotion()) { const id = requestAnimationFrame(() => setN(to)); return () => cancelAnimationFrame(id); }
+    if (prefersReducedMotion()) { const id = requestAnimationFrame(() => setN(to)); return () => cancelAnimationFrame(id); }
     let raf; const start = performance.now();
     const tick = (t) => {
       const p = Math.min(1, (t - start) / duration);

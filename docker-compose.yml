@@ -1,0 +1,32 @@
+services:
+  audio-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audio-studio
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./data:/data
+    environment:
+      - NODE_ENV=production
+      - PORT=7860
+      - CLIENT_DIST=/app/client/dist
+      - UPLOADS_DIR=/tmp/audio-studio-uploads
+      - MAX_UPLOAD_MB=250
+      - CONVERSION_CONCURRENCY=2
+      - CONVERSION_QUEUE_LIMIT=20
+      - ROBLOX_UPLOAD_CONCURRENCY=1
+      - ROBLOX_UPLOAD_QUEUE_LIMIT=15
+      - ALLOWED_ORIGINS=
+      - AI_API_KEY=
+      - AI_MODEL=
+      - AI_BASE_URL=
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7860/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

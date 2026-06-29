@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 
 // Background world berlapis: deep space + aurora + particle universe + cyber grid + orbs + noise.
+// Optimasi: connecting-lines memakai spatial grid (cell = max connect distance) sehingga
+// kompleksitas turun dari O(n²) menuju mendekati O(n), bukan nested loop penuh.
 export default function CyberBackground() {
   const canvasRef = useRef(null);
 
@@ -15,6 +17,26 @@ export default function CyberBackground() {
     let w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const mouse = { x: -999, y: -999 };
     let particles = [];
+    let resizeTimer = 0;
+
+    const CONNECT_DIST = 110;
+    const CELL = CONNECT_DIST; // ukuran cell grid = jangkauan koneksi
+    let cols = 0, rows = 0;
+    // grid -> array of particle indices (di-rebuild tiap frame, alokasi ringan)
+    let grid = [];
+
+    function rebuildGrid() {
+      cols = Math.max(1, Math.ceil(w / CELL));
+      rows = Math.max(1, Math.ceil(h / CELL));
+      grid = new Array(cols * rows);
+      for (let i = 0; i < grid.length; i += 1) grid[i] = [];
+      for (let i = 0; i < particles.length; i += 1) {
+        const p = particles[i];
+        const cx = Math.min(cols - 1, Math.max(0, Math.floor(p.x / CELL)));
+        const cy = Math.min(rows - 1, Math.max(0, Math.floor(p.y / CELL)));
+        grid[cy * cols + cx].push(i);
+      }
+    }
 
     function resize() {
       w = canvas.clientWidth; h = canvas.clientHeight;
@@ -30,6 +52,11 @@ export default function CyberBackground() {
         r: Math.random() * 1.6 + 0.4,
         hue: Math.random() > 0.5 ? 188 : 258
       }));
+    }
+    // Debounce resize agar tidak re-init array partikel di tiap event resize (bisa cepat sekali).
+    function onResize() {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(resize, 150);
     }
 
     function step() {
@@ -51,17 +78,42 @@ export default function CyberBackground() {
         ctx.fillStyle = `hsla(${p.hue}, 90%, 70%, 0.7)`;
         ctx.fill();
       }
-      // connecting lines
-      for (let i = 0; i < particles.length; i += 1) {
-        for (let j = i + 1; j < particles.length; j += 1) {
-          const a = particles[i], b = particles[j];
-          const d = Math.hypot(a.x - b.x, a.y - b.y);
-          if (d < 110) {
-            ctx.beginPath();
-            ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-            ctx.strokeStyle = `rgba(120,180,255,${(1 - d / 110) * 0.12})`;
-            ctx.lineWidth = 1;
-            ctx.stroke();
+
+      // connecting lines via spatial grid: tiap partikel hanya dibandingkan dengan
+      // partikel di 9 cell sekitarnya (diri sendiri + 8 tetangga), bukan semua partikel.
+      rebuildGrid();
+      for (let cy = 0; cy < rows; cy += 1) {
+        for (let cx = 0; cx < cols; cx += 1) {
+          const here = grid[cy * cols + cx];
+          if (!here.length) continue;
+          // cek cell: diri sendiri + 4 tetangga unik (kanan, bawah, bawah-kiri, bawah-kanan)
+          // untuk hindari pasangan ganda. ditambah cell (cx+1,cy) dll.
+          const neighbors = [
+            here,
+            cx + 1 < cols ? grid[cy * cols + cx + 1] : null,
+            cy + 1 < rows ? grid[(cy + 1) * cols + cx] : null,
+            cx + 1 < cols && cy + 1 < rows ? grid[(cy + 1) * cols + cx + 1] : null,
+            cx - 1 >= 0 && cy + 1 < rows ? grid[(cy + 1) * cols + cx - 1] : null
+          ];
+          for (let a = 0; a < here.length; a += 1) {
+            const ia = here[a];
+            const pa = particles[ia];
+            for (let n = 0; n < neighbors.length; n += 1) {
+              const cell = neighbors[n];
+              if (!cell) continue;
+              for (let b = (n === 0 ? a + 1 : 0); b < cell.length; b += 1) {
+                const ib = cell[b];
+                const pb = particles[ib];
+                const d = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+                if (d < CONNECT_DIST) {
+                  ctx.beginPath();
+                  ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+                  ctx.strokeStyle = `rgba(120,180,255,${(1 - d / CONNECT_DIST) * 0.12})`;
+                  ctx.lineWidth = 1;
+                  ctx.stroke();
+                }
+              }
+            }
           }
         }
       }
@@ -86,7 +138,7 @@ export default function CyberBackground() {
     };
 
     resize();
-    window.addEventListener('resize', resize);
+    window.addEventListener('resize', onResize);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseout', onLeave);
     document.addEventListener('visibilitychange', onVisibility);
@@ -94,7 +146,8 @@ export default function CyberBackground() {
 
     return () => {
       stop();
-      window.removeEventListener('resize', resize);
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', onResize);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseout', onLeave);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -115,3 +168,4 @@ export default function CyberBackground() {
     </div>
   );
 }
+

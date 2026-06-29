@@ -54,9 +54,19 @@ const processLimit = rateLimit({
   max: Number(process.env.PROCESS_RATE_LIMIT || 30),
   message: 'Limit konversi sementara tercapai. Coba lagi beberapa menit.'
 });
+const uploadLimit = rateLimit({
+  windowMs: 1000 * 60 * 30,
+  max: Number(process.env.UPLOAD_RATE_LIMIT || 60),
+  message: 'Limit upload sementara tercapai. Coba lagi beberapa menit.'
+});
 const infoLimit = rateLimit({
   windowMs: 1000 * 60,
   max: Number(process.env.INFO_RATE_LIMIT || 60),
+  message: 'Terlalu sering request. Tunggu sebentar.'
+});
+const statsLimit = rateLimit({
+  windowMs: 1000 * 60,
+  max: Number(process.env.STATS_RATE_LIMIT || 20),
   message: 'Terlalu sering request. Tunggu sebentar.'
 });
 
@@ -76,7 +86,7 @@ function cleanNumber(value, fallback, min, max) {
   return Math.min(Math.max(numeric, min), max);
 }
 
-function parseSettings(raw = '{}') {
+export function parseSettings(raw = '{}') {
   let parsed;
   try {
     parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
@@ -126,12 +136,12 @@ function parsePayload(raw, label = 'payload') {
   }
 }
 
-function cleanNumericId(value) {
+export function cleanNumericId(value) {
   const text = String(value || '').trim();
   return /^\d{2,32}$/.test(text) ? text : '';
 }
 
-function resolveRobloxCreator(creator = {}, required = true) {
+export function resolveRobloxCreator(creator = {}, required = true) {
   const groupId = cleanNumericId(creator.groupId);
   const userId = cleanNumericId(creator.userId);
   if (groupId) return { creator: { groupId }, mode: 'group', warnings: [] };
@@ -145,7 +155,7 @@ function resolveRobloxCreator(creator = {}, required = true) {
   return { creator: null, mode: 'unknown', warnings: [message] };
 }
 
-function resolveApiKey(body = {}) {
+export function resolveApiKey(body = {}) {
   return String(body.apiKey || '').trim();
 }
 
@@ -163,9 +173,12 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
       const title = String(req.body.title || req.file.originalname || 'Audio Studio').trim().slice(0, 180);
       const warnings = [];
 
+      // Probe sumber SEKALI di sini, lalu pass ke service agar tidak double-probe
+      // (sebelumnya audio.routes & ffmpeg.service sama-sama manggil probeAudio).
+      let sourceProbe = null;
       let sourceDuration = 0;
       try {
-        const sourceProbe = await probeAudio(req.file.path);
+        sourceProbe = await probeAudio(req.file.path);
         sourceDuration = Number(sourceProbe.format?.duration || 0) || 0;
       } catch (error) {
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
@@ -176,7 +189,8 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         outputDir: uploadsDir,
         settings,
         segmentSeconds,
-        sourceDuration
+        sourceDuration,
+        sourceProbe
       });
       warnings.push(...(result.warnings || []));
 
@@ -288,8 +302,26 @@ router.post('/asset-status', infoLimit, async (req, res, next) => {
   }
 });
 
+// GET /api/stats — monitoring ringan (queue load, uptime, memori). Tidak ada secret.
+// Dibatasi rate-limit ketat. Berguna untuk observability backpressure di produksi.
+router.get('/stats', statsLimit, (_req, res) => {
+  const mem = process.memoryUsage();
+  res.json({
+    uptime: Math.round(process.uptime()),
+    queues: getQueueSnapshot(),
+    memory: {
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal,
+      external: mem.external
+    },
+    node: process.version,
+    pid: process.pid
+  });
+});
+
 // POST /api/upload-roblox — terima audio hasil proses + API key (sekali pakai), upload ke Roblox.
-router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, res, next) => {
+router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, res, next) => {
   let splitParts = [];
   try {
     const responseBody = await robloxQueue.push(async () => {
@@ -352,3 +384,10 @@ router.post('/upload-roblox', processLimit, upload.single('audio'), async (req, 
 });
 
 export default router;
+
+export function getQueueSnapshot() {
+  return {
+    conversion: conversionQueue.stats(),
+    roblox: robloxQueue.stats()
+  };
+}

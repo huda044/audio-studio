@@ -1,30 +1,43 @@
+# ============================================
+# Stage 1: Build client
+# ============================================
+FROM node:20-bookworm-slim AS builder
+
+WORKDIR /app/client
+
+COPY client/package*.json ./
+RUN npm ci
+
+COPY client/ .
+RUN npm run build
+
+# ============================================
+# Stage 2: Production image
+# ============================================
 FROM node:20-bookworm-slim
 
-# curl untuk healthcheck. FFmpeg/ffprobe disediakan oleh paket npm ffmpeg-static & ffprobe-static.
+# Minimal system deps: curl untuk healthcheck
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install server deps (layer caching)
+# Copy built client dari stage 1
+COPY --from=builder /app/client/dist ./client/dist
+
+# Install server deps (production only)
 COPY server/package*.json ./server/
 RUN cd server && npm ci --omit=dev
 
-# Install client deps
-COPY client/package*.json ./client/
-RUN cd client && npm ci
-
-# Copy source
+# Copy server source
 COPY server ./server
-COPY client ./client
 
-# Build client
-RUN cd client && npm run build
+# Non-root user untuk security
+RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+USER appuser
 
-# Cleanup
-RUN rm -rf /root/.npm /tmp/*
-
+# Environment defaults
 ENV NODE_ENV=production
 ENV PORT=7860
 ENV CLIENT_DIST=/app/client/dist
@@ -41,6 +54,7 @@ ENV ROBLOX_AUDIO_MAX_DURATION_SECONDS=420
 ENV ROBLOX_AUDIO_MAX_BYTES=19922944
 ENV ROBLOX_UPLOAD_CONCURRENCY=1
 ENV ROBLOX_UPLOAD_QUEUE_LIMIT=15
+ENV SHUTDOWN_TIMEOUT_MS=10000
 
 EXPOSE 7860
 

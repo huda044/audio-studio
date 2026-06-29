@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { History, Trash2, RefreshCw, Copy, Search, Loader2 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, EmptyState, StatusBadge } from '../components/ui.jsx';
@@ -10,7 +10,13 @@ export default function HistoryPage() {
   const [q, setQ] = useState('');
   const [checking, setChecking] = useState('');
 
-  const filtered = history.filter((h) => !q.trim() || String(h.title || '').toLowerCase().includes(q.trim().toLowerCase()));
+  // Memo: filter + toLowerCase di seluruh history cukup mahal untuk daftar panjang,
+  // tidak perlu dihitung ulang tiap render yang tidak mengubah history/query.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return history;
+    return history.filter((h) => String(h.title || '').toLowerCase().includes(needle));
+  }, [history, q]);
 
   function copy(text) { navigator.clipboard?.writeText(text); notify('Disalin.'); }
 

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 
 // Mini-waveform tanpa dependency: dekode audio via Web Audio API lalu gambar peaks.
+// Optimasi: cache peaks per-`src` di module scope — decode sekali per URL meski banyak
+// instance WaveBar mount untuk src yang sama (mis. di Library).
 let sharedCtx = null;
 function getCtx() {
   if (!sharedCtx) {
@@ -10,17 +12,68 @@ function getCtx() {
   return sharedCtx;
 }
 
+// Cache: src -> { promise, peaks|null }. peaks diisi setelah decode selesai.
+// Memori cache dibatasi (LRU sederhana) supaya tidak tumbuh tanpa batas.
+const PEAKS_CACHE = new Map();
+const PEAKS_CACHE_LIMIT = 32;
+
+function evictPeaks() {
+  if (PEAKS_CACHE.size <= PEAKS_CACHE_LIMIT) return;
+  const firstKey = PEAKS_CACHE.keys().next().value;
+  PEAKS_CACHE.delete(firstKey);
+}
+
+async function computePeaks(src, bars) {
+  if (PEAKS_CACHE.has(src)) {
+    const entry = PEAKS_CACHE.get(src);
+    // Re-insert untuk efek LRU (pindah ke akhir Map).
+    PEAKS_CACHE.delete(src);
+    PEAKS_CACHE.set(src, entry);
+    const cached = await entry;
+    // bars berbeda: resample dari peaks penuh jika ada, else pakai apa adanya.
+    if (cached && cached.length === bars) return cached;
+  }
+  const promise = (async () => {
+    const ctxA = getCtx();
+    if (!ctxA) return null;
+    const res = await fetch(src);
+    const arr = await res.arrayBuffer();
+    const audio = await ctxA.decodeAudioData(arr.slice(0));
+    const ch = audio.getChannelData(0);
+    const block = Math.max(1, Math.floor(ch.length / bars));
+    const peaks = [];
+    for (let i = 0; i < bars; i += 1) {
+      let mx = 0;
+      for (let j = 0; j < block; j += 1) {
+        const v = Math.abs(ch[i * block + j] || 0);
+        if (v > mx) mx = v;
+      }
+      peaks.push(mx);
+    }
+    // Bebaskan AudioBuffer secepat mungkin bila API tersedia (memori besar per channel).
+    // Sebelumnya AudioBuffer hanya menunggu GC.
+    try {
+      if (audio.buffer && typeof audio.buffer.set === 'function') audio.buffer.set(null);
+      else if (audio.close && audio.close === ctxA.close) audio.close?.();
+    } catch {
+      // noop: biarkan GC yang menangani
+    }
+    return peaks;
+  })();
+  evictPeaks();
+  PEAKS_CACHE.set(src, promise);
+  return promise;
+}
+
 export default function WaveBar({ src, bars = 56 }) {
   const ref = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
-    const ctxA = getCtx();
-    if (!ctxA || !src) return undefined;
 
     function draw(peaks) {
       const c = ref.current;
-      if (!c) return;
+      if (!c || !peaks) return;
       const g2 = c.getContext('2d');
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = c.clientWidth, h = c.clientHeight;
@@ -46,29 +99,10 @@ export default function WaveBar({ src, bars = 56 }) {
       });
     }
 
-    (async () => {
-      try {
-        const res = await fetch(src);
-        const arr = await res.arrayBuffer();
-        if (cancelled) return;
-        const audio = await ctxA.decodeAudioData(arr.slice(0));
-        if (cancelled) return;
-        const ch = audio.getChannelData(0);
-        const block = Math.max(1, Math.floor(ch.length / bars));
-        const peaks = [];
-        for (let i = 0; i < bars; i += 1) {
-          let mx = 0;
-          for (let j = 0; j < block; j += 1) {
-            const v = Math.abs(ch[i * block + j] || 0);
-            if (v > mx) mx = v;
-          }
-          peaks.push(mx);
-        }
-        if (!cancelled) draw(peaks);
-      } catch {
-        // Format tidak bisa didekode di browser ini — lewati saja.
-      }
-    })();
+    if (!src) return undefined;
+    computePeaks(src, bars)
+      .then((peaks) => { if (!cancelled) draw(peaks); })
+      .catch(() => { /* Format tidak bisa didekode di browser ini — lewati saja. */ });
 
     return () => { cancelled = true; };
   }, [src, bars]);

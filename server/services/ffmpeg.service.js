@@ -21,7 +21,9 @@ try {
   console.error('[ffmpeg] gagal cek binary:', error.message);
 }
 
-// Batas aman total durasi output (setelah efek/speed) supaya tidak membebani server.
+// Batas aman total durasi OUTPUT (setelah efek/speed, sebelum dipotong jadi part) supaya
+// tidak membebani server. BERBEDA dari APP_MAX_DURATION_SECONDS yang membatasi durasi SUMBER
+// per-request — keduanya independen. Ini di-pass sebagai maxOutputSeconds ke buildFilters.
 const MAX_OUTPUT_SECONDS = Math.min(Math.max(Number(process.env.MAX_OUTPUT_SECONDS || 3600), 60), 21600);
 const SEGMENT_MIN = 30;
 const SEGMENT_MAX = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
@@ -44,7 +46,7 @@ function httpError(message, status = 422, details = []) {
   return error;
 }
 
-function atempoChain(speed) {
+export function atempoChain(speed) {
   let value = clamp(speed, 0.5, 3);
   const filters = [];
   while (value > 2) { filters.push('atempo=2'); value /= 2; }
@@ -53,7 +55,7 @@ function atempoChain(speed) {
   return filters;
 }
 
-function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxOutputSeconds }) {
+export function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxOutputSeconds }) {
   const source = Number(sourceDuration || 0);
   if (!source) return maxOutputSeconds;
   if (trimStart >= source - 0.05) throw httpError('Trim start melebihi durasi sumber audio.', 400);
@@ -65,7 +67,7 @@ function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, m
   return Math.max(0.25, Math.min(maxOutputSeconds, naturalOutputDuration));
 }
 
-function buildFilters(settings, sourceDuration = 0, maxOutputSeconds = MAX_OUTPUT_SECONDS) {
+export function buildFilters(settings, sourceDuration = 0, maxOutputSeconds = MAX_OUTPUT_SECONDS) {
   const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
   const amplify = clamp(settings.amplify ?? -4, -20, 20);
   const pitch = clamp(settings.pitch ?? 0, -12, 12);
@@ -168,8 +170,10 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
 }
 
 // Proses audio penuh dengan efek (dipakai sebagai master sebelum dipotong jadi part).
-async function processFull({ inputPath, outputPath, settings, sourceDuration = 0, onProgress }) {
-  const sourceProbe = await probeAudio(inputPath).catch((error) => {
+// `sourceProbe` opsional: bila route sudah mem-probe sumber, pass dari sini agar tidak
+// ada probe ganda (menghemat ~1-2 detik per file pada pipeline konversi).
+async function processFull({ inputPath, outputPath, settings, sourceDuration = 0, onProgress, sourceProbe: prefetchedProbe }) {
+  const sourceProbe = prefetchedProbe || await probeAudio(inputPath).catch((error) => {
     throw httpError(`Sumber audio tidak bisa dibaca FFmpeg: ${error.message}`, 422);
   });
   if (!hasAudioStream(sourceProbe)) throw httpError('Sumber tidak memiliki stream audio yang bisa dikonversi.', 422);
@@ -255,7 +259,8 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
 }
 
 // API utama: proses + potong jadi beberapa lagu.
-export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress }) {
+// `sourceProbe` opsional: bila sudah tersedia (mis. dari route), pass agar tidak double-probe.
+export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress, sourceProbe }) {
   const segSec = clamp(segmentSeconds || 180, SEGMENT_MIN, SEGMENT_MAX);
   const masterPath = path.join(outputDir, `master-${nanoid(10)}.ogg`);
   const emit = (pct) => { if (onProgress) onProgress(Math.max(0, Math.min(100, Math.round(pct)))); };
@@ -263,7 +268,8 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
     emit(3);
     const master = await processFull({
       inputPath, outputPath: masterPath, settings, sourceDuration,
-      onProgress: (pct) => emit(5 + pct * 0.8)
+      onProgress: (pct) => emit(5 + pct * 0.8),
+      sourceProbe
     });
     emit(86);
     const parts = await segmentFile({
