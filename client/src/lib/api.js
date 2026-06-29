@@ -8,14 +8,29 @@ async function parseJson(response) {
 }
 
 // Upload file audio + setting → kembalikan hasil konversi (beberapa part .ogg).
+// Dengan timeout + abort controller built-in untuk mencegah hang di HF.
 export async function processAudio({ file, settings, title, segmentSeconds, signal }) {
   const form = new FormData();
   form.append('audio', file);
   form.append('settings', JSON.stringify(settings));
   if (title) form.append('title', title);
   if (segmentSeconds) form.append('segmentSeconds', String(segmentSeconds));
-  const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', body: form, signal });
-  return parseJson(response);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 600000);
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  try {
+    const response = await fetch(`${API_BASE}/api/process`, { method: 'POST', body: form, signal: controller.signal });
+    return parseJson(response);
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Konversi melewati batas waktu server.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Ambil blob hasil konversi dari sebuah part (untuk dikirim ke upload Roblox).
