@@ -27,7 +27,8 @@ export default function HeroRing() {
     // Dual sprite: cyan + purple glow
     const SPRITE = 32;
     const sprites = [];
-    for (const [r1, g1, b1, a1, r2, g2, b2] of [[150, 220, 255, 168, 85, 247]]) {
+    for (const [r1, g1, b1, a1, r2, g2, b2] of [[150, 220, 255, 168, 85, 247, 120]]) {
+
       const s = document.createElement('canvas'); s.width = SPRITE; s.height = SPRITE;
       const sc = s.getContext('2d');
       const grd = sc.createRadialGradient(SPRITE / 2, SPRITE / 2, 0, SPRITE / 2, SPRITE / 2, SPRITE / 2);
