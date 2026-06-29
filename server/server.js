@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import audioRoutes from './routes/audio.routes.js';
 import aiRoutes from './routes/ai.routes.js';
+import logger from './lib/logger.js';
+import { requestLogger, metricsEndpoint } from './middleware/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,13 +111,18 @@ app.use('/api/files', (req, res, next) => {
 
 app.use('/api/files', express.static(uploadsDir, {
   index: false,
-  setHeaders(res) {
+  setHeaders(res, filePath) {
     res.setHeader('Cache-Control', 'no-store');
+    if (!/\.ogg$/i.test(filePath)) {
+      res.setHeader('Content-Type', 'application/octet-stream');
+    }
   }
 }));
 
+app.use(requestLogger);
 app.use('/api', audioRoutes);
 app.use('/api', aiRoutes);
+app.get('/metrics', metricsEndpoint);
 
 // Route /api yang tidak dikenal harus balas JSON 404, BUKAN jatuh ke catch-all SPA
 // (yang akan mengirim index.html dan membuat client gagal parse JSON).
@@ -166,7 +173,7 @@ app.use((err, _req, res, _next) => {
       ? 'JSON request tidak valid.'
       : status === 500 ? 'Terjadi kesalahan server.' : err.message;
   if (err.retryAfter) res.setHeader('Retry-After', err.retryAfter);
-  if (status >= 500) console.error('[server-error]', _req.requestId, err.message);
+  if (status >= 500) logger.error('server error', { requestId: _req.requestId, error: err.message, stack: err.stack });
 
   const body = { error: message, status, requestId: _req.requestId };
   if (err.details && (status < 500 || process.env.EXPOSE_ERROR_DETAILS === 'true')) body.details = err.details;
@@ -185,13 +192,13 @@ const cleanupTimer = setInterval(async () => {
       if (now - stat.mtimeMs > maxAgeMs) await fs.unlink(fullPath);
     }));
   } catch (error) {
-    console.error('[cleanup-error]', error.message);
+    logger.error('cleanup failed', { error: error.message });
   }
 }, 1000 * 60 * 30);
 cleanupTimer.unref?.();
 
 const server = app.listen(port, () => {
-  console.log(`Audio Studio API (upload-only) berjalan di http://localhost:${port}`);
+  logger.info('server started', { port, mode: 'upload-only', uploadsDir: Boolean(uploadsDir) });
 });
 
 // Graceful shutdown: berhenti menerima koneksi baru, beri waktu drain queue, lalu tutup.
@@ -201,17 +208,17 @@ let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[shutdown] menerima ${signal}, menghentikan server...`);
+  logger.info('shutdown received', { signal });
   clearInterval(cleanupTimer);
   // Beri waktu singkat bagi request in-flight sebelum menutup socket.
   server.close((err) => {
-    if (err) console.error('[shutdown] error menutup server:', err.message);
-    else console.log('[shutdown] server ditutup dengan bersih.');
+    if (err) logger.error('shutdown close error', { error: err.message });
+    else logger.info('shutdown clean');
     process.exit(err ? 1 : 0);
   });
   // Hard stop bila setelah batas waktu masih ada koneksi nge-hang.
   setTimeout(() => {
-    console.warn('[shutdown] force-exit (ada koneksi yang tidak mau tutup).');
+    logger.warn('shutdown force exit');
     process.exit(1);
   }, Number(process.env.SHUTDOWN_TIMEOUT_MS || 10000)).unref();
 }

@@ -79,10 +79,10 @@ docker run -p 7860:7860 audio-studio
 ## 🧪 Testing
 
 ```bash
-# Server tests (44 tests)
+  # Server tests (57 tests)
 cd server && npm test
 
-# Client tests
+  # Client tests (22 tests)
 cd client && npm test
 
 # Coverage

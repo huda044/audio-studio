@@ -9,6 +9,7 @@ import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../servic
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
+import { trackConversion, trackUpload } from '../middleware/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,7 +120,7 @@ async function removeQuiet(filePath) {
   if (filePath) await fs.unlink(filePath).catch(() => {});
 }
 
-function formatSeconds(seconds) {
+export function formatSeconds(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
   const minutes = Math.floor(total / 60);
   const sec = total % 60;
@@ -192,6 +193,7 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         sourceDuration,
         sourceProbe
       });
+      trackConversion(result.totalDuration);
       warnings.push(...(result.warnings || []));
 
       const parts = await Promise.all(result.parts.map(async (part) => {
@@ -354,6 +356,7 @@ router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, r
         displayName: payload.displayName || 'Audio Studio',
         description: payload.description || 'Diproses menggunakan Audio Studio'
       });
+      parts.forEach((p) => trackUpload(p.status));
 
       const accepted = parts.filter((part) => part.status === 'Accepted').length;
       const failed = parts.filter((part) => part.status === 'Failed').length;

@@ -1,6 +1,6 @@
 import express from 'express';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { createAiChatCompletion, getAiConfig } from '../services/ai.service.js';
+import { createAiChatCompletion, getAiConfig, createAiChatStream } from '../services/ai.service.js';
 
 const router = express.Router();
 const aiLimit = rateLimit({
@@ -51,6 +51,45 @@ router.post('/ai/chat', aiLimit, async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(error);
+  }
+});
+
+// POST /ai/chat/stream — SSE streaming response
+router.post('/ai/chat/stream', async (req, res, next) => {
+  try {
+    const messages = normalizeMessages(req.body?.messages);
+    const temperature = req.body?.temperature === undefined
+      ? undefined
+      : Math.min(Math.max(Number(req.body.temperature), 0), 2);
+    const maxTokens = req.body?.maxTokens === undefined
+      ? undefined
+      : Math.min(Math.max(Math.round(Number(req.body.maxTokens)), 1), 16000);
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    let fullContent = '';
+
+    await createAiChatStream({
+      messages,
+      temperature: Number.isFinite(temperature) ? temperature : undefined,
+      maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined,
+      onChunk: (content) => {
+        fullContent += content;
+        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      },
+      signal: req.signal
+    });
+
+    res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) return next(error);
+    res.write(`event: error\ndata: ${JSON.stringify({ message: error.message })}\n\n`);
+    res.end();
   }
 });
 

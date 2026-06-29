@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw
@@ -31,6 +31,21 @@ export default function ConvertPage() {
   const [busy, setBusy] = useState('');
   const [uploadLabel, setUploadLabel] = useState('');
   const inputRef = useRef(null);
+  const handleRef = useRef(null);
+
+  // Keyboard shortcut: Ctrl+Enter = konversi, Ctrl+Shift+Enter = upload
+  useEffect(() => {
+    function onKey(e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.shiftKey && handleUploadAll) handleUploadAll();
+        else handleConvertAll();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pendingJobs, busy]);
 
   const activePreset = PRESETS.find((p) => Math.abs(p.speed - settings.speed) < 0.001)?.id || '';
   const segMin = Math.round((settings.segmentSeconds || 180) / 60 * 10) / 10;
