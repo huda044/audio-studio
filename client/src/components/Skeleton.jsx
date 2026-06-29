@@ -9,7 +9,7 @@ export function Skeleton({ w = '100%', h = 40, r = 12, mb = 0 }) {
       animate={{ opacity: [0.5, 0.8, 0.5] }}
       transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
       style={{
-        width: w, height: h, borderRadius: r, marginBottom,
+        width: w, height: h, borderRadius: r, marginBottom: mb,
         background: 'linear-gradient(90deg, rgba(124,162,214,0.08) 0%, rgba(124,162,214,0.18) 50%, rgba(124,162,214,0.08) 100%)',
         backgroundSize: '200% 100%',
         animation: 'shimmer 1.5s ease-in-out infinite'
