@@ -33,19 +33,19 @@ export default function ConvertPage() {
   const inputRef = useRef(null);
   const handleRef = useRef(null);
 
-  // Keyboard shortcut: Ctrl+Enter = konversi, Ctrl+Shift+Enter = upload
+  // Keyboard shortcut — didefinisikan setelah semua fungsi
   useEffect(() => {
     function onKey(e) {
       if (!e.ctrlKey && !e.metaKey) return;
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (e.shiftKey && handleUploadAll) handleUploadAll();
+        if (e.shiftKey) handleUploadAll();
         else handleConvertAll();
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pendingJobs, busy]);
+  });
 
   const activePreset = PRESETS.find((p) => Math.abs(p.speed - settings.speed) < 0.001)?.id || '';
   const segMin = Math.round((settings.segmentSeconds || 180) / 60 * 10) / 10;
