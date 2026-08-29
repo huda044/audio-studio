@@ -1,12 +1,12 @@
 import { useRef, useState, useEffect } from 'react';
 import {
-  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle
+  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle, Youtube
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
-import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
+import { processAudio, fetchPartBlob, uploadRoblox, importYouTube } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
 
@@ -28,9 +28,12 @@ export default function ConvertPage() {
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState('');
   const [uploadLabel, setUploadLabel] = useState('');
+  const [sourceMode, setSourceMode] = useState('file'); // 'file' | 'youtube'
+  const [ytUrl, setYtUrl] = useState('');
   const inputRef = useRef(null);
   const convertAbortRef = useRef(null);
   const uploadAbortRef = useRef(null);
+  const ytAbortRef = useRef(null);
   // Latest-ref untuk shortcut keyboard: listener dipasang SEKALI, tapi selalu memanggil
   // handler dengan closure terbaru (dulu effect tanpa dependency mendaftar ulang tiap render).
   const shortcutRef = useRef(null);
@@ -110,6 +113,35 @@ export default function ConvertPage() {
       else notify('Semua konversi selesai.', 'success');
     } finally {
       convertAbortRef.current = null;
+      setBusy('');
+    }
+  }
+
+  async function handleYouTubeImport() {
+    const url = ytUrl.trim();
+    if (!url) { notify('Tempel link YouTube dulu.', 'error'); return; }
+    if (busy) return;
+    setBusy('import');
+    const controller = new AbortController();
+    ytAbortRef.current = controller;
+    try {
+      const result = await importYouTube({
+        url, settings, segmentSeconds: settings.segmentSeconds, signal: controller.signal
+      });
+      const job = {
+        id: uid('j'), file: null, title: result.title || 'YouTube Audio',
+        status: 'done', progress: { percent: 100, stage: '', message: '' },
+        processed: result, partStatus: {}, error: ''
+      };
+      setJobs((js) => [...js, job]);
+      setYtUrl('');
+      (result.warnings || []).forEach((w) => notify(w, 'info'));
+      notify(`"${result.title}" siap: ${result.partCount} part.`, 'success');
+    } catch (e) {
+      if (e.name === 'AbortError' || controller.signal.aborted) notify('Import YouTube dibatalkan.', 'info');
+      else notify(formatApiError(e), 'error');
+    } finally {
+      ytAbortRef.current = null;
       setBusy('');
     }
   }
@@ -272,19 +304,56 @@ export default function ConvertPage() {
     <div className="grid-2">
       {/* LEFT */}
       <div>
-        <Card icon={<UploadCloud size={18} />} title="1. Upload File Audio" desc="Bisa banyak lagu sekaligus · mp3, wav, ogg, m4a, aac, flac. Lagu panjang otomatis dipecah jadi beberapa part.">
-          <input ref={inputRef} type="file" accept={ACCEPTED_EXT} multiple style={{ display: 'none' }} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
-          <div
-            className={`dropzone ${drag ? 'drag' : ''}`}
-            onClick={() => inputRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
-          >
-            <div className="dz-ico"><UploadCloud size={26} /></div>
-            <h3>Tarik file ke sini, atau klik untuk pilih</h3>
-            <p>Pilih satu atau beberapa lagu sekaligus.</p>
+        <Card icon={<UploadCloud size={18} />} title="1. Sumber Audio" desc="Upload file dari perangkat, atau tempel link YouTube — lagu panjang otomatis dipecah jadi beberapa part.">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <button type="button" className={`btn sm ${sourceMode === 'file' ? 'primary' : 'ghost'}`} style={{ flex: 1 }} onClick={() => setSourceMode('file')} disabled={Boolean(busy)}>
+              <UploadCloud size={15} /> Dari File
+            </button>
+            <button type="button" className={`btn sm ${sourceMode === 'youtube' ? 'primary' : 'ghost'}`} style={{ flex: 1 }} onClick={() => setSourceMode('youtube')} disabled={Boolean(busy)}>
+              <Youtube size={15} /> Dari Link YouTube
+            </button>
           </div>
+
+          <input ref={inputRef} type="file" accept={ACCEPTED_EXT} multiple style={{ display: 'none' }} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+
+          {sourceMode === 'file' ? (
+            <div
+              className={`dropzone ${drag ? 'drag' : ''}`}
+              onClick={() => inputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
+            >
+              <div className="dz-ico"><UploadCloud size={26} /></div>
+              <h3>Tarik file ke sini, atau klik untuk pilih</h3>
+              <p>Pilih satu atau beberapa lagu sekaligus.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="field">
+                <span>Link YouTube</span>
+                <input
+                  className="input" type="url" inputMode="url" enterKeyHint="go"
+                  placeholder="https://youtube.com/watch?v=... atau youtu.be/..."
+                  value={ytUrl} disabled={Boolean(busy)}
+                  onChange={(e) => setYtUrl(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !busy) { e.preventDefault(); handleYouTubeImport(); } }}
+                />
+              </label>
+              <MagneticButton className="primary block" disabled={Boolean(busy) || !ytUrl.trim()} onClick={handleYouTubeImport}>
+                {busy === 'import' ? <Loader2 className="spin" size={17} /> : <Youtube size={17} />}
+                {busy === 'import' ? 'Mengunduh & mengonversi...' : 'Ambil Audio & Konversi'}
+              </MagneticButton>
+              {busy === 'import' && (
+                <button className="btn ghost block" style={{ marginTop: 10 }} onClick={() => ytAbortRef.current?.abort()}>
+                  <XCircle size={15} /> Batalkan import
+                </button>
+              )}
+              <p className="small muted" style={{ margin: '10px 2px 0' }}>
+                Gratis via yt-dlp di server. Video panjang butuh waktu lebih lama; bila YouTube memblokir server, coba lagi beberapa menit atau gunakan upload file.
+              </p>
+            </div>
+          )}
 
           {jobs.length > 0 && (
             <div className="list" style={{ marginTop: 14 }}>

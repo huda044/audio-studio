@@ -21,6 +21,12 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 
+# yt-dlp untuk fitur import audio dari link YouTube (binary standalone, tanpa python).
+# Diambil saat build dari rilis resmi GitHub — gratis, tanpa API key.
+RUN mkdir -p /app/bin \
+  && curl -fsSL -o /app/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+  && chmod +x /app/bin/yt-dlp
+
 WORKDIR /app
 
 # Copy built client dari stage 1
@@ -55,6 +61,10 @@ ENV ROBLOX_AUDIO_MAX_BYTES=19922944
 ENV ROBLOX_UPLOAD_CONCURRENCY=1
 ENV ROBLOX_UPLOAD_QUEUE_LIMIT=15
 ENV SHUTDOWN_TIMEOUT_MS=10000
+# Import YouTube (yt-dlp): lokasi binary, batas durasi sumber, limit request per 30 menit.
+ENV YTDL_PATH=/app/bin/yt-dlp
+ENV YTDL_MAX_DURATION_SECONDS=3600
+ENV YT_IMPORT_RATE_LIMIT=10
 
 EXPOSE 7860
 

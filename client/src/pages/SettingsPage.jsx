@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Info, ExternalLink } from 'lucide-react';
+import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Info, ExternalLink, Save, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Trace } from '../components/ui.jsx';
 import { robloxTest } from '../lib/api.js';
@@ -11,6 +11,26 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [trace, setTrace] = useState([]);
   const [form, setForm] = useState({ name: '', groupId: '', creatorUserId: '' });
+  // Draft key dipisah dari state tersimpan: key baru BARU aktif setelah tombol
+  // "Simpan Key" ditekan. Sebelumnya setiap ketikan langsung tersimpan — sering
+  // membuat user ragu apakah key sudah aman atau belum.
+  const [keyDraft, setKeyDraft] = useState(roblox.apiKey);
+  const savedKey = roblox.apiKey;
+  const keyDirty = keyDraft.trim() !== savedKey;
+
+  function saveKey() {
+    const trimmed = keyDraft.trim();
+    if (!trimmed) { notify('Tempel API key dulu sebelum menyimpan.', 'error'); return; }
+    set({ apiKey: trimmed });
+    setKeyDraft(trimmed);
+    notify('API key tersimpan di browser ini.');
+  }
+
+  function removeKey() {
+    set({ apiKey: '' });
+    setKeyDraft('');
+    notify('API key dihapus dari browser ini.', 'info');
+  }
 
   function set(patch) { setRoblox((r) => ({ ...r, ...patch })); }
 
@@ -79,14 +99,31 @@ export default function SettingsPage() {
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               className="input" type={showKey ? 'text' : 'password'} placeholder="masukkan API key Roblox"
-              value={roblox.apiKey} onChange={(e) => set({ apiKey: e.target.value })} autoComplete="off"
+              value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} autoComplete="off"
             />
             <button className="btn ghost" onClick={() => setShowKey((v) => !v)} type="button">{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button>
           </div>
         </label>
-        <button className="btn block" onClick={testConnection} disabled={testing}>
+
+        <div className="chips" style={{ marginBottom: 12 }}>
+          {savedKey
+            ? <span className="chip"><CheckCircle2 size={12} style={{ color: 'var(--good)', verticalAlign: '-2px' }} /> Tersimpan di browser · <b>••••{savedKey.slice(-4)}</b></span>
+            : <span className="chip">Belum ada key tersimpan</span>}
+          {keyDirty && keyDraft.trim() && <span className="chip"><b>Perubahan belum disimpan</b></span>}
+        </div>
+
+        <div className="row" style={{ marginBottom: 14 }}>
+          <button className="btn primary" onClick={saveKey} disabled={!keyDirty || !keyDraft.trim()}>
+            <Save size={16} /> Simpan Key
+          </button>
+          <button className="btn" onClick={removeKey} disabled={!savedKey}>
+            <Trash2 size={16} /> Hapus Key
+          </button>
+        </div>
+
+        <button className="btn block" onClick={testConnection} disabled={testing || !savedKey}>
           {testing ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
-          {testing ? 'Mengecek...' : 'Test Koneksi'}
+          {testing ? 'Mengecek...' : 'Test Koneksi (pakai key tersimpan)'}
         </button>
         {trace.length > 0 && <><div className="divider" /><Trace items={trace} /></>}
         <div className="divider" />

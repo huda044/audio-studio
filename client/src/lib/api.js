@@ -55,6 +55,21 @@ export async function processAudio({ file, settings, title, segmentSeconds, sign
   return parseJson(response);
 }
 
+// Import audio dari link YouTube — server mengunduh (yt-dlp) lalu konversi
+// dengan pipeline yang sama seperti /api/process. Bisa memakan waktu lama
+// (download + konversi), makanya timeout-nya paling panjang.
+export async function importYouTube({ url, settings, segmentSeconds, title, signal }) {
+  const response = await fetchWithTimeout(`${API_BASE}/api/import-youtube`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, settings, segmentSeconds, title }),
+    timeoutMs: 900000,
+    timeoutMessage: 'Import YouTube melewati batas waktu (15 menit).',
+    signal
+  });
+  return parseJson(response);
+}
+
 // Ambil blob hasil konversi dari sebuah part (untuk dikirim ke upload Roblox).
 export async function fetchPartBlob(part, signal) {
   if (part?.audioDataUrl) {

@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import uploadsDir from '../lib/uploadsDir.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
+import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
@@ -44,6 +45,12 @@ const uploadLimit = rateLimit({
   max: Number(process.env.UPLOAD_RATE_LIMIT || 60),
   message: 'Limit upload sementara tercapai. Coba lagi beberapa menit.'
 });
+const youtubeImportLimit = rateLimit({
+  windowMs: 1000 * 60 * 30,
+  max: Number(process.env.YT_IMPORT_RATE_LIMIT || 10),
+  message: 'Limit import YouTube tercapai (10 per 30 menit). Coba lagi nanti.'
+});
+const ytdlMaxDurationSeconds = Math.min(Math.max(Number(process.env.YTDL_MAX_DURATION_SECONDS || 3600), 30), 21600);
 const infoLimit = rateLimit({
   windowMs: 1000 * 60,
   max: Number(process.env.INFO_RATE_LIMIT || 60),
@@ -249,6 +256,127 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
     if (error.status !== 499) next(error);
   } finally {
     await removeQuiet(req.file?.path);
+  }
+});
+
+// POST /api/import-youtube — ambil audio dari link YouTube (yt-dlp, gratis),
+// lalu alirkan ke pipeline konversi yang sama dengan /api/process.
+// Body JSON: { url, settings?, segmentSeconds?, title? }
+router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), async (req, res, next) => {
+  // Body JSON kecil — jadi boleh lewat queueGate dulu (tidak ada upload besar yang sia-sia).
+  const abortController = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
+  let downloadedPath = '';
+  try {
+    const responseBody = await conversionQueue.push(async () => {
+      const url = String(req.body?.url || '').trim();
+      if (!isYouTubeUrl(url)) {
+        const error = new Error('URL YouTube tidak valid. Gunakan link youtube.com/watch?v=..., youtu.be/..., atau /shorts/.');
+        error.status = 400;
+        throw error;
+      }
+
+      // Metadata dulu (tanpa download): tolak video terlalu panjang / live SEBELUM bandwidth terpakai.
+      let meta;
+      try {
+        meta = await fetchYouTubeMeta(url, { signal: abortController.signal });
+      } catch (error) {
+        if (error.code === 'client_abort') throw error;
+        const wrapped = new Error(error.message);
+        wrapped.status = 422;
+        throw wrapped;
+      }
+      if (meta.isLive) {
+        const error = new Error('Video masih live — tunggu selesai live lalu coba lagi.');
+        error.status = 422;
+        throw error;
+      }
+      if (!meta.duration || meta.duration < 1) {
+        const error = new Error('Durasi video tidak terbaca — tidak bisa diproses.');
+        error.status = 422;
+        throw error;
+      }
+      if (meta.duration > ytdlMaxDurationSeconds) {
+        const error = new Error(`Video terlalu panjang (${formatSeconds(meta.duration)}). Maksimum ${formatSeconds(ytdlMaxDurationSeconds)}.`);
+        error.status = 422;
+        throw error;
+      }
+
+      downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal });
+
+      const settings = parseSettings(req.body?.settings);
+      const segmentSeconds = cleanNumber(req.body?.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
+      const title = String(req.body?.title || meta.title || 'YouTube Audio').trim().slice(0, 180);
+      const warnings = [`Sumber: YouTube (${meta.title})`];
+
+      let sourceProbe = null;
+      let sourceDuration = 0;
+      try {
+        sourceProbe = await probeAudio(downloadedPath);
+        sourceDuration = Number(sourceProbe.format?.duration || 0) || 0;
+      } catch (error) {
+        warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
+      }
+
+      const result = await processAudioSegmented({
+        inputPath: downloadedPath,
+        outputDir: uploadsDir,
+        settings,
+        segmentSeconds,
+        sourceDuration,
+        sourceProbe,
+        signal: abortController.signal
+      });
+      trackConversion(result.totalDuration);
+      warnings.push(...(result.warnings || []));
+
+      // Inline base64 dengan budget total yang sama seperti /api/process.
+      let inlineBudgetUsed = 0;
+      const parts = [];
+      for (const part of result.parts) {
+        let audioDataUrl = '';
+        if (result.partCount <= 4
+          && part.sizeBytes <= inlineAudioLimitBytes
+          && inlineBudgetUsed + part.sizeBytes <= inlineTotalLimitBytes) {
+          audioDataUrl = `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
+          inlineBudgetUsed += part.sizeBytes;
+        }
+        parts.push({
+          index: part.index,
+          fileName: part.fileName,
+          audioUrl: `/api/files/${part.fileName}`,
+          audioDataUrl,
+          duration: part.duration,
+          durationText: formatSeconds(part.duration),
+          sizeBytes: part.sizeBytes
+        });
+      }
+
+      return {
+        title,
+        parts,
+        partCount: result.partCount,
+        segmentSeconds: result.segmentSeconds,
+        segmentText: formatSeconds(result.segmentSeconds),
+        totalDuration: result.totalDuration,
+        totalDurationText: formatSeconds(result.totalDuration),
+        sourceDuration,
+        sourceDurationText: sourceDuration ? formatSeconds(sourceDuration) : '',
+        sourceType: 'youtube',
+        youtubeId: meta.id,
+        appliedSettings: result.appliedSettings,
+        appliedEffects: result.effects,
+        warnings,
+        output: { format: result.format, codec: result.codec, bitrate: result.bitrate },
+        queue: conversionQueue.stats()
+      };
+    }, { signal: abortController.signal });
+    res.setHeader('X-No-Compression', '1');
+    res.json(responseBody);
+  } catch (error) {
+    if (error.status !== 499) next(error);
+  } finally {
+    if (downloadedPath) await fs.unlink(downloadedPath).catch(() => {});
   }
 });
 
