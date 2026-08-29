@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
+import { clientAbortError } from './taskQueue.service.js';
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobe.path);
@@ -139,15 +140,28 @@ function hasAudioStream(probe) {
   return Array.isArray(probe.streams) && probe.streams.some((s) => s.codec_type === 'audio');
 }
 
-async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress }) {
+async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress, signal }) {
   await fs.unlink(outputPath).catch(() => {});
   await new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(clientAbortError());
     let cmd = ffmpeg(inputPath);
     let stderr = '';
     let settled = false;
     const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 600000);
-    const settle = (error) => { if (settled) return; settled = true; clearTimeout(timer); error ? reject(error) : resolve(); };
+    const settle = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      error ? reject(error) : resolve();
+    };
     const timer = setTimeout(() => { cmd.kill('SIGKILL'); settle(httpError('Konversi FFmpeg melewati batas waktu server.', 408)); }, timeoutMs);
+    // Client membatalkan / menutup tab: bunuh proses FFmpeg agar slot queue cepat bebas.
+    let onAbort = null;
+    if (signal) {
+      onAbort = () => { cmd.kill('SIGKILL'); settle(clientAbortError()); };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     if (trimStart > 0) cmd = cmd.seekInput(trimStart);
     cmd.audioFilters(filters).audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100).format('ogg').outputOptions(['-vn']);
     cmd.duration(effectiveDuration)
@@ -172,7 +186,7 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
 // Proses audio penuh dengan efek (dipakai sebagai master sebelum dipotong jadi part).
 // `sourceProbe` opsional: bila route sudah mem-probe sumber, pass dari sini agar tidak
 // ada probe ganda (menghemat ~1-2 detik per file pada pipeline konversi).
-async function processFull({ inputPath, outputPath, settings, sourceDuration = 0, onProgress, sourceProbe: prefetchedProbe }) {
+async function processFull({ inputPath, outputPath, settings, sourceDuration = 0, onProgress, sourceProbe: prefetchedProbe, signal }) {
   const sourceProbe = prefetchedProbe || await probeAudio(inputPath).catch((error) => {
     throw httpError(`Sumber audio tidak bisa dibaca FFmpeg: ${error.message}`, 422);
   });
@@ -185,23 +199,26 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
   const fallbackDisabled = String(process.env.DISABLE_AUDIO_FALLBACK || '').toLowerCase() === 'true';
 
   try {
-    await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress });
+    await runFfmpegConversion({ inputPath, outputPath, filters, trimStart, effectiveDuration, onProgress, signal });
   } catch (error) {
     if (fallbackDisabled) throw error;
+    // Abort dari client bukan kegagalan teknis — jangan jalankan pipeline fallback.
+    if (error.code === 'client_abort' || signal?.aborted) throw error;
     const level1 = buildFilters({ ...settings, normalize: false, reverb: false, echo: false }, detectedSourceDuration, MAX_OUTPUT_SECONDS);
     let level1Error = null;
     if (level1.filters.join('|') !== filters.join('|')) {
       try {
-        await runFfmpegConversion({ inputPath, outputPath, filters: level1.filters, trimStart: level1.appliedSettings.trimStart, effectiveDuration: level1.effectiveDuration, onProgress });
+        await runFfmpegConversion({ inputPath, outputPath, filters: level1.filters, trimStart: level1.appliedSettings.trimStart, effectiveDuration: level1.effectiveDuration, onProgress, signal });
         warnings = [...warnings, 'Konversi utama gagal, backend memakai fallback aman tanpa normalize/reverb/echo.'];
         ({ filters, appliedSettings, effects, effectiveDuration } = level1);
       } catch (innerError) { level1Error = innerError; }
     } else { level1Error = error; }
 
     if (level1Error) {
+      if (level1Error.code === 'client_abort' || signal?.aborted) throw level1Error;
       const minimalFilters = buildMinimalFilters(settings);
       try {
-        await runFfmpegConversion({ inputPath, outputPath, filters: minimalFilters, trimStart: appliedSettings.trimStart, effectiveDuration });
+        await runFfmpegConversion({ inputPath, outputPath, filters: minimalFilters, trimStart: appliedSettings.trimStart, effectiveDuration, signal });
         warnings = [...warnings, 'Filter chain penuh menyebabkan FFmpeg crash. Backend memakai pipeline minimal (tempo + volume saja).'];
         effects = [`Tempo ${appliedSettings.speed}x`, `Volume ${appliedSettings.amplify} dB`, 'Filter berat dilewati (fallback)'];
         filters = minimalFilters;
@@ -226,7 +243,7 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
 }
 
 // Potong file (sudah berisi efek) menjadi beberapa part berdurasi segmentSeconds.
-async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress }) {
+async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress, signal }) {
   if (totalDuration <= segmentSeconds + 0.5) {
     const single = path.join(outputDir, `processed-${nanoid(10)}.ogg`);
     await fs.copyFile(inputPath, single);
@@ -236,14 +253,21 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
   const stamp = nanoid(8);
   const pattern = path.join(outputDir, `processed-${stamp}-%03d.ogg`);
   await new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    if (signal?.aborted) return reject(clientAbortError());
+    const cmd = ffmpeg(inputPath)
       .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
       .outputOptions(['-vn', '-f', 'segment', '-segment_time', String(segmentSeconds), '-reset_timestamps', '1'])
       .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', resolve)
-      .on('error', reject)
-      .save(pattern);
+      .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
+    let onAbort = null;
+    if (signal) {
+      onAbort = () => cmd.kill('SIGKILL');
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    cmd.save(pattern);
   });
+  if (signal?.aborted) throw clientAbortError();
   const files = (await fs.readdir(outputDir))
     .filter((f) => f.startsWith(`processed-${stamp}-`) && f.endsWith('.ogg'))
     .sort();
@@ -260,22 +284,28 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
 
 // API utama: proses + potong jadi beberapa lagu.
 // `sourceProbe` opsional: bila sudah tersedia (mis. dari route), pass agar tidak double-probe.
-export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress, sourceProbe }) {
+// `signal` opsional: abort dari route saat client disconnect → FFmpeg dibunuh di tahap mana pun.
+export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress, sourceProbe, signal }) {
   const segSec = clamp(segmentSeconds || 180, SEGMENT_MIN, SEGMENT_MAX);
   const masterPath = path.join(outputDir, `master-${nanoid(10)}.ogg`);
   const emit = (pct) => { if (onProgress) onProgress(Math.max(0, Math.min(100, Math.round(pct)))); };
   try {
+    if (signal?.aborted) throw clientAbortError();
     emit(3);
     const master = await processFull({
       inputPath, outputPath: masterPath, settings, sourceDuration,
       onProgress: (pct) => emit(5 + pct * 0.8),
-      sourceProbe
+      sourceProbe,
+      signal
     });
+    if (signal?.aborted) throw clientAbortError();
     emit(86);
     const parts = await segmentFile({
       inputPath: masterPath, outputDir, segmentSeconds: segSec, totalDuration: master.duration,
-      onProgress: (pct) => emit(86 + pct * 0.13)
+      onProgress: (pct) => emit(86 + pct * 0.13),
+      signal
     });
+    if (signal?.aborted) throw clientAbortError();
     emit(100);
     return {
       parts,
@@ -295,17 +325,21 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
   }
 }
 
-async function convertSegment({ inputPath, outputPath, start, duration }) {
+async function convertSegment({ inputPath, outputPath, start, duration, signal }) {
   await new Promise((resolve, reject) => {
-    ffmpeg(inputPath).seekInput(start).duration(duration)
+    if (signal?.aborted) return reject(clientAbortError());
+    const cmd = ffmpeg(inputPath).seekInput(start).duration(duration)
       .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
       .format('ogg').outputOptions(['-vn'])
-      .on('end', resolve).on('error', reject).save(outputPath);
+      .on('end', resolve)
+      .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
+    if (signal) signal.addEventListener('abort', () => cmd.kill('SIGKILL'), { once: true });
+    cmd.save(outputPath);
   });
 }
 
 // Dipakai saat upload Roblox untuk jaga-jaga jika part masih melebihi limit Roblox.
-export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 180, maxBytes = 6 * 1024 * 1024 }) {
+export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 180, maxBytes = 6 * 1024 * 1024, signal }) {
   const [stat, probe] = await Promise.all([fs.stat(inputPath), probeAudio(inputPath)]);
   const duration = Number(probe.format.duration || 0);
   const durationLimit = clamp(maxDuration, 30, 600);
@@ -321,10 +355,11 @@ export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 
   const partDuration = Math.max(20, Math.min(durationLimit, sizeSafeDuration));
   const count = Math.ceil(duration / partDuration);
   for (let i = 0; i < count; i += 1) {
+    if (signal?.aborted) throw clientAbortError();
     const start = i * partDuration;
     const segmentDuration = Math.min(partDuration, duration - start);
     const outputPath = path.join(uploadsDir, `part-${i + 1}-${nanoid(8)}.ogg`);
-    await convertSegment({ inputPath, outputPath, start, duration: segmentDuration });
+    await convertSegment({ inputPath, outputPath, start, duration: segmentDuration, signal });
     const partStat = await fs.stat(outputPath);
     parts.push({ path: outputPath, index: i + 1, duration: segmentDuration, sizeBytes: partStat.size });
   }

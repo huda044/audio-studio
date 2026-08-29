@@ -1,6 +1,9 @@
 // Konstanta global aplikasi (mode upload-only, tanpa login).
 
-export const API_BASE = import.meta.env.VITE_API_BASE || window.location.origin;
+// Base URL API. Produksi (mis. client di Vercel + backend terpisah): set env
+// VITE_API_BASE saat build, contoh https://space-username.hf.space — trailing slash dibuang
+// agar gabungan URL tidak menghasilkan double slash. Default: same-origin (dev).
+export const API_BASE = String(import.meta.env.VITE_API_BASE || window.location.origin).replace(/\/+$/, '');
 
 export const MAX_AUDIO_DURATION_SECONDS = 200;
 

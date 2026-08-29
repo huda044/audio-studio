@@ -1,11 +1,9 @@
 import { useRef, useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
-  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw
+  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
-import WaveBar from '../components/WaveBar.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { processAudio, fetchPartBlob, uploadRoblox } from '../lib/api.js';
@@ -31,21 +29,28 @@ export default function ConvertPage() {
   const [busy, setBusy] = useState('');
   const [uploadLabel, setUploadLabel] = useState('');
   const inputRef = useRef(null);
-  const handleRef = useRef(null);
+  const convertAbortRef = useRef(null);
+  const uploadAbortRef = useRef(null);
+  // Latest-ref untuk shortcut keyboard: listener dipasang SEKALI, tapi selalu memanggil
+  // handler dengan closure terbaru (dulu effect tanpa dependency mendaftar ulang tiap render).
+  const shortcutRef = useRef(null);
+  useEffect(() => {
+    shortcutRef.current = { convert: handleConvertAll, upload: handleUploadAll };
+  });
 
-  // Keyboard shortcut — didefinisikan setelah semua fungsi
+  // Keyboard shortcut
   useEffect(() => {
     function onKey(e) {
       if (!e.ctrlKey && !e.metaKey) return;
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (e.shiftKey) handleUploadAll();
-        else handleConvertAll();
+        if (e.shiftKey) shortcutRef.current?.upload();
+        else shortcutRef.current?.convert();
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   const activePreset = PRESETS.find((p) => Math.abs(p.speed - settings.speed) < 0.001)?.id || '';
   const segMin = Math.round((settings.segmentSeconds || 180) / 60 * 10) / 10;
@@ -72,31 +77,49 @@ export default function ConvertPage() {
   async function handleConvertAll() {
     if (!pendingJobs.length) { notify('Tidak ada file untuk dikonversi.', 'error'); return; }
     setBusy('convert');
+    const controller = new AbortController();
+    convertAbortRef.current = controller;
     try {
+      let okCount = 0;
+      let failCount = 0;
       for (const job of pendingJobs) {
         updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'convert', message: 'Memproses & memotong audio...' }, error: '' });
         try {
           const result = await processAudio({
-            file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds
+            file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds,
+            signal: controller.signal
           });
+          okCount += 1;
           updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
           (result.warnings || []).forEach((w) => notify(`${job.title}: ${w}`, 'info'));
         } catch (e) {
+          // Dibatalkan user: kembalikan job ini ke antrian dan hentikan sisa loop.
+          if (e.name === 'AbortError' || controller.signal.aborted) {
+            updateJob(job.id, { status: 'queued', progress: { percent: 0, stage: '', message: '' }, error: '' });
+            break;
+          }
+          failCount += 1;
           const msg = formatApiError(e);
           updateJob(job.id, { status: 'error', error: msg });
           notify(`${job.title}: ${msg}`, 'error');
         }
       }
-      notify('Semua konversi selesai.');
-    } finally { setBusy(''); }
+      const cancelled = controller.signal.aborted;
+      if (cancelled) notify('Konversi dibatalkan. File yang belum diproses kembali mengantre.', 'info');
+      else if (failCount) notify(`Konversi selesai: ${okCount} berhasil, ${failCount} gagal.`, okCount ? 'info' : 'error');
+      else notify('Semua konversi selesai.', 'success');
+    } finally {
+      convertAbortRef.current = null;
+      setBusy('');
+    }
   }
 
-  async function uploadPartFor(job, part, creator) {
+  async function uploadPartFor(job, part, creator, signal) {
     setJobPart(job.id, part.index, { status: 'uploading' });
     try {
-      const blob = await fetchPartBlob(part);
+      const blob = await fetchPartBlob(part, signal);
       const data = await uploadRoblox({
-        blob, fileName: part.fileName,
+        blob, fileName: part.fileName, signal,
         payload: { apiKey: roblox.apiKey, creator, displayName: `${job.title || 'Audio'} - Part ${part.index}`, description: description || undefined }
       });
       const sub = (data.parts || [])[0] || {};
@@ -104,6 +127,10 @@ export default function ConvertPage() {
       setJobPart(job.id, part.index, entry);
       return entry;
     } catch (e) {
+      if (e.name === 'AbortError' || signal?.aborted) {
+        setJobPart(job.id, part.index, {});
+        throw e;
+      }
       const entry = { part: part.index, status: 'Failed', error: formatApiError(e) };
       setJobPart(job.id, part.index, entry);
       return entry;
@@ -122,22 +149,49 @@ export default function ConvertPage() {
     const creator = validateRoblox();
     if (!creator) return;
     setBusy('upload');
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     try {
       let totalAccepted = 0;
+      let cancelled = false;
+      let skippedAccepted = 0;
       for (const job of doneJobs) {
         const collected = [];
         for (const part of job.processed.parts) {
+          // Part yang SEBELUMNYA sudah diterima Roblox tidak diupload ulang —
+          // mencegah asset duplikat & pemborosan kuota moderasi saat tombol
+          // "Upload semua" ditekan lagi. Part gagal/pending tetap dicoba ulang.
+          const previous = job.partStatus[part.index];
+          if (previous?.status === 'Accepted') {
+            skippedAccepted += 1;
+            collected.push(previous);
+            continue;
+          }
           setUploadLabel(`${job.title} · part ${part.index}/${job.processed.partCount}`);
-          collected.push(await uploadPartFor(job, part, creator));
+          try {
+            collected.push(await uploadPartFor(job, part, creator, controller.signal));
+          } catch (e) {
+            if (e.name === 'AbortError' || controller.signal.aborted) { cancelled = true; break; }
+            throw e;
+          }
         }
+        if (cancelled) break;
         totalAccepted += collected.filter((p) => p.status === 'Accepted').length;
         setHistory((prev) => [{
           id: uid('h'), createdAt: new Date().toISOString(),
           title: job.title || 'Audio', duration: job.processed.totalDuration, mode: roblox.mode, parts: collected
         }, ...prev].slice(0, 100));
       }
-      notify(totalAccepted ? `Selesai: ${totalAccepted} asset diterima.` : 'Upload terkirim, cek status di Riwayat.', totalAccepted ? 'success' : 'info');
-    } finally { setBusy(''); setUploadLabel(''); }
+      if (cancelled) notify('Upload dibatalkan. Part yang belum terkirim bisa diulang lewat tombol retry.', 'info');
+      else if (totalAccepted || skippedAccepted) {
+        const skipNote = skippedAccepted ? ` (${skippedAccepted} part sudah diterima sebelumnya, dilewati)` : '';
+        notify(`Selesai: ${totalAccepted} asset diterima.${skipNote}`, 'success');
+      } else notify('Upload terkirim, cek status di Riwayat.', 'info');
+    } finally {
+      uploadAbortRef.current = null;
+      setBusy('');
+      setUploadLabel('');
+    }
   }
 
   async function handleRetry(job, part) {
@@ -193,7 +247,7 @@ export default function ConvertPage() {
           const st = job.partStatus[part.index];
           const srcUrl = part.audioDataUrl || `${API_BASE}${part.audioUrl}`;
           return (
-            <motion.div key={part.index} className="list-item" style={{ flexWrap: 'wrap' }} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <div key={part.index} className="list-item" style={{ flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="li-title">Part {part.index} <span className="muted small">· {formatDuration(part.duration)} · {Math.round(part.sizeBytes / 1024)} KB</span></div>
                 {st?.rbxassetid && <div className="li-meta">{st.rbxassetid}</div>}
@@ -206,9 +260,8 @@ export default function ConvertPage() {
                 {st?.status === 'Failed' && <button className="btn ghost sm" onClick={() => handleRetry(job, part)} title="Coba lagi"><RotateCw size={13} /></button>}
                 <a className="btn ghost sm" href={srcUrl} download={part.fileName} title="Download"><Download size={13} /></a>
               </div>
-              <WaveBar src={srcUrl} />
               <audio controls preload="none" src={srcUrl} style={{ width: '100%', marginTop: 10, height: 34 }} />
-            </motion.div>
+            </div>
           );
         })}
       </div>
@@ -270,12 +323,11 @@ export default function ConvertPage() {
 
           <button className="btn ghost block" style={{ marginTop: 16 }} onClick={() => setAdvanced((v) => !v)}>
             <Sliders size={16} /> Pengaturan lanjutan
-            <motion.span animate={{ rotate: advanced ? 180 : 0 }} style={{ display: 'inline-flex' }}><ChevronDown size={16} /></motion.span>
+            <span style={{ display: 'inline-flex', transform: advanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}><ChevronDown size={16} /></span>
           </button>
-          <AnimatePresence initial={false}>
-            {advanced && (
-              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden' }}>
-                <div style={{ paddingTop: 18 }}>
+          {advanced && (
+            <div>
+              <div style={{ paddingTop: 18 }}>
                   <Slider label="Kecepatan (tempo)" value={settings.speed} min={0.5} max={3} step={0.05} suffix="x" onChange={(v) => update({ speed: v })} />
                   <Slider label="Volume" value={settings.amplify} min={-20} max={20} step={1} suffix=" dB" onChange={(v) => update({ amplify: v })} />
                   <Slider label="Pitch" value={settings.pitch} min={-12} max={12} step={1} suffix=" st" onChange={(v) => update({ pitch: v })} />
@@ -299,15 +351,20 @@ export default function ConvertPage() {
                     <Toggle label="Echo" checked={settings.echo} onChange={(v) => update({ echo: v })} />
                     <Toggle label="Normalize" checked={settings.normalize} onChange={(v) => update({ normalize: v })} />
                   </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+            </div>
+          )}
 
-          <MagneticButton className="primary block neon-border" style={{ marginTop: 18 }} disabled={!pendingJobs.length || busy} onClick={handleConvertAll}>
+          <MagneticButton className="primary block" style={{ marginTop: 18 }} disabled={!pendingJobs.length || busy} onClick={handleConvertAll}>
             {busy === 'convert' ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />}
             {busy === 'convert' ? 'Memproses...' : pendingJobs.length ? `Konversi ${pendingJobs.length} file` : 'Tambahkan file dulu'}
           </MagneticButton>
+
+          {busy === 'convert' && (
+            <button className="btn ghost block" style={{ marginTop: 10 }} onClick={() => convertAbortRef.current?.abort()}>
+              <XCircle size={15} /> Batalkan konversi
+            </button>
+          )}
         </Card>
       </div>
 
@@ -350,7 +407,7 @@ export default function ConvertPage() {
                       <h3 className="cp-title">Memproses</h3>
                       <p className="cp-msg">{job.progress.message || 'Sedang memproses & memotong audio...'}</p>
                       <div className="ov-bar indet"><div className="ov-bar-fill" /></div>
-                      <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Jangan tutup tab ini.</p>
+                      <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Kamu bisa membatalkan kapan saja — menutup tab juga menghentikan proses di server.</p>
                     </div>
                   )}
                   {job.status === 'error' && <p className="small" style={{ color: 'var(--bad)' }}>{job.error}</p>}
@@ -370,10 +427,16 @@ export default function ConvertPage() {
                     <button className="btn ghost" style={{ flex: 1 }} onClick={downloadZip} disabled={busy}>{busy === 'zip' ? <Loader2 className="spin" size={16} /> : <Download size={16} />} Download ZIP</button>
                     <button className="btn ghost" style={{ flex: 1 }} onClick={downloadAll} disabled={busy}><Download size={16} /> Unduh satuan</button>
                   </div>
-                  <MagneticButton className="primary block neon-border" disabled={busy} onClick={handleUploadAll}>
+                  <MagneticButton className="primary block" disabled={busy} onClick={handleUploadAll}>
                     {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
                     {busy === 'upload' ? `Mengupload ${uploadLabel}...` : `Upload semua ke Roblox`}
                   </MagneticButton>
+
+                  {busy === 'upload' && (
+                    <button className="btn ghost block" style={{ marginTop: 10 }} onClick={() => uploadAbortRef.current?.abort()}>
+                      <XCircle size={15} /> Batalkan upload
+                    </button>
+                  )}
                 </>
               )}
             </>

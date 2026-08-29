@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock express app — test middleware chain terisolasi
 // Bukan ganti supertest, cukup untuk verifikasi middleware berjalan
@@ -28,7 +28,7 @@ describe('Middleware integration', () => {
 
   it('should set security headers', async () => {
     // Import server and test
-    const { default: app } = await import('../server.js');
+    await import('../server.js'); // Side-effect: menyalakan server untuk memverifikasi boot tanpa error.
     // Simulate the middleware chain
     const handler = (r, s, n) => {
       s.setHeader('X-Content-Type-Options', 'nosniff');

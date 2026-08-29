@@ -2,6 +2,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'node:fs';
 import path from 'node:path';
+import { clientAbortError } from './taskQueue.service.js';
 
 const ASSET_URL = 'https://apis.roblox.com/assets/v1/assets';
 const OPERATION_URL = 'https://apis.roblox.com/assets/v1/operations';
@@ -58,7 +59,7 @@ function cleanOperationId(operationId) {
   return String(operationId || '').trim().split('/').filter(Boolean).pop() || '';
 }
 
-async function requestWithRetry(fn, { retries = 2, retryDelayMs = 1200 } = {}) {
+async function requestWithRetry(fn, { retries = 2, retryDelayMs = 1200, signal } = {}) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -67,16 +68,20 @@ async function requestWithRetry(fn, { retries = 2, retryDelayMs = 1200 } = {}) {
       lastError = { response };
     } catch (error) {
       lastError = error;
+      if (signal?.aborted) throw clientAbortError();
       const status = error.response?.status || 0;
       if (status && status !== 429 && status < 500) throw error;
     }
-    if (attempt < retries) await sleep(retryDelayMs * (attempt + 1));
+    if (attempt < retries) {
+      if (signal?.aborted) throw clientAbortError();
+      await sleep(retryDelayMs * (attempt + 1));
+    }
   }
   if (lastError?.response) return lastError.response;
   throw lastError;
 }
 
-async function pollOperation(operationId, apiKey) {
+async function pollOperation(operationId, apiKey, signal) {
   const cleanId = cleanOperationId(operationId);
   const trace = [{
     step: 'Polling',
@@ -85,13 +90,16 @@ async function pollOperation(operationId, apiKey) {
   }];
   const deadline = Date.now() + ROBLOX_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw clientAbortError();
     const response = await requestWithRetry(() => axios.get(`${OPERATION_URL}/${encodeURIComponent(cleanId)}`, {
       headers: { 'x-api-key': apiKey },
       timeout: 10000,
-      validateStatus: () => true
+      validateStatus: () => true,
+      signal
     }), {
       retries: 2,
-      retryDelayMs: 1200
+      retryDelayMs: 1200,
+      signal
     });
     const { data } = response;
 
@@ -174,10 +182,11 @@ export async function checkAssetStatus(operationId, apiKey) {
   }
 }
 
-export async function uploadAudioParts({ parts, apiKey, creator, displayName, description }) {
+export async function uploadAudioParts({ parts, apiKey, creator, displayName, description, signal }) {
   const results = [];
 
   for (const part of parts) {
+    if (signal?.aborted) throw clientAbortError();
     const trace = [{
       step: 'Persiapan',
       status: 'Pending',
@@ -225,11 +234,13 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
           maxBodyLength: ROBLOX_MAX_AUDIO_BYTES + 1024 * 1024,
           maxContentLength: ROBLOX_MAX_AUDIO_BYTES + 1024 * 1024,
           timeout: ROBLOX_UPLOAD_TIMEOUT_MS,
-          validateStatus: () => true
+          validateStatus: () => true,
+          signal
         });
       }, {
         retries: 2,
-        retryDelayMs: 1500
+        retryDelayMs: 1500,
+        signal
       });
       const { data } = response;
       if (response.status >= 400) {
@@ -259,7 +270,7 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
         message: operationId ? `Roblox menerima request. Operation ID: ${operationId}.` : 'Roblox menerima request, tetapi operationId tidak ditemukan.'
       });
       const polled = operationId
-        ? await pollOperation(operationId, apiKey)
+        ? await pollOperation(operationId, apiKey, signal)
         : { status: 'Pending', error: 'Operation ID tidak ditemukan.' };
       trace.push(...(polled.trace || []));
 
@@ -274,6 +285,7 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
         trace
       });
     } catch (error) {
+      if (signal?.aborted || error.code === 'ERR_CANCELED' || error.code === 'client_abort') throw clientAbortError();
       const formatted = formatRobloxError(error);
       trace.push({
         step: 'Submit Open Cloud',

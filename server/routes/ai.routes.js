@@ -28,6 +28,15 @@ function normalizeMessages(messages) {
   });
 }
 
+// Express tidak punya req.signal bawaan — sebelumnya nilai ini `undefined` sehingga
+// panggilan ke provider AI terus berjalan walau client sudah pergi (token terbuang).
+// Sekarang: abort saat koneksi client tertutup sebelum respons selesai.
+function wireClientDisconnect(res) {
+  const controller = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+  return controller.signal;
+}
+
 router.get('/ai/status', (_req, res) => {
   res.json(getAiConfig());
 });
@@ -46,7 +55,7 @@ router.post('/ai/chat', aiLimit, async (req, res, next) => {
       messages,
       temperature: Number.isFinite(temperature) ? temperature : undefined,
       maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined,
-      signal: req.signal
+      signal: wireClientDisconnect(res)
     });
     res.json(result);
   } catch (error) {
@@ -54,8 +63,11 @@ router.post('/ai/chat', aiLimit, async (req, res, next) => {
   }
 });
 
-// POST /ai/chat/stream — SSE streaming response
-router.post('/ai/chat/stream', async (req, res, next) => {
+// POST /ai/chat/stream — SSE streaming response.
+// Wajib rate limit sama seperti /ai/chat: tanpa ini endpoint bisa diborak tanpa batas
+// dan memakan kuota provider AI (route ini paling mahal secara resource).
+router.post('/ai/chat/stream', aiLimit, async (req, res, next) => {
+  const signal = wireClientDisconnect(res);
   try {
     const messages = normalizeMessages(req.body?.messages);
     const temperature = req.body?.temperature === undefined
@@ -79,14 +91,18 @@ router.post('/ai/chat/stream', async (req, res, next) => {
       maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined,
       onChunk: (content) => {
         fullContent += content;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content })}\n\n`);
       },
-      signal: req.signal
+      signal
     });
 
-    res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
-    res.end();
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
+      res.end();
+    }
   } catch (error) {
+    // Client sudah pergi (abort via close) — tidak ada yang perlu dibalas.
+    if (signal.aborted || res.writableEnded) return res.end();
     if (!res.headersSent) return next(error);
     res.write(`event: error\ndata: ${JSON.stringify({ message: error.message })}\n\n`);
     res.end();

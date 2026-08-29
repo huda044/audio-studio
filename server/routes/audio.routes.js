@@ -1,41 +1,25 @@
 import express from 'express';
 import multer from 'multer';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import uploadsDir from '../lib/uploadsDir.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
-import { trackConversion, trackUpload } from '../middleware/observability.js';
+import { trackConversion, trackUpload, internalEndpointGuard } from '../middleware/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveUploadsDir() {
-  const candidates = [];
-  if (process.env.UPLOADS_DIR) candidates.push(process.env.UPLOADS_DIR);
-  candidates.push(path.resolve(__dirname, '..', '..', 'uploads'));
-  candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
-  for (const dir of candidates) {
-    try {
-      fsSync.mkdirSync(dir, { recursive: true });
-      fsSync.accessSync(dir, fsSync.constants.W_OK);
-      return dir;
-    } catch {
-      // try next
-    }
-  }
-  return path.join(os.tmpdir(), 'audio-studio-uploads');
-}
-
-const uploadsDir = resolveUploadsDir();
-
 const router = express.Router();
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);
 const inlineAudioLimitBytes = Number(process.env.INLINE_AUDIO_LIMIT_MB || 8) * 1024 * 1024;
+// Batas TOTAL semua part yang di-inline sebagai base64 dalam SATU respons. Tanpa ini,
+// 4 part × 8 MB ≈ 43 MB JSON string di memori per request — berbahaya saat concurrency 2
+// di container gratisan (HF) yang RAM-nya kecil.
+const inlineTotalLimitBytes = Number(process.env.INLINE_AUDIO_TOTAL_LIMIT_MB || 16) * 1024 * 1024;
 const robloxAudioMaxDuration = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
 const robloxAudioMaxBytes = Number(process.env.ROBLOX_AUDIO_MAX_BYTES || 19 * 1024 * 1024);
 const appMaxDurationSeconds = Math.min(Math.max(Number(process.env.APP_MAX_DURATION_SECONDS || 200), 30), 14400);
@@ -80,6 +64,22 @@ const upload = multer({
     cb(ok ? null : new Error('Format file harus .mp3, .wav, .ogg, .m4a, .aac, atau .flac'), ok);
   }
 });
+
+// Tolak request SEBELUM multer menyentuh body — tanpa ini file (sampai 250 MB) sudah
+// ter-stream ke disk dulu, baru ditolak 503 oleh queue. Praktisnya user di koneksi
+// lambat membuang bandwidth & waktu untuk hasil yang pasti ditampik.
+function queueGate(queue) {
+  return (_req, _res, next) => {
+    if (!queue.canAccept()) {
+      const error = new Error('Server sedang penuh memproses audio. Coba lagi beberapa saat.');
+      error.status = 503;
+      error.retryAfter = 20;
+      error.details = [queue.stats()];
+      return next(error);
+    }
+    next();
+  };
+}
 
 function cleanNumber(value, fallback, min, max) {
   const numeric = Number(value);
@@ -161,7 +161,12 @@ export function resolveApiKey(body = {}) {
 }
 
 // POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
-router.post('/process', processLimit, upload.single('audio'), async (req, res, next) => {
+router.post('/process', processLimit, queueGate(conversionQueue), upload.single('audio'), async (req, res, next) => {
+  // Bila client memutus koneksi (tab ditutup / tombol Batal): task yang masih mengantri
+  // dibuang dan proses FFmpeg yang sedang jalan dibunuh, supaya slot queue (concurrency 2)
+  // tidak terbuang mengerjakan hasil yang tidak akan pernah terkirim.
+  const abortController = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
   try {
     const responseBody = await conversionQueue.push(async () => {
       if (!req.file?.path) {
@@ -191,17 +196,25 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         settings,
         segmentSeconds,
         sourceDuration,
-        sourceProbe
+        sourceProbe,
+        signal: abortController.signal
       });
       trackConversion(result.totalDuration);
       warnings.push(...(result.warnings || []));
 
-      const parts = await Promise.all(result.parts.map(async (part) => {
-        const inline = part.sizeBytes <= inlineAudioLimitBytes && result.partCount <= 4;
-        const audioDataUrl = inline
-          ? `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`
-          : '';
-        return {
+      // Inline base64 hanya untuk hasil kecil; apa pun yang melewati budget tetap bisa
+      // diakses client lewat audioUrl (/api/files/...) — tidak ada data yang hilang.
+      let inlineBudgetUsed = 0;
+      const parts = [];
+      for (const part of result.parts) {
+        let audioDataUrl = '';
+        if (result.partCount <= 4
+          && part.sizeBytes <= inlineAudioLimitBytes
+          && inlineBudgetUsed + part.sizeBytes <= inlineTotalLimitBytes) {
+          audioDataUrl = `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
+          inlineBudgetUsed += part.sizeBytes;
+        }
+        parts.push({
           index: part.index,
           fileName: part.fileName,
           audioUrl: `/api/files/${part.fileName}`,
@@ -209,8 +222,8 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
           duration: part.duration,
           durationText: formatSeconds(part.duration),
           sizeBytes: part.sizeBytes
-        };
-      }));
+        });
+      }
 
       return {
         title,
@@ -228,11 +241,12 @@ router.post('/process', processLimit, upload.single('audio'), async (req, res, n
         output: { format: result.format, codec: result.codec, bitrate: result.bitrate },
         queue: conversionQueue.stats()
       };
-    });
+    }, { signal: abortController.signal });
     res.setHeader('X-No-Compression', '1');
     res.json(responseBody);
   } catch (error) {
-    next(error);
+    // 499 = client sudah pergi; tidak ada respons yang bisa (atau perlu) dikirim.
+    if (error.status !== 499) next(error);
   } finally {
     await removeQuiet(req.file?.path);
   }
@@ -304,9 +318,10 @@ router.post('/asset-status', infoLimit, async (req, res, next) => {
   }
 });
 
-// GET /api/stats — monitoring ringan (queue load, uptime, memori). Tidak ada secret.
+// GET /api/stats — monitoring ringan (queue load, uptime, memori). Tidak ada secret,
+// tapi tetap ikut guard METRICS_TOKEN karena mengekspos PID/memori server.
 // Dibatasi rate-limit ketat. Berguna untuk observability backpressure di produksi.
-router.get('/stats', statsLimit, (_req, res) => {
+router.get('/stats', statsLimit, internalEndpointGuard, (_req, res) => {
   const mem = process.memoryUsage();
   res.json({
     uptime: Math.round(process.uptime()),
@@ -323,8 +338,12 @@ router.get('/stats', statsLimit, (_req, res) => {
 });
 
 // POST /api/upload-roblox — terima audio hasil proses + API key (sekali pakai), upload ke Roblox.
-router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, res, next) => {
+router.post('/upload-roblox', uploadLimit, queueGate(robloxQueue), upload.single('audio'), async (req, res, next) => {
   let splitParts = [];
+  // Sama seperti /process: batal otomatis saat client memutus koneksi —
+  // upload axios ke Roblox & polling moderasi ikut di-abort lewat signal.
+  const abortController = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
   try {
     const responseBody = await robloxQueue.push(async () => {
       if (!req.file?.path) {
@@ -344,8 +363,11 @@ router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, r
       const split = await splitAudioIfNeeded({
         inputPath: req.file.path,
         uploadsDir,
-        maxDuration: Math.min(Number(payload.splitDuration ?? 180), robloxAudioMaxDuration),
-        maxBytes: robloxAudioMaxBytes
+        // cleanNumber: input sampah ("abc") dulu menghasilkan NaN yang lolos sampai
+        // clamp() di dalam service — sekarang divalidasi di tepi route.
+        maxDuration: cleanNumber(payload.splitDuration ?? 180, 180, 30, robloxAudioMaxDuration),
+        maxBytes: robloxAudioMaxBytes,
+        signal: abortController.signal
       });
       splitParts = split.wasSplit ? split.parts.map((part) => part.path) : [];
 
@@ -354,7 +376,8 @@ router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, r
         apiKey,
         creator: target.creator,
         displayName: payload.displayName || 'Audio Studio',
-        description: payload.description || 'Diproses menggunakan Audio Studio'
+        description: payload.description || 'Diproses menggunakan Audio Studio',
+        signal: abortController.signal
       });
       parts.forEach((p) => trackUpload(p.status));
 
@@ -376,10 +399,10 @@ router.post('/upload-roblox', uploadLimit, upload.single('audio'), async (req, r
           queue: robloxQueue.stats()
         }
       };
-    });
+    }, { signal: abortController.signal });
     res.json(responseBody);
   } catch (error) {
-    next(error);
+    if (error.status !== 499) next(error);
   } finally {
     await removeQuiet(req.file?.path);
     await Promise.all(splitParts.map(removeQuiet));

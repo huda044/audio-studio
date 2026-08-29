@@ -2,8 +2,13 @@ const buckets = new Map();
 const MAX_BUCKETS = 10000;
 
 function clientKey(req) {
-  // Gunakan remoteAddress saja, JANGAN pakai X-Forwarded-For (bisa di-spoof)
-  return String(req.socket?.remoteAddress || req.ip || 'local').replace(/^::ffff:/, '');
+  // req.ip sudah menghormati app.set('trust proxy', 1): hanya X-Forwarded-For dari
+  // tepat satu hop proxy terpercaya yang dipakai, sisanya diabaikan (anti-spoof).
+  // Tanpa proxy, req.ip turun ke socket.remoteAddress. Penting saat deploy di belakang
+  // proxy (HF Spaces/Vercel/nginx): pakai remoteAddress mentah membuat SEMUA pengunjung
+  // dihitung sebagai satu client (limit global gabungan, bukan per-user).
+  const ip = req.ip || req.socket?.remoteAddress || 'local';
+  return String(ip).replace(/^::ffff:/, '');
 }
 
 export function rateLimit({ windowMs, max, message }) {

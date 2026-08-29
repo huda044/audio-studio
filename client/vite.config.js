@@ -12,6 +12,10 @@ export default defineConfig({
     // Target modern → output lebih kecil (skip polyfill untuk browser lama).
     target: 'es2020',
     cssCodeSplit: true,
+    // Matikan inline module-preload polyfill: itu satu-satunya <script> inline di
+    // index.html hasil build, dan CSP server melarang script inline
+    // (script-src 'self') sebagai proteksi XSS.
+    modulePreload: { polyfill: false },
     rollupOptions: {
       output: {
         // Nama file stabil berbasis hash untuk long-term caching.
@@ -21,8 +25,6 @@ export default defineConfig({
         manualChunks: {
           // React core jarang berubah → cache-nya reusable lama.
           'react-vendor': ['react', 'react-dom'],
-          // framer-motion cukup besar; pisahkan agar tidak ikut berubah tiap app-code edit.
-          motion: ['framer-motion'],
           // lucide-react: tree-shaken, tapi tetap layak di-chunk terpisah.
           icons: ['lucide-react']
         }

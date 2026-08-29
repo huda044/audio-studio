@@ -3,38 +3,17 @@ import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import path from 'node:path';
-import os from 'node:os';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import audioRoutes from './routes/audio.routes.js';
 import aiRoutes from './routes/ai.routes.js';
+import uploadsDir from './lib/uploadsDir.js';
 import logger from './lib/logger.js';
-import { requestLogger, metricsEndpoint } from './middleware/observability.js';
+import { requestLogger, metricsEndpoint, internalEndpointGuard } from './middleware/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '..');
-
-async function resolveUploadsDir() {
-  const fsSync = await import('node:fs');
-  const candidates = [];
-  if (process.env.UPLOADS_DIR) candidates.push(process.env.UPLOADS_DIR);
-  candidates.push(path.join(rootDir, 'uploads'));
-  candidates.push(path.join(os.tmpdir(), 'audio-studio-uploads'));
-  for (const dir of candidates) {
-    try {
-      await fs.mkdir(dir, { recursive: true });
-      await fs.access(dir, fsSync.constants.W_OK);
-      return dir;
-    } catch {
-      // try next
-    }
-  }
-  return path.join(os.tmpdir(), 'audio-studio-uploads');
-}
-
-const uploadsDir = await resolveUploadsDir();
 const port = process.env.PORT || 4000;
 // Tentukan clientDist lebih awal supaya middleware security-header bisa memakainya
 // untuk memutuskan apakah CSP perlu dipasang (hanya saat melayani SPA).
@@ -54,8 +33,12 @@ app.use((req, res, next) => {
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   // Defense-in-depth untuk SPA. Hanya aktif saat melayani client (CLIENT_DIST ter-set),
-  // supaya tidak mengganggu tooling/dev-only. 'unsafe-inline' diperlukan karena Vite
-  // menyuntikkan script preload & style bootstrap inline.
+  // supaya tidak mengganggu tooling/dev-only.
+  // script-src TANPA 'unsafe-inline': satu-satunya inline script di build Vite adalah
+  // module-preload polyfill — sudah dimatikan lewat build.modulePreload.polyfill=false
+  // (lihat client/vite.config.js), jadi semua script bertanda src eksternal.
+  // style-src masih butuh 'unsafe-inline' karena framer-motion menyuntikkan <style>
+  // runtime untuk keyframe/animasi.
   if (clientDist) {
     res.setHeader(
       'Content-Security-Policy',
@@ -68,7 +51,7 @@ app.use((req, res, next) => {
         "font-src 'self' data:",
         "media-src 'self' data: blob:",
         "style-src 'self' 'unsafe-inline'",
-        "script-src 'self' 'unsafe-inline'",
+        "script-src 'self'",
         // connect-src: API sendiri + Open Cloud Roblox (untuk future client-side call jika dibutuhkan).
         "connect-src 'self' https://apis.roblox.com"
       ].join('; ')
@@ -102,8 +85,11 @@ app.use('/api/files', (req, res, next) => {
   if (requestedFile.includes('..') || requestedFile.includes('/') || requestedFile.includes('\\')) {
     return res.status(400).json({ error: 'Nama file tidak valid.' });
   }
+  // `+ path.sep` mencegah prefix bypass klasik (mis. uploadsDir "uploads" cocok dengan
+  // jalur fiktif "uploads-evil") — defense-in-depth setelah basename() di atas.
+  const basePath = path.resolve(uploadsDir);
   const fullPath = path.resolve(uploadsDir, requestedFile);
-  if (!fullPath.startsWith(path.resolve(uploadsDir))) {
+  if (!fullPath.startsWith(basePath + path.sep)) {
     return res.status(403).json({ error: 'Akses file ditolak.' });
   }
   next();
@@ -112,7 +98,11 @@ app.use('/api/files', (req, res, next) => {
 app.use('/api/files', express.static(uploadsDir, {
   index: false,
   setHeaders(res, filePath) {
-    res.setHeader('Cache-Control', 'no-store');
+    // no-cache (bukan no-store): file hasil konversi immutable selama ada (nama ber-nanoid),
+    // jadi browser boleh menyimpan + revalidasi ETag → 304. Ini memangkas undangan ulang
+    // yang sama untuk WaveBar, <audio>, upload blob, dan Download ZIP dari file identik.
+    // Setelah file di-sweep (>3 jam), revalidasi menghasilkan 404 yang sudah ditangani client.
+    res.setHeader('Cache-Control', 'no-cache');
     if (!/\.ogg$/i.test(filePath)) {
       res.setHeader('Content-Type', 'application/octet-stream');
     }
@@ -122,7 +112,9 @@ app.use('/api/files', express.static(uploadsDir, {
 app.use(requestLogger);
 app.use('/api', audioRoutes);
 app.use('/api', aiRoutes);
-app.get('/metrics', metricsEndpoint);
+// /metrics & /api/stats mengekspos metrik internal (memori, PID, antrean).
+// Bila env METRICS_TOKEN di-set, keduanya menuntut token yang cocok.
+app.get('/metrics', internalEndpointGuard, metricsEndpoint);
 
 // Route /api yang tidak dikenal harus balas JSON 404, BUKAN jatuh ke catch-all SPA
 // (yang akan mengirim index.html dan membuat client gagal parse JSON).

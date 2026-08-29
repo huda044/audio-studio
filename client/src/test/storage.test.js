@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeSettings } from '../lib/utils.js';
 import { STORAGE_KEYS } from '../lib/constants.js';
-import { obfuscate, deobfuscate, safeParse, useStoredState } from '../lib/storage.js';
+import { obfuscate, deobfuscate, safeParse } from '../lib/storage.js';
 
 describe('storage helpers', () => {
   it('should obfuscate and deobfuscate roundtrip', () => {

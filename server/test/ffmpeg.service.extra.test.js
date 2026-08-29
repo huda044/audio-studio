@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { atempoChain, computeEffectiveDuration, buildFilters, probeAudio } from '../services/ffmpeg.service.js';
+import { describe, it, expect } from 'vitest';
+import { atempoChain, buildFilters } from '../services/ffmpeg.service.js';
 
 describe('FFmpeg Service - Extended', () => {
   describe('atempoChain edge cases', () => {

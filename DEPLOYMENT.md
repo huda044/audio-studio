@@ -22,7 +22,53 @@ cd client && npm run dev    # Terminal 2 - Frontend
 
 Buka `http://localhost:5173` (Vite dev server).
 
-## Docker Deployment (Recommended)
+## Vercel Deployment (Frontend Saja — REKOMENDASI)
+
+> **PENTING — arsitektur yang benar:** Vercel hanya untuk **frontend statis** (client).
+> Backend Express **tidak bisa** jalan sebagai Vercel Serverless Function karena:
+> upload hingga 250 MB (limit body Vercel ±4,5 MB), konversi ffmpeg hingga 10 menit
+> (limit eksekusi function jauh lebih pendek), task queue in-memory (hilang antar
+> invocation), dan disk ephemeral. Backend tetap di-host yang mendukung proses
+> jangka panjang: Hugging Face Space (Docker), VPS Oracle (docker-compose), atau
+> host lain — cukup satu instance.
+
+### 1. Deploy frontend
+
+```bash
+cd client
+npm i -g vercel      # bila CLI belum ada
+vercel login         # sekali saja (browser)
+vercel --prod
+```
+
+Konfigurasi sudah siap di `client/vercel.json` (build Vite, cache asset immutable,
+header keamanan).
+
+### 2. Arahkan frontend ke backend
+
+Saat project Vercel ditanya **Environment Variable**, tambahkan:
+
+| Variable | Contoh nilai | Fungsi |
+|----------|--------------|--------|
+| `VITE_API_BASE` | `https://username-audio-studio.hf.space` | Base URL backend (trailing slash otomatis dibuang) |
+
+Alternatif tanpa env var: tambahkan proxy rewrite di `client/vercel.json` sehingga
+panggilan `/api/*` diteruskan ke backend (bebas CORS):
+
+```json
+"rewrites": [
+  { "source": "/api/(.*)", "destination": "https://<HOST-BACKEND>/api/$1" },
+  { "source": "/(.*)", "destination": "/index.html" }
+]
+```
+
+### 3. Backend di sisi lain
+
+Pastikan `ALLOWED_ORIGINS` di backend memuat domain Vercel
+(mis. `https://audio-studio.vercel.app`) bila tidak memakai pendekatan proxy di atas,
+dan set `METRICS_TOKEN` untuk melindungi `/metrics` & `/api/stats`.
+
+## Docker Deployment (Recommended — untuk backend)
 
 ### Build Image
 
@@ -163,7 +209,9 @@ sudo certbot --nginx -d yourdomain.com
 | `CLIENT_DIST` | - | Path ke built client |
 | `UPLOADS_DIR` | - | Custom uploads directory |
 | `MAX_UPLOAD_MB` | 250 | Max upload size (MB) |
-| `INLINE_AUDIO_LIMIT_MB` | 8 | Max size for inline base64 (MB) |
+| `INLINE_AUDIO_LIMIT_MB` | 8 | Max size for inline base64 per part (MB) |
+| `INLINE_AUDIO_TOTAL_LIMIT_MB` | 16 | Max total inline base64 across all parts in one response (MB) — parts beyond the budget stay accessible via `/api/files/` URLs |
+| `METRICS_TOKEN` | - | Bila di-set, endpoint `/metrics` menuntut header `X-Metrics-Token` atau `Authorization: Bearer <token>` yang cocok (timing-safe) |
 | `NODE_ENV` | - | Environment (production) |
 | `ALLOWED_ORIGINS` | - | CORS whitelist (comma-separated) |
 | `JSON_LIMIT` | 512kb | Max JSON body size |

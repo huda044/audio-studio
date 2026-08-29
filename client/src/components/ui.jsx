@@ -1,92 +1,25 @@
-import React, { useRef } from 'react';
-import { motion } from 'framer-motion';
+import React from 'react';
 
-export const fadeUp = {
-  hidden: { opacity: 0, y: 14 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 260, damping: 26 } }
-};
+// Komponen UI dasar — polos, tanpa animasi/efek mouse. Sengaja sederhana:
+// kecepatan render & kenyamanan pakai diprioritaskan.
 
-export const stagger = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } }
-};
-
-const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-// Cache hasil matchMedia: nilai ini stabil untuk session (user jarang toggle setting
-// sembari app dipakai). Menghindari pemanggilan matchMedia di tiap event mousemove.
-let _reduceMotionCache = null;
-function prefersReducedMotion() {
-  if (_reduceMotionCache === null) _reduceMotionCache = reduceMotion();
-  return _reduceMotionCache;
-}
-
-export function Card({ icon, title, desc, children, className = '', delay = 0 }) {
-  const ref = useRef(null);
-  // rafRef menyimpan id frame terjadwal — flag throttle yang persist lintas render.
-  // Coalescing 1x per frame (~60fps) jauh lebih murah daripada getBoundingClientRect +
-  // setTransform di tiap pixel mouse-move. Didefinisikan inline (bukan via HOF) supaya
-  // aturan react-hooks/refs yakin ref hanya diakses dalam event handler, bukan saat render.
-  const rafRef = useRef(0);
-  function onMove(e) {
-    if (rafRef.current) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = 0;
-      const el = ref.current;
-      if (!el || prefersReducedMotion()) return;
-      const rect = el.getBoundingClientRect();
-      const px = (e.clientX - rect.left) / rect.width;
-      const py = (e.clientY - rect.top) / rect.height;
-      el.style.setProperty('--mx', `${px * 100}%`);
-      el.style.setProperty('--my', `${py * 100}%`);
-      el.style.transform = `perspective(900px) rotateY(${(px - 0.5) * 6}deg) rotateX(${(0.5 - py) * 6}deg) translateY(-2px)`;
-    });
-  }
-  function onLeave() {
-    const el = ref.current;
-    if (!el) return;
-    el.style.transform = '';
-  }
-
+export function Card({ icon, title, desc, children, className = '' }) {
   return (
-    <motion.section
-      ref={ref}
-      className={`card tilt ${className}`}
-      onMouseMove={onMove}
-      onMouseLeave={onLeave}
-      initial={{ opacity: 0, y: 22 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 240, damping: 26, delay }}
-    >
-      <span className="card-glow" aria-hidden="true" />
+    <section className={`card ${className}`}>
       {(title || icon) && (
         <h2 className="card-title">{icon && <span className="ico">{icon}</span>}{title}</h2>
       )}
       {desc && <p className="card-desc">{desc}</p>}
       {children}
-    </motion.section>
+    </section>
   );
 }
 
-// Tombol magnet: tertarik ke cursor + glow. Untuk CTA utama.
-export function MagneticButton({ children, className = '', strength = 0.4, ...props }) {
-  const ref = useRef(null);
-  const rafRef = useRef(0);
-  function onMove(e) {
-    if (rafRef.current) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = 0;
-      const el = ref.current;
-      if (!el || prefersReducedMotion()) return;
-      const r = el.getBoundingClientRect();
-      const x = e.clientX - r.left - r.width / 2;
-      const y = e.clientY - r.top - r.height / 2;
-      el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
-    });
-  }
-  function onLeave() { if (ref.current) ref.current.style.transform = ''; }
+// Nama lama dipertahankan supaya pemanggil tidak berubah — sekarang tombol biasa.
+export function MagneticButton({ children, className = '', ...props }) {
   return (
-    <button ref={ref} className={`btn magnetic ${className}`} onMouseMove={onMove} onMouseLeave={onLeave} {...props}>
-      <span className="mag-inner">{children}</span>
+    <button className={`btn ${className}`} {...props}>
+      {children}
     </button>
   );
 }
@@ -133,32 +66,11 @@ export function Trace({ items = [] }) {
   return (
     <div className="trace">
       {items.map((row, i) => (
-        <motion.div
-          className="trace-row" key={i}
-          initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
-        >
+        <div className="trace-row" key={i}>
           <span className={`badge ${row.status === 'Accepted' ? 'ok' : row.status === 'Failed' ? 'bad' : 'wait'}`}>{row.step}</span>
           <span className="muted">{row.message}</span>
-        </motion.div>
+        </div>
       ))}
     </div>
   );
-}
-
-// Angka yang menghitung naik (count animation) saat muncul.
-export function CountUp({ value, duration = 1100, suffix = '' }) {
-  const [n, setN] = React.useState(0);
-  React.useEffect(() => {
-    const to = Number(value) || 0;
-    if (prefersReducedMotion()) { const id = requestAnimationFrame(() => setN(to)); return () => cancelAnimationFrame(id); }
-    let raf; const start = performance.now();
-    const tick = (t) => {
-      const p = Math.min(1, (t - start) / duration);
-      setN(Math.round(to * (1 - Math.pow(1 - p, 3))));
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [value, duration]);
-  return <span>{n}{suffix}</span>;
 }

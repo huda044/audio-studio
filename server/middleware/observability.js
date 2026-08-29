@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { logger } from '../lib/logger.js';
 
 // Lightweight request logging middleware.
@@ -51,6 +52,20 @@ export function trackUpload(status) {
   metrics.uploadTotal += 1;
   if (status === 'Accepted') metrics.uploadAccepted += 1;
   else if (status === 'Failed') metrics.uploadFailed += 1;
+}
+
+// Guard bersama endpoint yang mengekspos info internal (/metrics, /api/stats):
+// memori, PID, depth queue. Tanpa env METRICS_TOKEN endpoint tetap terbuka
+// (backward-compatible); bila di-set, token wajib cocok (timing-safe compare).
+export function internalEndpointGuard(req, res, next) {
+  const expected = String(process.env.METRICS_TOKEN || '');
+  if (!expected) return next();
+  const provided = String(req.headers['x-metrics-token'] || '')
+    || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length === b.length && timingSafeEqual(a, b)) return next();
+  return res.status(401).json({ error: 'Endpoint membutuhkan token.' });
 }
 
 export function metricsEndpoint(_req, res) {

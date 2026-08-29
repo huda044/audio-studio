@@ -67,4 +67,26 @@ describe('Rate Limit Middleware', () => {
     limiter(makeReq('2.2.2.2', path), makeRes(), next);
     expect(nextCalls).toBe(2);
   });
+
+  it('memakai req.ip (hasil trust proxy) bila tersedia — di belakang proxy, XFF client menentukan bucket', () => {
+    const limiter = rateLimit({ windowMs: 60_000, max: 1 });
+    const path = '/test-proxy';
+
+    let nextCalls = 0;
+    const next = () => {
+      nextCalls += 1;
+    };
+
+    // req.ip adalah nilai yang sudah diproses Express dengan trust proxy:
+    // dua pengunjung berbeda di belakang proxy harus dapat bucket terpisah.
+    limiter({ ...makeReq('9.9.9.9', path), ip: '203.0.113.7' }, makeRes(), next);
+    limiter({ ...makeReq('9.9.9.9', path), ip: '198.51.100.9' }, makeRes(), next);
+    expect(nextCalls).toBe(2);
+
+    // IP sama (walaupun via proxy) tetap terkena limit.
+    const blocked = makeRes();
+    limiter({ ...makeReq('9.9.9.9', path), ip: '203.0.113.7' }, blocked, next);
+    expect(blocked.statusCode).toBe(429);
+    expect(nextCalls).toBe(2);
+  });
 });
