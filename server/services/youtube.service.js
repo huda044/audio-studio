@@ -18,7 +18,12 @@ const require = createRequire(import.meta.url);
 // Pola server/bin/yt-dlp* memang disiapkan di .gitignore untuk instalasi lokal dev.
 
 const DEFAULT_TIMEOUT_MS = 300000; // 5 menit per percobaan download
+const DEFAULT_META_TIMEOUT_MS = 90000; // metadata bisa lambat di IP datacenter (HF)
 const DEFAULT_SOCKET_TIMEOUT_S = 20;
+
+// Urutan percobaan client YouTube: default dulu, lalu android/ios yang sering
+// lolos ketika web client diblok verifikasi bot di IP datacenter.
+const PLAYER_CLIENT_ATTEMPTS = [null, 'youtube:player_client=android,ios'];
 
 export const YOUTUBE_URL_RE = /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/(watch\?v=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/i;
 
@@ -135,29 +140,42 @@ function baseArgs({ ffmpegDir, socketTimeoutS }) {
 }
 
 // Ambil metadata (judul, durasi, live?) TANPA mengunduh — untuk validasi cepat
-// sebelum bandwidth dibuang ke video yang terlalu panjang.
+// sebelum bandwidth dibuang ke video yang terlalu panjang. Coba juga dua set
+// player client: di IP datacenter, client default sering ditahan bot-check.
 export async function fetchYouTubeMeta(url, { signal } = {}) {
-  const timeoutMs = 30000;
-  const args = [
-    ...baseArgs({ ffmpegDir: ffmpegDirForMeta(), socketTimeoutS: DEFAULT_SOCKET_TIMEOUT_S }),
-    '--skip-download',
-    '--dump-single-json',
-    String(url).trim()
-  ];
-  const stdout = await runYtDlp(args, { timeoutMs, signal });
-  let info;
-  try {
-    info = JSON.parse(stdout);
-  } catch {
-    throw new Error('Gagal membaca metadata video YouTube. Coba lagi.');
+  const timeoutMs = Math.max(30000, Number(process.env.YTDL_META_TIMEOUT_MS || DEFAULT_META_TIMEOUT_MS));
+  let lastError = null;
+  for (let i = 0; i < PLAYER_CLIENT_ATTEMPTS.length; i += 1) {
+    if (signal?.aborted) throw clientAbortError('Import YouTube dibatalkan.');
+    const args = [
+      ...baseArgs({ ffmpegDir: ffmpegDirForMeta(), socketTimeoutS: DEFAULT_SOCKET_TIMEOUT_S }),
+      '--skip-download',
+      '--dump-single-json'
+    ];
+    if (PLAYER_CLIENT_ATTEMPTS[i]) args.push('--extractor-args', PLAYER_CLIENT_ATTEMPTS[i]);
+    args.push(String(url).trim());
+    try {
+      const stdout = await runYtDlp(args, { timeoutMs, signal });
+      let info;
+      try {
+        info = JSON.parse(stdout);
+      } catch {
+        throw new Error('Gagal membaca metadata video YouTube. Coba lagi.');
+      }
+      const duration = Number(info.duration) || 0;
+      return {
+        id: String(info.id || ''),
+        title: String(info.title || 'YouTube Audio').slice(0, 180),
+        duration,
+        isLive: Boolean(info.is_live)
+      };
+    } catch (error) {
+      lastError = error;
+      if (error.code === 'client_abort' || signal?.aborted) throw error;
+      if (i === PLAYER_CLIENT_ATTEMPTS.length - 1) throw error;
+    }
   }
-  const duration = Number(info.duration) || 0;
-  return {
-    id: String(info.id || ''),
-    title: String(info.title || 'YouTube Audio').slice(0, 180),
-    duration,
-    isLive: Boolean(info.is_live)
-  };
+  throw lastError || new Error('Gagal membaca metadata video YouTube.');
 }
 
 function ffmpegDirForMeta() {
@@ -173,10 +191,7 @@ function ffmpegDirForMeta() {
 // Dua percobaan: client default → android,ios (mengatasi blokir bot YouTube).
 export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutMs } = {}) {
   const effectiveTimeout = Math.max(30000, Number(timeoutMs || process.env.YTDL_TIMEOUT_MS || DEFAULT_TIMEOUT_MS));
-  const attempts = [
-    null, // client default yt-dlp
-    'youtube:player_client=android,ios'
-  ];
+  const attempts = PLAYER_CLIENT_ATTEMPTS;
   let lastError = null;
 
   for (let i = 0; i < attempts.length; i += 1) {
