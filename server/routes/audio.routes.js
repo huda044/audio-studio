@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import uploadsDir from '../lib/uploadsDir.js';
+import logger from '../lib/logger.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
 import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
@@ -282,6 +283,7 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
         meta = await fetchYouTubeMeta(url, { signal: abortController.signal });
       } catch (error) {
         if (error.code === 'client_abort') throw error;
+        if (error.stderr) logger.warn('youtube meta gagal', { requestId: req.requestId, url, stderr: error.stderr.slice(-600) });
         const wrapped = new Error(error.message);
         wrapped.status = 422;
         throw wrapped;
@@ -302,7 +304,10 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
         throw error;
       }
 
-      downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal });
+      downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal }).catch((error) => {
+        if (error.code !== 'client_abort' && error.stderr) logger.warn('youtube download gagal', { requestId: req.requestId, url, stderr: error.stderr.slice(-600) });
+        throw error;
+      });
 
       const settings = parseSettings(req.body?.settings);
       const segmentSeconds = cleanNumber(req.body?.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);

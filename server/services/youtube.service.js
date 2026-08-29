@@ -21,9 +21,13 @@ const DEFAULT_TIMEOUT_MS = 300000; // 5 menit per percobaan download
 const DEFAULT_META_TIMEOUT_MS = 90000; // metadata bisa lambat di IP datacenter (HF)
 const DEFAULT_SOCKET_TIMEOUT_S = 20;
 
-// Urutan percobaan client YouTube: default dulu, lalu android/ios yang sering
-// lolos ketika web client diblok verifikasi bot di IP datacenter.
-const PLAYER_CLIENT_ATTEMPTS = [null, 'youtube:player_client=android,ios'];
+// Urutan percobaan client YouTube: default dulu, lalu kombinasi yang sering
+// lolos ketika web client diblok verifikasi bot di IP datacenter (HF, VPS).
+const PLAYER_CLIENT_ATTEMPTS = [
+  null,
+  'youtube:player_client=android,ios',
+  'youtube:player_client=android_vr,web_embedded'
+];
 
 export const YOUTUBE_URL_RE = /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/(watch\?v=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/i;
 
@@ -51,7 +55,9 @@ export function isYouTubeUrl(url) {
 // Petakan stderr yt-dlp ke pesan Indonesia yang bisa dipahami user + saran solusi.
 export function mapYtError(stderr = '') {
   const text = String(stderr).toLowerCase();
-  if (text.includes('sign in to confirm') || text.includes('not a bot')) {
+  if (text.includes('sign in to confirm') || text.includes('not a bot')
+    || text.includes('http error 403') || text.includes('unable to download')
+    || text.includes('nsig extraction') || text.includes('request was blocked')) {
     return 'YouTube memblokir akses dari server (verifikasi bot). Ini terjadi berkala pada server gratis — coba lagi beberapa menit, atau gunakan upload file.';
   }
   if (text.includes('members-only') || text.includes('members only')) {
