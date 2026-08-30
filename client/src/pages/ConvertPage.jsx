@@ -7,7 +7,7 @@ import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
 import { playDoneChime, flashTabTitle } from '../lib/doneChime.js';
-import { processAudio, fetchPartBlob, uploadRoblox, importYouTube, deleteFile } from '../lib/api.js';
+import { processAudio, fetchPartBlob, uploadRoblox, importYouTube, deleteFile, fetchProgress } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
 import {
@@ -143,6 +143,17 @@ export default function ConvertPage() {
 
   function update(patch) { setSettings((s) => ({ ...s, ...patch })); }
 
+  // Polling progres konversi: server menyimpan persen ffmpeg asli per jobId.
+  function startProgressPolling(jobId, onPercent) {
+    const timer = setInterval(async () => {
+      try {
+        const pct = await fetchProgress(jobId);
+        if (pct !== null) onPercent(pct);
+      } catch { /* polling gagal sekali bukan masalah */ }
+    }, 2000);
+    return () => clearInterval(timer);
+  }
+
   // ================= Preset kustom =================
   // Kumpulan field yang dianggap "setelan penuh" sebuah preset.
   const PRESET_FIELDS = [
@@ -200,10 +211,12 @@ export default function ConvertPage() {
       let failCount = 0;
       for (const job of pendingJobs) {
         updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'convert', message: 'Memproses & memotong audio...' }, error: '' });
+        const jobId = uid('job');
+        const stopPolling = startProgressPolling(jobId, (pct) => updateJob(job.id, { progress: { percent: pct, stage: 'convert', message: 'Memproses & memotong audio...' } }));
         try {
           const result = await processAudio({
             file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds,
-            signal: controller.signal
+            signal: controller.signal, jobId
           });
           okCount += 1;
           updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
@@ -218,6 +231,8 @@ export default function ConvertPage() {
           const msg = formatApiError(e);
           updateJob(job.id, { status: 'error', error: msg });
           notify(`${job.title}: ${msg}`, 'error');
+        } finally {
+          stopPolling();
         }
       }
       const cancelled = controller.signal.aborted;
@@ -242,24 +257,38 @@ export default function ConvertPage() {
     setBusy('import');
     const controller = new AbortController();
     ytAbortRef.current = controller;
+    // Job sementara tampil sebagai 'converting' sejak awal (progres polling ikut).
+    const tempId = uid('j');
+    setJobs((js) => [...js, {
+      id: tempId, file: null, title: 'YouTube', status: 'converting',
+      progress: { percent: 0, stage: 'import', message: 'Mengunduh audio dari YouTube...' },
+      processed: null, partStatus: {}, error: ''
+    }]);
+    const jobId = uid('job');
+    const stopPolling = startProgressPolling(jobId, (pct) => updateJob(tempId, { progress: { percent: pct, stage: 'convert', message: 'Mengonversi audio...' } }));
     try {
       const result = await importYouTube({
-        url, settings, segmentSeconds: settings.segmentSeconds, signal: controller.signal
+        url, settings, segmentSeconds: settings.segmentSeconds, signal: controller.signal, jobId
       });
-      const job = {
-        id: uid('j'), file: null, title: result.title || 'YouTube Audio',
-        status: 'done', progress: { percent: 100, stage: '', message: '' },
-        processed: result, partStatus: {}, error: ''
-      };
-      setJobs((js) => [...js, job]);
+      updateJob(tempId, {
+        title: result.title || 'YouTube Audio', status: 'done',
+        progress: { percent: 100, stage: '', message: '' }, processed: result
+      });
       setYtUrl('');
       playDoneChime(); flashTabTitle('✓ YouTube siap');
       (result.warnings || []).forEach((w) => notify(w, 'info'));
       notify(`"${result.title}" siap: ${result.partCount} part.`, 'success');
     } catch (e) {
-      if (e.name === 'AbortError' || controller.signal.aborted) notify('Import YouTube dibatalkan.', 'info');
-      else notify(formatApiError(e), 'error');
+      if (e.name === 'AbortError' || controller.signal.aborted) {
+        setJobs((js) => js.filter((j) => j.id !== tempId));
+        notify('Import YouTube dibatalkan.', 'info');
+      } else {
+        const msg = formatApiError(e);
+        updateJob(tempId, { status: 'error', error: msg });
+        notify(msg, 'error');
+      }
     } finally {
+      stopPolling();
       ytAbortRef.current = null;
       setBusy('');
     }
@@ -708,10 +737,14 @@ export default function ConvertPage() {
 
                   {job.status === 'converting' && (
                     <div className="convert-progress">
-                      <div className="ov-ring indet"><div className="ov-ring-inner"><Loader2 className="spin" size={26} /></div></div>
+                      <div className="ov-ring indet" style={{ '--p': `${Math.round(job.progress.percent || 0) * 3.6}deg` }}>
+                        <div className="ov-ring-inner"><b>{Math.round(job.progress.percent || 0)}%</b></div>
+                      </div>
                       <h3 className="cp-title">Memproses</h3>
                       <p className="cp-msg">{job.progress.message || 'Sedang memproses & memotong audio...'}</p>
-                      <div className="ov-bar indet"><div className="ov-bar-fill" /></div>
+                      <div className="ov-bar indet" style={{ background: 'transparent' }}>
+                        <div className="ov-bar-fill" style={{ position: 'static', width: `${Math.round(job.progress.percent || 0)}%`, animation: 'none', transition: 'width 0.4s ease' }} />
+                      </div>
                       <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Kamu bisa membatalkan kapan saja — menutup tab juga menghentikan proses di server.</p>
                     </div>
                   )}
@@ -763,6 +796,17 @@ export default function ConvertPage() {
           )}
         </Card>
       </div>
+
+      {/* Action bar mobile: upload selalu terjangkau tanpa scroll jauh */}
+      {doneJobs.length > 0 && (
+        <div className="mobile-action-bar">
+          <span className="mab-info"><b>{selectedCount}</b> part dipilih</span>
+          <button className="btn primary sm" disabled={Boolean(busy) || !selectedCount} onClick={handleUploadAll}>
+            {busy === 'upload' ? <Loader2 className="spin" size={14} /> : <Rocket size={14} />}
+            Upload ke Roblox
+          </button>
+        </div>
+      )}
     </div>
   );
 }

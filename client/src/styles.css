@@ -377,6 +377,21 @@ audio { border-radius: 8px; width: 100%; }
    judul lengkap tetap ada lewat tooltip (title) dan saat di-upload ke Roblox. */
 .job-group-head .li-title { flex: 1; min-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* Action bar menempel di bawah (mobile): upload tetap terjangkau tanpa scroll jauh */
+.mobile-action-bar { display: none; }
+@media (max-width: 760px) {
+  .mobile-action-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 16px rgba(16, 24, 40, 0.08);
+  }
+  .mobile-action-bar .mab-info { font-size: 12.5px; color: var(--text-soft); min-width: 0; }
+  .mobile-action-bar .mab-info b { color: var(--text); }
+  .mobile-action-bar .btn { flex-shrink: 0; padding: 9px 14px; }
+}
+
 /* ============================ Responsive ============================ */
 @media (max-width: 900px) {
   .grid-2 { grid-template-columns: 1fr; }
@@ -403,7 +418,7 @@ audio { border-radius: 8px; width: 100%; }
   .key-chip { margin-left: auto; }
   .nav-menu-btn { margin-left: 0; }
   .navbar-inner { padding: 10px 14px; }
-  .container { padding: 6px 14px 48px; }
+  .container { padding: 6px 14px 90px; }
   .nav-mobile { display: flex; flex-direction: column; gap: 5px; padding: 8px 14px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .nav-mobile-link {
     display: flex; align-items: center; gap: 10px; padding: 11px 13px; border-radius: 9px;

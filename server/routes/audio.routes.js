@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import uploadsDir from '../lib/uploadsDir.js';
 import logger from '../lib/logger.js';
+import { setJobProgress, getJobProgress, deleteJobProgress } from '../lib/progressStore.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
 import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl, cleanYouTubeTitle } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
@@ -60,6 +61,11 @@ const infoLimit = rateLimit({
 const statsLimit = rateLimit({
   windowMs: 1000 * 60,
   max: Number(process.env.STATS_RATE_LIMIT || 20),
+  message: 'Terlalu sering request. Tunggu sebentar.'
+});
+const progressLimit = rateLimit({
+  windowMs: 1000 * 60,
+  max: Number(process.env.PROGRESS_RATE_LIMIT || 300),
   message: 'Terlalu sering request. Tunggu sebentar.'
 });
 
@@ -168,6 +174,13 @@ export function resolveApiKey(body = {}) {
   return String(body.apiKey || '').trim();
 }
 
+// GET /api/progress/:jobId — persen konversi 0-100 untuk polling client.
+router.get('/progress/:jobId', progressLimit, (req, res) => {
+  const percent = getJobProgress(req.params.jobId);
+  if (percent === null) return res.status(404).json({ error: 'Progres tidak ditemukan.' });
+  return res.json({ percent });
+});
+
 // POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
 router.post('/process', processLimit, queueGate(conversionQueue), upload.single('audio'), async (req, res, next) => {
   // Bila client memutus koneksi (tab ditutup / tombol Batal): task yang masih mengantri
@@ -175,6 +188,7 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
   // tidak terbuang mengerjakan hasil yang tidak akan pernah terkirim.
   const abortController = new AbortController();
   res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
+  const jobId = parseJobId(req.body?.jobId);
   try {
     const responseBody = await conversionQueue.push(async () => {
       if (!req.file?.path) {
@@ -205,7 +219,8 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
         segmentSeconds,
         sourceDuration,
         sourceProbe,
-        signal: abortController.signal
+        signal: abortController.signal,
+        onProgress: jobId ? (pct) => setJobProgress(jobId, pct) : undefined
       });
       trackConversion(result.totalDuration);
       warnings.push(...(result.warnings || []));
@@ -256,6 +271,7 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
     // 499 = client sudah pergi; tidak ada respons yang bisa (atau perlu) dikirim.
     if (error.status !== 499) next(error);
   } finally {
+    if (jobId) deleteJobProgress(jobId);
     await removeQuiet(req.file?.path);
   }
 });
@@ -268,6 +284,7 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
   const abortController = new AbortController();
   res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
   let downloadedPath = '';
+  const ytJobId = parseJobId(req.body?.jobId);
   try {
     const responseBody = await conversionQueue.push(async () => {
       const url = String(req.body?.url || '').trim();
@@ -330,7 +347,8 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
         segmentSeconds,
         sourceDuration,
         sourceProbe,
-        signal: abortController.signal
+        signal: abortController.signal,
+        onProgress: ytJobId ? (pct) => setJobProgress(ytJobId, pct) : undefined
       });
       trackConversion(result.totalDuration);
       warnings.push(...(result.warnings || []));
@@ -381,6 +399,7 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
   } catch (error) {
     if (error.status !== 499) next(error);
   } finally {
+    if (ytJobId) deleteJobProgress(ytJobId);
     if (downloadedPath) await fs.unlink(downloadedPath).catch(() => {});
   }
 });
@@ -393,6 +412,12 @@ const deleteLimit = rateLimit({
   max: Number(process.env.DELETE_RATE_LIMIT || 60),
   message: 'Terlalu sering menghapus. Tunggu sebentar.'
 });
+
+// Ambil jobId yang dikirim client untuk pelacakan progres polling.
+function parseJobId(raw) {
+  const id = String(raw || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  return id || null;
+}
 router.delete('/files/:name', deleteLimit, async (req, res) => {
   const name = path.basename(String(req.params.name || ''));
   if (!/\.ogg$/i.test(name) || name.includes('..') || name.includes('/') || name.includes('\\')) {

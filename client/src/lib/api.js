@@ -38,12 +38,13 @@ async function fetchWithTimeout(url, { timeoutMs, signal, timeoutMessage, ...ini
 // Upload file audio + setting → kembalikan hasil konversi (beberapa part .ogg).
 // Timeout + abort controller built-in untuk mencegah hang; kirim `signal` untuk
 // tombol Batal — server ikut menghentikan FFmpeg saat koneksi terputus.
-export async function processAudio({ file, settings, title, segmentSeconds, signal }) {
+export async function processAudio({ file, settings, title, segmentSeconds, signal, jobId, onProgress }) {
   const form = new FormData();
   form.append('audio', file);
   form.append('settings', JSON.stringify(settings));
   if (title) form.append('title', title);
   if (segmentSeconds) form.append('segmentSeconds', String(segmentSeconds));
+  if (jobId) form.append('jobId', jobId);
 
   const response = await fetchWithTimeout(`${API_BASE}/api/process`, {
     method: 'POST',
@@ -52,7 +53,19 @@ export async function processAudio({ file, settings, title, segmentSeconds, sign
     timeoutMessage: 'Konversi melewati batas waktu server (10 menit).',
     signal
   });
+  if (jobId && onProgress) onProgress(100);
   return parseJson(response);
+}
+
+// Polling progres konversi (0-100). 404 = job belum terdaftar / sudah selesai.
+export async function fetchProgress(jobId, signal) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/progress/${encodeURIComponent(jobId)}`, {
+    timeoutMs: 8000,
+    signal
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  return Number.isFinite(data.percent) ? data.percent : null;
 }
 
 // Cek kesehatan backend (GET /health, tanpa parse JSON berat).
@@ -70,15 +83,16 @@ export async function pingHealth(signal) {
 // Import audio dari link YouTube — server mengunduh (yt-dlp) lalu konversi
 // dengan pipeline yang sama seperti /api/process. Bisa memakan waktu lama
 // (download + konversi), makanya timeout-nya paling panjang.
-export async function importYouTube({ url, settings, segmentSeconds, title, signal }) {
+export async function importYouTube({ url, settings, segmentSeconds, title, signal, jobId, onProgress }) {
   const response = await fetchWithTimeout(`${API_BASE}/api/import-youtube`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, settings, segmentSeconds, title }),
+    body: JSON.stringify({ url, settings, segmentSeconds, title, jobId }),
     timeoutMs: 900000,
     timeoutMessage: 'Import YouTube melewati batas waktu (15 menit).',
     signal
   });
+  if (jobId && onProgress) onProgress(100);
   return parseJson(response);
 }
 
