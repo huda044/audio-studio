@@ -21,3 +21,6 @@ server/bin/yt-dlp*
 
 # Logs
 *.log
+
+# Cloudflared binary lokal
+tools/
