@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import {
   UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle, Youtube, Code2
 } from 'lucide-react';
@@ -9,6 +9,9 @@ import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js
 import { processAudio, fetchPartBlob, uploadRoblox, importYouTube, deleteFile } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
+import {
+  sanitizeJobsForStorage, loadRestoredJobs, clearStoredJobs, serverFileRemainingMs, formatRemaining, JOBS_KEY
+} from '../lib/jobsPersist.js';
 
 const ACCEPT_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
 
@@ -24,7 +27,7 @@ function newJob(file) {
 }
 
 export default function ConvertPage() {
-  const { settings, setSettings, roblox, setHistory, notify, goto } = useApp();
+  const { settings, setSettings, roblox, setHistory, history, notify, goto } = useApp();
   const [jobs, setJobs] = useState([]);
   const [description, setDescription] = useState('');
   const [drag, setDrag] = useState(false);
@@ -36,6 +39,9 @@ export default function ConvertPage() {
   // Part yang TIDAK dicentang untuk di-upload. Model "deselected" supaya hasil
   // konversi baru otomatis terpilih semua tanpa perlu state tambahan.
   const [deselected, setDeselected] = useState(() => new Set());
+  const restoredSavedAtRef = useRef(0);
+  const didRestoreRef = useRef(false);
+  const [restoredSavedAt, setRestoredSavedAt] = useState(0);
   const inputRef = useRef(null);
   const convertAbortRef = useRef(null);
   const uploadAbortRef = useRef(null);
@@ -46,6 +52,48 @@ export default function ConvertPage() {
   useEffect(() => {
     shortcutRef.current = { convert: handleConvertAll, upload: handleUploadAll };
   });
+
+  // Pulihkan hasil konversi dari sesi sebelumnya (tahan refresh).
+  // setTimeout 0: setState asinkron agar tidak memicu cascading render sinkron.
+  useEffect(() => {
+    if (didRestoreRef.current) return;
+    didRestoreRef.current = true;
+    const t = setTimeout(() => {
+      const { jobs: restored, savedAt } = loadRestoredJobs();
+      if (restored.length) {
+        restoredSavedAtRef.current = savedAt;
+        setRestoredSavedAt(savedAt);
+        setJobs(restored);
+        notify(`${restored.length} hasil konversi dipulihkan dari sesi sebelumnya.`, 'info');
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [notify]);
+
+  // Simpan hasil (metadata saja, tanpa base64) agar tahan refresh; bersihkan saat kosong.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const payload = sanitizeJobsForStorage(jobs);
+      if (payload) {
+        try { localStorage.setItem(JOBS_KEY, payload); } catch { /* storage penuh */ }
+      } else clearStoredJobs();
+    }, 500);
+    return () => clearTimeout(t);
+  }, [jobs]);
+
+  // Tempel link YouTube di mana saja → langsung pindah ke tab YouTube dan terisi.
+  useEffect(() => {
+    function onPaste(e) {
+      const text = String(e.clipboardData?.getData('text') || '').trim();
+      if (/^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i.test(text)) {
+        setSourceMode('youtube');
+        setYtUrl(text);
+        notify('Link YouTube terdeteksi — klik "Ambil Audio & Konversi".', 'info');
+      }
+    }
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [notify]);
 
   // Keyboard shortcut
   useEffect(() => {
@@ -68,6 +116,17 @@ export default function ConvertPage() {
   const selectedCount = doneJobs.reduce((n, job) => n
     + job.processed.parts.filter((p) => !deselected.has(partKey(job.id, p.index))).length, 0);
   const anyDeselected = doneJobs.some((job) => job.processed.parts.some((p) => deselected.has(partKey(job.id, p.index))));
+  const failedCount = doneJobs.reduce((n, job) => n
+    + job.processed.parts.filter((p) => job.partStatus[p.index]?.status === 'Failed').length, 0);
+  // Penghitung kuota lokal: asset diterima Roblox dalam 30 hari terakhir (dari riwayat device ini).
+  const accepted30d = useMemo(() => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    return history.reduce((n, h) => {
+      const t = h.createdAt ? new Date(h.createdAt).getTime() : 0;
+      return t >= cutoff ? n + (h.parts || []).filter((p) => p.status === 'Accepted').length : n;
+    }, 0);
+  }, [history]);
+  const fileRemainingMs = restoredSavedAt ? serverFileRemainingMs(restoredSavedAt) : 0;
 
   function toggleSelectAll() {
     setDeselected((prev) => {
@@ -257,6 +316,30 @@ export default function ConvertPage() {
     if (!creator) return;
     const res = await uploadPartFor(job, part, creator);
     notify(res.status === 'Accepted' ? `Part ${part.index} diterima.` : res.status === 'Pending' ? `Part ${part.index} menunggu moderasi.` : `Part ${part.index} gagal lagi.`, res.status === 'Failed' ? 'error' : 'success');
+  }
+
+  // Ulangi SEMUA part berstatus Gagal sekaligus (jeda antar-part biar sopan ke API Roblox).
+  async function retryAllFailed() {
+    if (busy) return;
+    const creator = validateRoblox();
+    if (!creator) return;
+    const failed = allParts().filter(({ job, part }) => job.partStatus[part.index]?.status === 'Failed');
+    if (!failed.length) { notify('Tidak ada part yang gagal.', 'info'); return; }
+    setBusy('upload');
+    try {
+      let accepted = 0;
+      for (let i = 0; i < failed.length; i += 1) {
+        const { job, part } = failed[i];
+        setUploadLabel(`${job.title} · part ${part.index} (retry ${i + 1}/${failed.length})`);
+        const res = await uploadPartFor(job, part, creator);
+        if (res.status === 'Accepted') accepted += 1;
+        if (i < failed.length - 1) await new Promise((r) => setTimeout(r, 1200));
+      }
+      notify(`Retry selesai: ${accepted}/${failed.length} diterima.`, accepted === failed.length ? 'success' : 'info');
+    } finally {
+      setBusy('');
+      setUploadLabel('');
+    }
   }
 
   function allParts() {
@@ -587,6 +670,8 @@ export default function ConvertPage() {
                         <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
                         <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
                         <span className="chip">Roblox play <b>{robloxPlaybackSpeed(settings.speed)}x</b></span>
+                        {accepted30d > 0 && <span className="chip">30 hari terakhir: <b>{accepted30d} asset</b> diterima</span>}
+                        {restoredSavedAt > 0 && <span className="chip">File server: <b>{formatRemaining(fileRemainingMs)}</b></span>}
                       </div>
                       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                         <button className="btn ghost sm" onClick={toggleSelectAll} disabled={Boolean(busy)}>
@@ -595,6 +680,11 @@ export default function ConvertPage() {
                         <button className="btn ghost sm" onClick={copyLuaIds} disabled={Boolean(busy)} title="Salin semua rbxassetid sebagai kode Lua siap tempel">
                           <Code2 size={14} /> Salin ID (Lua)
                         </button>
+                        {failedCount > 0 && (
+                          <button className="btn ghost sm" onClick={retryAllFailed} disabled={Boolean(busy)} title="Ulangi semua part yang gagal">
+                            <RotateCw size={14} /> Ulangi {failedCount} gagal
+                          </button>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
                         <button className="btn ghost" style={{ flex: 1 }} onClick={downloadZip} disabled={busy}>{busy === 'zip' ? <Loader2 className="spin" size={16} /> : <Download size={16} />} Download ZIP</button>

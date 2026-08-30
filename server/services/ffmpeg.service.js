@@ -167,6 +167,28 @@ export function parseSilences(stderr, totalDuration = 0) {
   return silences;
 }
 
+// Diskalakan jeda hening dari timeline SUMBER ke timeline MASTER hasil konversi.
+// Master = sumber dipotong trimStart lalu dipercepat `speed`, jadi
+// t_master = (t_sumber - trimStart) / speed. Deteksi dijalankan di sumber secara
+// PARALEL dengan konversi (nol waktu tambahan), bukan decode ulang file master.
+// Catatan: threshold -35dB mengukur sumber — kalau amplify ekstrem, jeda tipis
+// bisa meleset sedikit; toleransi ±8s menyerapnya.
+export function scaleSilences(silences = [], { speed = 1, trimStart = 0, maxDuration = Infinity } = {}) {
+  const spd = Math.max(0.05, Number(speed) || 1);
+  const t0 = Math.max(0, Number(trimStart) || 0);
+  const out = [];
+  for (const sil of silences) {
+    const start = (Math.max(0, Number(sil.start) || 0) - t0) / spd;
+    const end = (Math.max(0, Number(sil.end) || 0) - t0) / spd;
+    if (end <= 0) continue; // jeda ada di bagian trim
+    const clampedEnd = Math.min(end, maxDuration);
+    const clampedStart = Math.max(0, Math.min(start, clampedEnd - 0.05));
+    if (clampedEnd - clampedStart < 0.1) continue;
+    out.push({ start: clampedStart, end: clampedEnd });
+  }
+  return out;
+}
+
 // Murni: dari daftar jeda hening, hitung titik potong final (detik, 2 desimal).
 export function computeSmartCuts({ totalDuration, segSec, silences = [], tolerance = 8, minTail = 25, minPart = 30 }) {
   const cuts = [];
@@ -198,9 +220,10 @@ export function computeSmartCuts({ totalDuration, segSec, silences = [], toleran
   return cuts;
 }
 
-// Deteksi jeda hening: decode sekali lewat binary ffmpeg langsung (bukan fluent-ffmpeg)
-// supaya stderr mudah ditangkap. Timeout → resolve dengan stderr yang sudah terkumpul
-// (graceful: smart split ditinggalkan, potongan tetap jalan dengan batas persis).
+// Deteksi jeda hening lewat binary ffmpeg langsung (bukan fluent-ffmpeg) supaya
+// stderr mudah ditangap. Dijalankan di file SUMBER — dipanggil paralel dengan
+// konversi master, hasilnya diskalakan via scaleSilences(). Timeout → resolve
+// dengan stderr yang sudah terkumpul (graceful: potong persis seperti biasa).
 async function detectSilences(inputPath, { signal } = {}) {
   if (String(process.env.DISABLE_SMART_SPLIT || '').toLowerCase() === 'true') return '';
   const noiseDb = Number(process.env.SMART_SILENCE_NOISE_DB || -35);
@@ -390,6 +413,9 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
   try {
     if (signal?.aborted) throw clientAbortError();
     emit(3);
+    // Deteksi jeda hening di SUMBER berjalan PARALEL dengan konversi master —
+    // nol waktu tambahan; hasilnya diskalakan ke timeline master setelah ini.
+    const silencesPromise = detectSilences(inputPath, { signal });
     const master = await processFull({
       inputPath, outputPath: masterPath, settings, sourceDuration,
       onProgress: (pct) => emit(5 + pct * 0.8),
@@ -398,13 +424,17 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
     });
     if (signal?.aborted) throw clientAbortError();
     emit(86);
-    // Smart split: cari jeda hening lalu geser titik potong ke sana.
+    // Smart split: gunakan jeda hening sumber (sudah terdeteksi paralel), skala ke timeline master.
     const warnings = [...(master.warnings || [])];
     let cutPoints = [];
     if (master.duration > segSec + 0.5) {
       try {
-        const stderr = await detectSilences(masterPath, { signal });
-        const silences = parseSilences(stderr, master.duration);
+        const stderr = await silencesPromise;
+        const silences = scaleSilences(parseSilences(stderr), {
+          speed: master.appliedSettings?.speed || 1,
+          trimStart: master.appliedSettings?.trimStart || 0,
+          maxDuration: master.duration
+        });
         cutPoints = computeSmartCuts({ totalDuration: master.duration, segSec, silences });
         if (cutPoints.length) warnings.push(`Smart split aktif: ${cutPoints.length} titik potong ditempatkan di jeda hening.`);
       } catch {

@@ -14,6 +14,13 @@ export default function HistoryPage() {
   const [q, setQ] = useState('');
   const [checking, setChecking] = useState('');
   const autoBusyRef = useRef(false);
+  // Waktu "sekarang" untuk hitung kadaluarsa — diambil via effect (bukan saat
+  // render) supaya render tetap murni.
+  const [nowTs, setNowTs] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setNowTs(Date.now()), 0);
+    return () => clearTimeout(t);
+  }, []);
 
   // Memo: filter + toLowerCase di seluruh history cukup mahal untuk daftar panjang.
   const filtered = useMemo(() => {
@@ -131,6 +138,8 @@ export default function HistoryPage() {
           const accepted = (entry.parts || []).filter((p) => p.status === 'Accepted').length;
           const total = (entry.parts || []).length;
           const hasPending = (entry.parts || []).some((p) => p.status === 'Pending');
+          // File hasil di server hanya hidup 3 jam sejak konversi — beri tahu user.
+          const fileExpired = nowTs > 0 && entry.createdAt && (nowTs - new Date(entry.createdAt).getTime()) > 3 * 60 * 60 * 1000;
           return (
             <Card key={entry.id}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
@@ -141,6 +150,7 @@ export default function HistoryPage() {
                   </div>
                 </div>
                 <div className="li-actions">
+                  {fileExpired && <span className="chip" title="File hasil konversi sudah dibersihkan server (3 jam). Konversi ulang bila butuh file-nya.">file kadaluarsa</span>}
                   {hasPending && <button className="btn ghost sm" disabled={checking === entry.id} onClick={() => recheck(entry)} title="Cek status sekarang">{checking === entry.id ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button>}
                   <button className="btn ghost sm" onClick={() => removeEntry(entry.id)}><Trash2 size={14} /></button>
                 </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSilences, computeSmartCuts } from '../services/ffmpeg.service.js';
+import { parseSilences, computeSmartCuts, scaleSilences } from '../services/ffmpeg.service.js';
 
 const SAMPLE_STDERR = [
   '[silencedetect @ 0x1] silence_start: 172.3',
@@ -56,5 +56,29 @@ describe('computeSmartCuts', () => {
     const cuts = computeSmartCuts({ totalDuration: 740, segSec: 180, silences, tolerance: 100 });
     expect(cuts[0]).toBeCloseTo(173, 1);
     expect(cuts[1]).toBe(360); // tidak memakai jeda yang sama
+  });
+});
+
+describe('scaleSilences — skala waktu sumber ke timeline master', () => {
+  it('tempo 2x memperpendek waktu setengahnya', () => {
+    expect(scaleSilences([{ start: 100, end: 110 }], { speed: 2, trimStart: 0, maxDuration: 60 }))
+      .toEqual([{ start: 50, end: 55 }]);
+  });
+
+  it('trimStart menggeser titik nol dan membuang jeda di bagian trim', () => {
+    expect(scaleSilences([{ start: 10, end: 12 }], { speed: 1, trimStart: 20, maxDuration: 100 }))
+      .toEqual([]); // jeda sebelum titik trim → dibuang
+    expect(scaleSilences([{ start: 30, end: 32 }], { speed: 1, trimStart: 20, maxDuration: 100 }))
+      .toEqual([{ start: 10, end: 12 }]);
+  });
+
+  it('clamped ke durasi master', () => {
+    expect(scaleSilences([{ start: 90, end: 120 }], { speed: 1, trimStart: 0, maxDuration: 100 }))
+      .toEqual([{ start: 90, end: 100 }]);
+  });
+
+  it('jeda terlalu pendek setelah skala dibuang', () => {
+    expect(scaleSilences([{ start: 100, end: 100.05 }], { speed: 2, trimStart: 0, maxDuration: 100 }))
+      .toEqual([]); // 0.025s < 0.1s minimum
   });
 });

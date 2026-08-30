@@ -1,8 +1,16 @@
 import axios from 'axios';
 import FormData from 'form-data';
+import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { clientAbortError } from './taskQueue.service.js';
+
+// Keep-alive agents: upload multi-part ke Roblox memakai satu koneksi TLS
+// berulang — menghemat handshake (~1 RTT) per part dibuat-buat ulang.
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 4 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 4 });
+const AXIOS_AGENTS = { httpAgent, httpsAgent };
 
 const ASSET_URL = 'https://apis.roblox.com/assets/v1/assets';
 const OPERATION_URL = 'https://apis.roblox.com/assets/v1/operations';
@@ -95,7 +103,8 @@ async function pollOperation(operationId, apiKey, signal) {
       headers: { 'x-api-key': apiKey },
       timeout: 10000,
       validateStatus: () => true,
-      signal
+      signal,
+      ...AXIOS_AGENTS
     }), {
       retries: 2,
       retryDelayMs: 1200,
@@ -235,7 +244,8 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
           maxContentLength: ROBLOX_MAX_AUDIO_BYTES + 1024 * 1024,
           timeout: ROBLOX_UPLOAD_TIMEOUT_MS,
           validateStatus: () => true,
-          signal
+          signal,
+          ...AXIOS_AGENTS
         });
       }, {
         retries: 2,

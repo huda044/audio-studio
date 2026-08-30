@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import Dashboard from './pages/Dashboard.jsx';
 import { STORAGE_KEYS, defaultSettings } from './lib/constants.js';
+import { API_BASE } from './lib/constants.js';
 import { useStoredState, safeParse, obfuscate, deobfuscate } from './lib/storage.js';
 import { normalizeSettings } from './lib/utils.js';
 
@@ -44,6 +45,23 @@ export default function App() {
   function goto(id) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  // Preconnect ke origin API (beda domain saat deploy terpisah: Vercel → backend)
+  // supaya panggilan API pertama hemat DNS+TLS handshake.
+  useEffect(() => {
+    try {
+      const origin = new URL(API_BASE, window.location.origin).origin;
+      if (origin && origin !== window.location.origin && !document.querySelector(`link[rel="preconnect"][href="${origin}"]`)) {
+        const link = document.createElement('link');
+        link.rel = 'preconnect';
+        link.href = origin;
+        link.crossOrigin = '';
+        document.head.appendChild(link);
+      }
+    } catch {
+      // API_BASE tidak valid — abaikan
+    }
+  }, []);
 
   const ctx = useMemo(() => ({
     roblox, setRoblox, groups, setGroups, history, setHistory, settings, setSettings, notify, goto
