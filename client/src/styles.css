@@ -327,6 +327,9 @@ audio { border-radius: 8px; width: 100%; }
 .job-group:first-of-type { padding-top: 4px; }
 .job-group:last-of-type { border-bottom: 0; }
 .job-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+/* Judul lagu panjang (mis. judul YouTube) tampil terpotong di depan + "…",
+   judul lengkap tetap ada lewat tooltip (title) dan saat di-upload ke Roblox. */
+.job-group-head .li-title { flex: 1; min-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ============================ Responsive ============================ */
 @media (max-width: 900px) {

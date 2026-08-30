@@ -52,6 +52,23 @@ export function isYouTubeUrl(url) {
   return YOUTUBE_URL_RE.test(String(url || '').trim());
 }
 
+// Judul YouTube sering diakhiri bracket junk: "Lagu (Official Video) [4K Remaster]".
+// Buang bracket berisi kata kunci junk tersebut (berulang, dari belakang) supaya judul
+// — dan displayName asset Roblox — bersih. Bracket berisi info penting seperti
+// "(feat. X)" tidak ikut terbuang karena tidak mengandung kata kunci junk.
+const TITLE_JUNK_RE = /[\(\[][^)\]]*(official|video|audio|lyrics?|mv|hd|4k|8k|remaster\w*|visualizer|full\s?album\s?stream|hq|m\/v)[^)\]]*[\)\]]/gi;
+export function cleanYouTubeTitle(raw) {
+  const original = String(raw || '').trim();
+  let title = original;
+  let prev = null;
+  while (prev !== title) {
+    prev = title;
+    title = title.replace(TITLE_JUNK_RE, ' ').replace(/\s{2,}/g, ' ').replace(/\s+[-–|]\s*$/,'').trim();
+  }
+  // Judul ternyata isinya junk semua → pakai original, jangan sampai kosong.
+  return title || original;
+}
+
 // Petakan stderr yt-dlp ke pesan Indonesia yang bisa dipahami user + saran solusi.
 export function mapYtError(stderr = '') {
   const text = String(stderr).toLowerCase();

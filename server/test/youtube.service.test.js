@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isYouTubeUrl, mapYtError } from '../services/youtube.service.js';
+import { isYouTubeUrl, mapYtError, cleanYouTubeTitle } from '../services/youtube.service.js';
 
 describe('isYouTubeUrl', () => {
   it('menerima format link YouTube yang umum', () => {
@@ -48,5 +48,27 @@ describe('mapYtError — pesan error YouTube dalam bahasa Indonesia', () => {
   it('fallback generik untuk error tak dikenal', () => {
     expect(mapYtError('something completely weird')).toContain('Gagal mengambil audio');
     expect(mapYtError('')).toContain('Gagal mengambil audio');
+  });
+});
+
+describe('cleanYouTubeTitle — pangkas junk bracket dari judul', () => {
+  it('membuang (Official Video) dan (4K Remaster)', () => {
+    expect(cleanYouTubeTitle('Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)'))
+      .toBe('Rick Astley - Never Gonna Give You Up');
+  });
+
+  it('membuang berbagai variasi bracket junk', () => {
+    expect(cleanYouTubeTitle('Lagu [Official MV]')).toBe('Lagu');
+    expect(cleanYouTubeTitle('Lagu (Lyric Video)')).toBe('Lagu');
+    expect(cleanYouTubeTitle('Lagu (HD)')).toBe('Lagu');
+  });
+
+  it('membiarkan bracket berisi info penting (feat.)', () => {
+    expect(cleanYouTubeTitle('Lagu (feat. Someone) (Official Video)')).toBe('Lagu (feat. Someone)');
+  });
+
+  it('judul isinya junk semua → kembalikan original, jangan kosong', () => {
+    expect(cleanYouTubeTitle('(Official Video)')).toBe('(Official Video)');
+    expect(cleanYouTubeTitle('')).toBe('');
   });
 });

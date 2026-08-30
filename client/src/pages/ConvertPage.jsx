@@ -6,7 +6,7 @@ import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
-import { processAudio, fetchPartBlob, uploadRoblox, importYouTube } from '../lib/api.js';
+import { processAudio, fetchPartBlob, uploadRoblox, importYouTube, deleteFile } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
 
@@ -272,6 +272,36 @@ export default function ConvertPage() {
 
   function copy(text) { navigator.clipboard?.writeText(text); notify('Disalin.'); }
 
+  // Hapus satu part: buang file di server (best-effort) lalu keluarkan dari daftar.
+  // Kalau part terakhir lagu terhapus, seluruh job ikut hilang dari daftar.
+  async function deletePart(job, part) {
+    if (busy) return;
+    if (!window.confirm(`Hapus Part ${part.index} dari "${job.title}"?\n\nPart yang dihapus tidak bisa di-upload ke Roblox.`)) return;
+    await deleteFile(part.fileName);
+    setJobs((js) => js.flatMap((j) => {
+      if (j.id !== job.id) return [j];
+      const parts = j.processed.parts.filter((p) => p.index !== part.index);
+      if (!parts.length) return [];
+      const remaining = parts.reduce((n, p) => n + p.duration, 0);
+      return [{
+        ...j,
+        processed: { ...j.processed, parts, partCount: parts.length, totalDuration: remaining, totalDurationText: formatDuration(remaining) },
+        partStatus: Object.fromEntries(Object.entries(j.partStatus).filter(([k]) => Number(k) !== part.index))
+      }];
+    }));
+    notify(`Part ${part.index} dihapus.`);
+  }
+
+  // Hapus seluruh hasil konversi satu lagu (semua part + filenya di server).
+  async function deleteJob(job) {
+    if (busy) return;
+    const count = job.processed.parts.length;
+    if (!window.confirm(`Hapus SEMUA hasil "${job.title}" (${count} part)?\n\nFile di server juga dihapus dan tidak bisa di-upload ke Roblox.`)) return;
+    await Promise.all(job.processed.parts.map((p) => deleteFile(p.fileName)));
+    setJobs((js) => js.filter((j) => j.id !== job.id));
+    notify(`"${job.title}" dihapus (${count} part).`);
+  }
+
   function renderParts(job) {
     return (
       <div className="list" style={{ marginTop: 12 }}>
@@ -291,6 +321,7 @@ export default function ConvertPage() {
                 {st?.rbxassetid && <button className="btn ghost sm" onClick={() => copy(st.rbxassetid)}><Copy size={13} /></button>}
                 {st?.status === 'Failed' && <button className="btn ghost sm" onClick={() => handleRetry(job, part)} title="Coba lagi"><RotateCw size={13} /></button>}
                 <a className="btn ghost sm" href={srcUrl} download={part.fileName} title="Download"><Download size={13} /></a>
+                <button className="btn ghost sm" title="Hapus part ini" disabled={Boolean(busy) || st?.status === 'uploading'} onClick={() => deletePart(job, part)}><Trash2 size={13} /></button>
               </div>
               <audio controls preload="none" src={srcUrl} style={{ width: '100%', marginTop: 10, height: 34 }} />
             </div>
@@ -464,10 +495,15 @@ export default function ConvertPage() {
               {jobs.map((job) => (
                 <div className="job-group" key={job.id}>
                   <div className="job-group-head">
-                    <div className="li-title">{job.title}</div>
+                    <div className="li-title" title={job.title}>{job.title}</div>
                     {job.status === 'done' && <span className="chip">{job.processed.partCount} part · {formatDuration(job.processed.totalDuration)}</span>}
                     {job.status === 'queued' && <span className="badge wait">menunggu</span>}
                     {job.status === 'error' && <span className="badge bad">gagal</span>}
+                    {job.status === 'done' && (
+                      <button className="btn ghost sm" title="Hapus semua hasil lagu ini" disabled={Boolean(busy)} onClick={() => deleteJob(job)}>
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
 
                   {job.status === 'converting' && (

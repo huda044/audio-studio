@@ -85,6 +85,21 @@ export async function fetchPartBlob(part, signal) {
   return res.blob();
 }
 
+// Hapus file part hasil konversi di server. Best-effort: kalau file sudah
+// ter-sweep (404) atau server belum punya endpoint, tetap dianggap terhapus —
+// pembersihan server hanyalah bonus, sumber kebenaran ada di state client.
+export async function deleteFile(fileName, signal) {
+  try {
+    await fetchWithTimeout(`${API_BASE}/api/files/${encodeURIComponent(fileName)}`, {
+      method: 'DELETE',
+      timeoutMs: 15000,
+      signal
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+  }
+}
+
 // Upload audio hasil proses ke Roblox Open Cloud.
 export async function uploadRoblox({ blob, fileName, payload, signal }) {
   const form = new FormData();

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import uploadsDir from '../lib/uploadsDir.js';
 import logger from '../lib/logger.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
-import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl } from '../services/youtube.service.js';
+import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl, cleanYouTubeTitle } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
@@ -311,7 +311,7 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
 
       const settings = parseSettings(req.body?.settings);
       const segmentSeconds = cleanNumber(req.body?.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
-      const title = String(req.body?.title || meta.title || 'YouTube Audio').trim().slice(0, 180);
+      const title = String(req.body?.title || cleanYouTubeTitle(meta.title) || 'YouTube Audio').trim().slice(0, 180);
       const warnings = [`Sumber: YouTube (${meta.title})`];
 
       let sourceProbe = null;
@@ -382,6 +382,29 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
     if (error.status !== 499) next(error);
   } finally {
     if (downloadedPath) await fs.unlink(downloadedPath).catch(() => {});
+  }
+});
+
+// DELETE /api/files/:name — hapus file part hasil konversi dari server.
+// Nama file ber-nanoid (tak terduga) & file memang ephemeral (sweep 3 jam), jadi
+// tanpa auth pun risikonya rendah; proteksi path-traversal sama dengan GET di atas.
+const deleteLimit = rateLimit({
+  windowMs: 1000 * 60,
+  max: Number(process.env.DELETE_RATE_LIMIT || 60),
+  message: 'Terlalu sering menghapus. Tunggu sebentar.'
+});
+router.delete('/files/:name', deleteLimit, async (req, res) => {
+  const name = path.basename(String(req.params.name || ''));
+  if (!/\.ogg$/i.test(name) || name.includes('..') || name.includes('/') || name.includes('\\')) {
+    return res.status(400).json({ error: 'Nama file tidak valid.' });
+  }
+  const fullPath = path.join(uploadsDir, name);
+  try {
+    await fs.unlink(fullPath);
+    return res.json({ ok: true, deleted: name });
+  } catch (error) {
+    if (error.code === 'ENOENT') return res.json({ ok: true, deleted: name, alreadyGone: true });
+    return res.status(500).json({ error: 'Gagal menghapus file.' });
   }
 });
 
