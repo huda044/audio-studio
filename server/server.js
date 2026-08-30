@@ -138,7 +138,10 @@ if (clientDist) {
   app.use(express.static(clientDist, {
     index: false,
     setHeaders(res, filePath) {
-      if (filePath.endsWith('index.html')) {
+      // Service worker WAJIB no-cache agar update PWA terdeteksi segera.
+      if (filePath.endsWith('sw.js')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      } else if (filePath.endsWith('index.html')) {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       } else if (/\.(js|css|woff2?|png|jpg|jpeg|svg|webp|ico)$/i.test(filePath)) {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');

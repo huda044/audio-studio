@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
-import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Info, ExternalLink, Save, CheckCircle2 } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { KeyRound, ShieldCheck, Loader2, Users, User, Plus, Trash2, Eye, EyeOff, Info, ExternalLink, Save, CheckCircle2, Download, Upload } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Trace } from '../components/ui.jsx';
 import { robloxTest } from '../lib/api.js';
 import { cleanRobloxId, uid } from '../lib/utils.js';
+import { normalizeSettings } from '../lib/utils.js';
+import { defaultSettings } from '../lib/constants.js';
 
 export default function SettingsPage() {
-  const { roblox, setRoblox, groups, setGroups, notify } = useApp();
+  const { roblox, setRoblox, groups, setGroups, notify, history, setHistory, customPresets, setCustomPresets, settings, setSettings } = useApp();
+  const importInputRef = useRef(null);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [trace, setTrace] = useState([]);
@@ -71,8 +74,59 @@ export default function SettingsPage() {
 
   function clearAll() {
     if (!window.confirm('Hapus semua data tersimpan di browser ini (API key, grup, riwayat)?')) return;
-    ['audio-studio-roblox', 'audio-studio-groups', 'audio-studio-history', 'audio-studio-settings'].forEach((k) => localStorage.removeItem(k));
+    ['audio-studio-roblox', 'audio-studio-groups', 'audio-studio-history', 'audio-studio-settings', 'audio-studio-custom-presets'].forEach((k) => localStorage.removeItem(k));
     notify('Data dibersihkan. Muat ulang halaman.', 'info');
+  }
+
+  // ============ Backup / restore data ke file JSON ============
+  function exportData() {
+    if (!window.confirm('File backup akan berisi API key Roblox (teks polos).\nSimpan file ini dengan aman — jangan dibagikan. Lanjutkan?')) return;
+    try {
+      const data = {
+        app: 'lucivoid-audio-studio',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        roblox,
+        groups,
+        history,
+        customPresets,
+        settings
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `lucivoid-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      notify('Backup JSON diunduh.');
+    } catch (e) {
+      notify(`Gagal membuat backup: ${e.message}`, 'error');
+    }
+  }
+
+  async function importData(file) {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (data?.app !== 'lucivoid-audio-studio') {
+        notify('File bukan backup LuciVoid Audio Studio.', 'error');
+        return;
+      }
+      if (!window.confirm('Timpa SEMUA data di browser ini dengan isi file backup?')) return;
+      if (data.roblox && typeof data.roblox === 'object') setRoblox({ apiKey: '', mode: 'personal', userId: '', groupId: '', selectedGroupId: '', ...data.roblox });
+      if (Array.isArray(data.groups)) setGroups(data.groups);
+      if (Array.isArray(data.history)) setHistory(data.history);
+      if (Array.isArray(data.customPresets)) setCustomPresets(data.customPresets);
+      if (data.settings && typeof data.settings === 'object') setSettings(normalizeSettings({ ...defaultSettings, ...data.settings }));
+      notify('Data dipulihkan. Halaman dimuat ulang…');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      notify(`Backup tidak valid: ${e.message}`, 'error');
+    }
   }
 
   return (
@@ -128,6 +182,14 @@ export default function SettingsPage() {
         {trace.length > 0 && <><div className="divider" /><Trace items={trace} /></>}
         <div className="divider" />
         <p className="small muted" style={{ margin: 0 }}>API key & data hanya tersimpan di perangkat ini.</p>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="btn block" onClick={exportData}><Download size={16} /> Backup data</button>
+          <button className="btn block" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Impor data</button>
+        </div>
+        <input
+          ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) importData(f); e.target.value = ''; }}
+        />
         <button className="btn ghost block" style={{ marginTop: 10 }} onClick={clearAll}><Trash2 size={16} /> Hapus semua data</button>
       </Card>
 

@@ -1,0 +1,17 @@
+name: Keep HF Space warm
+
+# HF Space gratis tidur setelah 48 jam idle — ping /health tiap 30 menit
+# supaya backend cadangan selalu siap. Nonaktifkan workflow ini di GitHub
+# bila backend utama sudah pindah ke tempat lain.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: curl -fsS -m 30 https://huda044-audiolucivoid.hf.space/health

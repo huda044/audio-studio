@@ -35,6 +35,7 @@ export default function App() {
   const [groups, setGroups] = useStoredState(STORAGE_KEYS.groups, []);
   const [history, setHistory] = useStoredState(STORAGE_KEYS.history, []);
   const [settings, setSettings] = useStoredState(STORAGE_KEYS.settings, normalizeSettings(defaultSettings));
+  const [customPresets, setCustomPresets] = useStoredState(STORAGE_KEYS.customPresets, []);
 
   function notify(message, type = 'success') {
     const id = Date.now() + Math.random();
@@ -64,9 +65,9 @@ export default function App() {
   }, []);
 
   const ctx = useMemo(() => ({
-    roblox, setRoblox, groups, setGroups, history, setHistory, settings, setSettings, notify, goto
+    roblox, setRoblox, groups, setGroups, history, setHistory, settings, setSettings, customPresets, setCustomPresets, notify, goto
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [roblox, groups, history, settings]);
+  }), [roblox, groups, history, settings, customPresets]);
 
   return (
     <AppContext.Provider value={ctx}>

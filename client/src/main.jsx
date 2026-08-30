@@ -14,6 +14,15 @@ try {
   document.documentElement.dataset.theme = 'light';
 }
 
+// PWA: daftarkan service worker hanya di build produksi (dev tidak perlu cache).
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Gagal mendaftar bukan hal fatal — app tetap jalan normal.
+    });
+  });
+}
+
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>

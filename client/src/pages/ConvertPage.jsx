@@ -6,6 +6,7 @@ import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
 import { makeZip } from '../lib/zip.js';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, API_BASE } from '../lib/constants.js';
+import { playDoneChime, flashTabTitle } from '../lib/doneChime.js';
 import { processAudio, fetchPartBlob, uploadRoblox, importYouTube, deleteFile } from '../lib/api.js';
 import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/utils.js';
 import { formatDuration } from '../lib/format.js';
@@ -27,7 +28,7 @@ function newJob(file) {
 }
 
 export default function ConvertPage() {
-  const { settings, setSettings, roblox, setHistory, history, notify, goto } = useApp();
+  const { settings, setSettings, roblox, setHistory, history, notify, goto, customPresets, setCustomPresets } = useApp();
   const [jobs, setJobs] = useState([]);
   const [description, setDescription] = useState('');
   const [drag, setDrag] = useState(false);
@@ -141,6 +142,38 @@ export default function ConvertPage() {
   }
 
   function update(patch) { setSettings((s) => ({ ...s, ...patch })); }
+
+  // ================= Preset kustom =================
+  // Kumpulan field yang dianggap "setelan penuh" sebuah preset.
+  const PRESET_FIELDS = [
+    'speed', 'amplify', 'pitch', 'bassBoost', 'reverb', 'echo', 'normalize',
+    'fadeIn', 'fadeOut', 'trimStart', 'trimEnd', 'eqPreset', 'segmentSeconds'
+  ];
+  const customActiveId = customPresets.find(
+    (p) => Object.entries(p.settings).every(([k, v]) => settings[k] === v)
+  )?.id;
+
+  function saveCustomPreset() {
+    const name = window.prompt('Nama preset baru:', 'Preset saya');
+    if (!name || !name.trim()) return;
+    const settingsSnapshot = {};
+    for (const field of PRESET_FIELDS) settingsSnapshot[field] = settings[field];
+    const preset = { id: uid('cp'), label: name.trim().slice(0, 24), settings: settingsSnapshot };
+    setCustomPresets([...customPresets, preset].slice(-12));
+    notify(`Preset "${preset.label}" tersimpan di browser ini.`);
+  }
+
+  function applyCustomPreset(preset) {
+    update(preset.settings);
+    notify(`Preset "${preset.label}" dipakai.`);
+  }
+
+  function removeCustomPreset(preset, e) {
+    e.stopPropagation();
+    if (!window.confirm(`Hapus preset "${preset.label}"?`)) return;
+    setCustomPresets(customPresets.filter((p) => p.id !== preset.id));
+    notify('Preset dihapus.', 'info');
+  }
   function updateJob(id, patch) { setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...patch } : j))); }
   function setJobPart(id, index, val) { setJobs((js) => js.map((j) => (j.id === id ? { ...j, partStatus: { ...j.partStatus, [index]: val } } : j))); }
 
@@ -189,8 +222,13 @@ export default function ConvertPage() {
       }
       const cancelled = controller.signal.aborted;
       if (cancelled) notify('Konversi dibatalkan. File yang belum diproses kembali mengantre.', 'info');
-      else if (failCount) notify(`Konversi selesai: ${okCount} berhasil, ${failCount} gagal.`, okCount ? 'info' : 'error');
-      else notify('Semua konversi selesai.', 'success');
+      else if (failCount) {
+        playDoneChime(); flashTabTitle(`⚠ ${failCount} gagal`);
+        notify(`Konversi selesai: ${okCount} berhasil, ${failCount} gagal.`, okCount ? 'info' : 'error');
+      } else {
+        playDoneChime(); flashTabTitle('✓ Konversi selesai');
+        notify('Semua konversi selesai.', 'success');
+      }
     } finally {
       convertAbortRef.current = null;
       setBusy('');
@@ -215,6 +253,7 @@ export default function ConvertPage() {
       };
       setJobs((js) => [...js, job]);
       setYtUrl('');
+      playDoneChime(); flashTabTitle('✓ YouTube siap');
       (result.warnings || []).forEach((w) => notify(w, 'info'));
       notify(`"${result.title}" siap: ${result.partCount} part.`, 'success');
     } catch (e) {
@@ -300,10 +339,13 @@ export default function ConvertPage() {
         }, ...prev].slice(0, 100));
       }
       if (cancelled) notify('Upload dibatalkan. Part yang belum terkirim bisa diulang lewat tombol retry.', 'info');
-      else if (totalAccepted || skippedAccepted) {
-        const skipNote = skippedAccepted ? ` (${skippedAccepted} part sudah diterima sebelumnya, dilewati)` : '';
-        notify(`Selesai: ${totalAccepted} asset diterima.${skipNote}`, 'success');
-      } else notify('Upload terkirim, cek status di Riwayat.', 'info');
+      else {
+        playDoneChime(); flashTabTitle(totalAccepted ? `✓ ${totalAccepted} asset diterima` : '✓ Upload terkirim');
+        if (totalAccepted || skippedAccepted) {
+          const skipNote = skippedAccepted ? ` (${skippedAccepted} part sudah diterima sebelumnya, dilewati)` : '';
+          notify(`Selesai: ${totalAccepted} asset diterima.${skipNote}`, 'success');
+        } else notify('Upload terkirim, cek status di Riwayat.', 'info');
+      }
     } finally {
       uploadAbortRef.current = null;
       setBusy('');
@@ -557,7 +599,22 @@ export default function ConvertPage() {
                 <b>{p.label}</b><small>{p.desc}</small>
               </button>
             ))}
+            {customPresets.map((p) => (
+              <button key={p.id} type="button" className={`preset ${customActiveId === p.id ? 'active' : ''}`} onClick={() => applyCustomPreset(p)} title="Preset kustom kamu">
+                <b style={{ paddingRight: 14 }}>{p.label}</b>
+                <small>{p.settings.speed}x{p.settings.bassBoost ? ' · bass' : ''}{p.settings.reverb ? ' · reverb' : ''}{p.settings.normalize ? ' · norm' : ''}</small>
+                <span
+                  role="button" tabIndex={0} aria-label={`Hapus preset ${p.label}`}
+                  onClick={(e) => removeCustomPreset(p, e)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') removeCustomPreset(p, e); }}
+                  style={{ position: 'absolute', top: 6, right: 8, fontSize: 13, lineHeight: 1, color: 'var(--text-dim)', cursor: 'pointer' }}
+                >×</span>
+              </button>
+            ))}
           </div>
+          <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={saveCustomPreset} disabled={Boolean(busy)}>
+            + Simpan setelan saat ini sebagai preset
+          </button>
 
           <div style={{ marginTop: 18, padding: 14, borderRadius: 13, background: 'rgba(34,211,238,0.06)', border: '1px solid var(--border-strong)' }}>
             <Slider label={<span><Scissors size={13} /> Durasi per part</span>} value={settings.segmentSeconds} min={30} max={420} step={10} suffix={`s · ~${segMin}m`} onChange={(v) => update({ segmentSeconds: v })} />

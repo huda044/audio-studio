@@ -218,6 +218,7 @@ a.btn { text-decoration: none; }
 /* Presets */
 .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
 .preset {
+  position: relative;
   text-align: left; padding: 11px 12px; border-radius: 9px; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border); color: var(--text);
   font-family: var(--font); transition: border-color 0.15s, background 0.15s;

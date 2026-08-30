@@ -48,5 +48,6 @@ export const STORAGE_KEYS = {
   roblox: 'audio-studio-roblox',
   groups: 'audio-studio-groups',
   history: 'audio-studio-history',
-  settings: 'audio-studio-settings'
+  settings: 'audio-studio-settings',
+  customPresets: 'audio-studio-custom-presets'
 };
