@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import Dashboard from './pages/Dashboard.jsx';
 import { STORAGE_KEYS, defaultSettings } from './lib/constants.js';
 import { API_BASE } from './lib/constants.js';
+import { pingHealth } from './lib/api.js';
 import { useStoredState, safeParse, obfuscate, deobfuscate } from './lib/storage.js';
 import { normalizeSettings } from './lib/utils.js';
 
@@ -31,6 +32,8 @@ function useRobloxConfig() {
 
 export default function App() {
   const [toast, setToast] = useState(null);
+  // Kesehatan backend: 'checking' | 'up' | 'down'. Banner hanya saat down.
+  const [backend, setBackend] = useState('checking');
   const [roblox, setRoblox] = useRobloxConfig();
   const [groups, setGroups] = useStoredState(STORAGE_KEYS.groups, []);
   const [history, setHistory] = useStoredState(STORAGE_KEYS.history, []);
@@ -42,6 +45,29 @@ export default function App() {
     setToast({ id, message, type });
     setTimeout(() => setToast((cur) => (cur && cur.id === id ? null : cur)), 3400);
   }
+
+  // Monitor backend: saat down, ulangi tiap 20 detik (banner hilang otomatis begitu
+  // hidup lagi); saat up, cek ulang tiap 5 menit untuk mendeteksi kalau mati lagi.
+  useEffect(() => {
+    let alive = true;
+    let timer = null;
+    async function check() {
+      let ok = false;
+      try {
+        ok = await pingHealth();
+      } catch {
+        ok = false;
+      }
+      if (!alive) return;
+      setBackend(ok ? 'up' : 'down');
+      timer = setTimeout(check, ok ? 300000 : 20000);
+    }
+    check();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   function goto(id) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -71,6 +97,12 @@ export default function App() {
 
   return (
     <AppContext.Provider value={ctx}>
+      {backend === 'down' && (
+        <div className="backend-banner" role="status">
+          ⚠️ Backend tidak terjangkau — jalankan <b>JALANKAN-BACKEND.bat</b> di PC kamu,
+          atau tunggu Hugging Face Space bangun (±1 menit). Dicek ulang otomatis tiap 20 detik.
+        </div>
+      )}
       <Dashboard />
 
       <div className="toast-wrap">

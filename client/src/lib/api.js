@@ -55,6 +55,18 @@ export async function processAudio({ file, settings, title, segmentSeconds, sign
   return parseJson(response);
 }
 
+// Cek kesehatan backend (GET /health, tanpa parse JSON berat).
+// Dipakai banner status di App: false = backend tidak terjangkau.
+export async function pingHealth(signal) {
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/health`, { timeoutMs: 6000, signal });
+    return Boolean(res && res.ok);
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    return false;
+  }
+}
+
 // Import audio dari link YouTube — server mengunduh (yt-dlp) lalu konversi
 // dengan pipeline yang sama seperti /api/process. Bisa memakan waktu lama
 // (download + konversi), makanya timeout-nya paling panjang.
