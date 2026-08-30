@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, memo, useEffect, useState } from 'react';
-import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert, Menu, X } from 'lucide-react';
+import { Music2, Wand2, Settings, History, ShieldCheck, ShieldAlert, Menu, X, Moon, Sun } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Skeleton } from '../components/Skeleton.jsx';
 import Hero from '../components/Hero.jsx';
@@ -42,6 +42,14 @@ const LibrarySectionMemo = memo(function LibrarySectionMemo() { return <LibraryP
 export default function Dashboard() {
   const { roblox } = useApp();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light');
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('audio-studio-theme', next); } catch { /* storage penuh/blokir */ }
+    setTheme(next);
+  }
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
@@ -77,6 +85,10 @@ export default function Dashboard() {
           <button type="button" className={`key-chip ${keyReady ? 'ok' : 'warn'}`} onClick={() => scrollTo('roblox')}>
             {keyReady ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
             <span>{keyReady ? 'Roblox siap' : 'Set API key'}</span>
+          </button>
+
+          <button type="button" className="theme-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Aktifkan mode terang' : 'Aktifkan mode gelap'} title={theme === 'dark' ? 'Mode terang' : 'Mode gelap'}>
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
 
           <button type="button" className="nav-menu-btn" aria-label="Menu" onClick={() => setMenuOpen((v) => !v)}>

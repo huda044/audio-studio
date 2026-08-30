@@ -24,7 +24,38 @@
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --navbar-bg: rgba(255, 255, 255, 0.92);
+  --switch-bg: #d6dae2;
+  --scrollbar: #d3d8e0;
+  --scrollbar-hover: #bcc3cf;
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* ============================ Tema gelap ============================ */
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0e1219;
+  --surface: #161c27;
+  --surface-2: #1e2634;
+  --border: #2a3342;
+  --border-strong: #3a4557;
+  --text: #e9edf5;
+  --text-soft: #b6bfcf;
+  --text-dim: #7d879a;
+  --accent: #818cf8;
+  --accent-hover: #9aa2fa;
+  --accent-soft: rgba(129, 140, 248, 0.16);
+  --good: #34d399;
+  --good-soft: rgba(52, 211, 153, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.13);
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.13);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --navbar-bg: rgba(14, 18, 25, 0.9);
+  --switch-bg: #39424f;
+  --scrollbar: #3a4557;
+  --scrollbar-hover: #4c586d;
 }
 
 * { box-sizing: border-box; }
@@ -42,8 +73,8 @@ body {
 ::selection { background: rgba(79, 70, 229, 0.15); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #d3d8e0; border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: #bcc3cf; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
@@ -53,7 +84,7 @@ body {
 
 .navbar {
   position: sticky; top: 0; z-index: 30;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--navbar-bg);
   backdrop-filter: saturate(1.2);
   border-bottom: 1px solid var(--border);
 }
@@ -88,6 +119,8 @@ body {
 }
 .key-chip.ok { border-color: #b5e0d0; color: var(--good); background: var(--good-soft); }
 .key-chip.warn { border-color: #ecd3ab; color: var(--warn); background: var(--warn-soft); }
+html[data-theme='dark'] .key-chip.ok { border-color: rgba(52, 211, 153, 0.45); }
+html[data-theme='dark'] .key-chip.warn { border-color: rgba(251, 191, 36, 0.45); }
 .key-chip:hover { border-color: var(--border-strong); filter: brightness(0.98); }
 
 /* ============================ Layout ============================ */
@@ -176,7 +209,7 @@ a.btn { text-decoration: none; }
 }
 .toggle:hover { border-color: var(--border-strong); }
 .toggle span { font-size: 13.5px; color: var(--text-soft); }
-.switch { width: 38px; height: 22px; border-radius: 99px; background: #d6dae2; position: relative; transition: background 0.15s; flex-shrink: 0; }
+.switch { width: 38px; height: 22px; border-radius: 99px; background: var(--switch-bg); position: relative; transition: background 0.15s; flex-shrink: 0; }
 .switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
 .toggle.on .switch { background: var(--accent); }
 .toggle.on .switch::after { transform: translateX(16px); }
@@ -339,6 +372,16 @@ audio { border-radius: 8px; width: 100%; }
   .grid-3 { grid-template-columns: 1fr; }
 }
 .nav-menu-btn { display: none; width: 38px; height: 38px; border-radius: 9px; place-items: center; background: var(--surface); border: 1px solid var(--border-strong); color: var(--text); cursor: pointer; }
+.theme-btn {
+  width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-soft); cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.theme-btn:hover { color: var(--text); border-color: var(--accent); }
+
+/* Checkbox pilih part */
+.part-check { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.part-check:disabled { cursor: not-allowed; }
 .nav-mobile { display: none; }
 @media (max-width: 760px) {
   .nav-links { display: none; }

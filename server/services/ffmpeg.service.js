@@ -4,6 +4,7 @@ import ffprobe from 'ffprobe-static';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import { clientAbortError } from './taskQueue.service.js';
 
@@ -136,6 +137,98 @@ export function probeAudio(inputPath) {
   });
 }
 
+// ===================== SMART SPLIT — potong di jeda hening =====================
+// Masalah: -segment_time memotong persis di detik ke-N, sering di tengah nada/kata.
+// Solusi: jalankan silencedetect ffmpeg (gratis, bawaan), lalu geser tiap titik potong
+// ke tengah jeda hening terdekat (dalam toleransi). Tanpa jeda yang cocok → potong
+// persis seperti sebelumnya. Matikan lewat env DISABLE_SMART_SPLIT=true.
+
+// Parser murni untuk stderr silencedetect. Jeda di akhir file tidak pernah
+// mendapat silence_end (file habis) — tutup dengan totalDuration bila tersedia.
+export function parseSilences(stderr, totalDuration = 0) {
+  const silences = [];
+  let currentStart = null;
+  for (const line of String(stderr).split(/\r?\n/)) {
+    const startMatch = line.match(/silence_start:\s*(-?[0-9.]+)/);
+    if (startMatch) {
+      currentStart = parseFloat(startMatch[1]);
+      continue;
+    }
+    const endMatch = line.match(/silence_end:\s*([0-9.]+)/);
+    if (endMatch && currentStart !== null) {
+      const end = parseFloat(endMatch[1]);
+      silences.push({ start: Math.min(currentStart, end), end: Math.max(currentStart, end) });
+      currentStart = null;
+    }
+  }
+  if (currentStart !== null && totalDuration > currentStart) {
+    silences.push({ start: currentStart, end: totalDuration });
+  }
+  return silences;
+}
+
+// Murni: dari daftar jeda hening, hitung titik potong final (detik, 2 desimal).
+export function computeSmartCuts({ totalDuration, segSec, silences = [], tolerance = 8, minTail = 25, minPart = 30 }) {
+  const cuts = [];
+  const used = new Set();
+  let prev = 0;
+  for (let ideal = segSec; ideal < totalDuration - minTail; ideal += segSec) {
+    const lo = ideal - tolerance;
+    const hi = ideal + tolerance;
+    let bestMid = null;
+    let bestDist = Infinity;
+    let bestIndex = -1;
+    silences.forEach((s, i) => {
+      if (used.has(i)) return;
+      const mid = (s.start + s.end) / 2;
+      if (mid < lo || mid > hi) return;
+      if (mid <= prev + 1) return; // wajib maju, tidak boleh menumpuk
+      const dist = Math.abs(mid - ideal);
+      if (dist < bestDist) { bestDist = dist; bestMid = mid; bestIndex = i; }
+    });
+    const cut = bestMid !== null
+      ? Math.round(bestMid * 100) / 100
+      : Math.round(ideal * 100) / 100;
+    if (cut - prev >= minPart) {
+      cuts.push(cut);
+      prev = cut;
+      if (bestIndex >= 0) used.add(bestIndex);
+    }
+  }
+  return cuts;
+}
+
+// Deteksi jeda hening: decode sekali lewat binary ffmpeg langsung (bukan fluent-ffmpeg)
+// supaya stderr mudah ditangkap. Timeout → resolve dengan stderr yang sudah terkumpul
+// (graceful: smart split ditinggalkan, potongan tetap jalan dengan batas persis).
+async function detectSilences(inputPath, { signal } = {}) {
+  if (String(process.env.DISABLE_SMART_SPLIT || '').toLowerCase() === 'true') return '';
+  const noiseDb = Number(process.env.SMART_SILENCE_NOISE_DB || -35);
+  const minDur = Number(process.env.SMART_SILENCE_MIN_D || 0.5);
+  const timeoutMs = Math.max(10000, Number(process.env.SMART_SILENCE_TIMEOUT_MS || 90000));
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve('');
+    let stderr = '';
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; clearTimeout(timer); if (signal && onAbort) signal.removeEventListener('abort', onAbort); resolve(stderr); } };
+    const child = spawn(ffmpegPath, [
+      '-hide_banner', '-nostats', '-i', inputPath,
+      '-af', `silencedetect=noise=${noiseDb}dB:d=${minDur}`,
+      '-f', 'null', '-'
+    ], { windowsHide: true });
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } finish(); }, timeoutMs);
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', (d) => { stderr += d; });
+    let onAbort = null;
+    if (signal) {
+      onAbort = () => { try { child.kill('SIGKILL'); } catch { /* ignore */ } finish(); };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    child.on('error', finish);
+    child.on('close', finish);
+  });
+}
+
 function hasAudioStream(probe) {
   return Array.isArray(probe.streams) && probe.streams.some((s) => s.codec_type === 'audio');
 }
@@ -243,7 +336,9 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
 }
 
 // Potong file (sudah berisi efek) menjadi beberapa part berdurasi segmentSeconds.
-async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress, signal }) {
+// `cutPoints` opsional (smart split): daftar detik eksplisit → dipakai lewat
+// -segment_times; kosong → perilaku lama (-segment_time berulang).
+async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress, signal, cutPoints }) {
   if (totalDuration <= segmentSeconds + 0.5) {
     const single = path.join(outputDir, `processed-${nanoid(10)}.ogg`);
     await fs.copyFile(inputPath, single);
@@ -252,11 +347,14 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
   }
   const stamp = nanoid(8);
   const pattern = path.join(outputDir, `processed-${stamp}-%03d.ogg`);
+  const cutOptions = Array.isArray(cutPoints) && cutPoints.length
+    ? ['-segment_times', cutPoints.join(',')]
+    : ['-segment_time', String(segmentSeconds)];
   await new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(clientAbortError());
     const cmd = ffmpeg(inputPath)
       .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
-      .outputOptions(['-vn', '-f', 'segment', '-segment_time', String(segmentSeconds), '-reset_timestamps', '1'])
+      .outputOptions(['-vn', '-f', 'segment', ...cutOptions, '-reset_timestamps', '1'])
       .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', resolve)
       .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
@@ -300,10 +398,25 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
     });
     if (signal?.aborted) throw clientAbortError();
     emit(86);
+    // Smart split: cari jeda hening lalu geser titik potong ke sana.
+    const warnings = [...(master.warnings || [])];
+    let cutPoints = [];
+    if (master.duration > segSec + 0.5) {
+      try {
+        const stderr = await detectSilences(masterPath, { signal });
+        const silences = parseSilences(stderr, master.duration);
+        cutPoints = computeSmartCuts({ totalDuration: master.duration, segSec, silences });
+        if (cutPoints.length) warnings.push(`Smart split aktif: ${cutPoints.length} titik potong ditempatkan di jeda hening.`);
+      } catch {
+        // Gagal mendeteksi (timeout/abort sudah ditangani di atas) → potong persis saja.
+      }
+    }
+    if (signal?.aborted) throw clientAbortError();
     const parts = await segmentFile({
       inputPath: masterPath, outputDir, segmentSeconds: segSec, totalDuration: master.duration,
       onProgress: (pct) => emit(86 + pct * 0.13),
-      signal
+      signal,
+      cutPoints
     });
     if (signal?.aborted) throw clientAbortError();
     emit(100);
@@ -314,7 +427,7 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
       partCount: parts.length,
       appliedSettings: master.appliedSettings,
       effects: master.effects,
-      warnings: master.warnings,
+      warnings,
       source: master.source,
       format: 'ogg',
       codec: 'libvorbis',

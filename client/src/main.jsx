@@ -4,6 +4,16 @@ import './styles.css';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import App from './App.jsx';
 
+// Tema awal sebelum render pertama (di module JS, bukan inline script — CSP
+// server melarang script inline). Default: ikuti preferensi sistem.
+try {
+  const saved = localStorage.getItem('audio-studio-theme');
+  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = saved === 'dark' || saved === 'light' ? saved : (prefersDark ? 'dark' : 'light');
+} catch {
+  document.documentElement.dataset.theme = 'light';
+}
+
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>

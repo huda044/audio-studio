@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import {
-  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle, Youtube
+  UploadCloud, FileAudio, Wand2, Loader2, Sliders, ChevronDown, Rocket, Scissors, Copy, Trash2, Download, RotateCw, XCircle, Youtube, Code2
 } from 'lucide-react';
 import { useApp } from '../App.jsx';
 import { Card, Slider, Toggle, MagneticButton } from '../components/ui.jsx';
@@ -11,6 +11,9 @@ import { cleanRobloxId, robloxPlaybackSpeed, uid, formatApiError } from '../lib/
 import { formatDuration } from '../lib/format.js';
 
 const ACCEPT_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
+
+// Kunci unik untuk state pilihan part (checkbox upload): "<jobId>:<partIndex>".
+function partKey(jobId, index) { return `${jobId}:${index}`; }
 
 function newJob(file) {
   return {
@@ -30,6 +33,9 @@ export default function ConvertPage() {
   const [uploadLabel, setUploadLabel] = useState('');
   const [sourceMode, setSourceMode] = useState('file'); // 'file' | 'youtube'
   const [ytUrl, setYtUrl] = useState('');
+  // Part yang TIDAK dicentang untuk di-upload. Model "deselected" supaya hasil
+  // konversi baru otomatis terpilih semua tanpa perlu state tambahan.
+  const [deselected, setDeselected] = useState(() => new Set());
   const inputRef = useRef(null);
   const convertAbortRef = useRef(null);
   const uploadAbortRef = useRef(null);
@@ -59,6 +65,21 @@ export default function ConvertPage() {
   const segMin = Math.round((settings.segmentSeconds || 180) / 60 * 10) / 10;
   const pendingJobs = jobs.filter((j) => j.status === 'queued' || j.status === 'error');
   const doneJobs = jobs.filter((j) => j.status === 'done');
+  const selectedCount = doneJobs.reduce((n, job) => n
+    + job.processed.parts.filter((p) => !deselected.has(partKey(job.id, p.index))).length, 0);
+  const anyDeselected = doneJobs.some((job) => job.processed.parts.some((p) => deselected.has(partKey(job.id, p.index))));
+
+  function toggleSelectAll() {
+    setDeselected((prev) => {
+      const anyOff = doneJobs.some((job) => job.processed.parts.some((p) => prev.has(partKey(job.id, p.index))));
+      if (anyOff) return new Set(); // pilih semua
+      const next = new Set(); // kosongkan semua pilihan
+      for (const job of doneJobs) {
+        for (const p of job.processed.parts) next.add(partKey(job.id, p.index));
+      }
+      return next;
+    });
+  }
 
   function update(patch) { setSettings((s) => ({ ...s, ...patch })); }
   function updateJob(id, patch) { setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...patch } : j))); }
@@ -178,6 +199,9 @@ export default function ConvertPage() {
 
   async function handleUploadAll() {
     if (!doneJobs.length) { notify('Konversi audio dulu.', 'error'); return; }
+    const selectedCount = doneJobs.reduce((n, job) => n
+      + job.processed.parts.filter((p) => !deselected.has(partKey(job.id, p.index))).length, 0);
+    if (!selectedCount) { notify('Centang minimal satu part dulu di panel hasil.', 'error'); return; }
     const creator = validateRoblox();
     if (!creator) return;
     setBusy('upload');
@@ -188,8 +212,10 @@ export default function ConvertPage() {
       let cancelled = false;
       let skippedAccepted = 0;
       for (const job of doneJobs) {
+        const partsToUpload = job.processed.parts.filter((p) => !deselected.has(partKey(job.id, p.index)));
+        if (!partsToUpload.length) continue;
         const collected = [];
-        for (const part of job.processed.parts) {
+        for (const part of partsToUpload) {
           // Part yang SEBELUMNYA sudah diterima Roblox tidak diupload ulang —
           // mencegah asset duplikat & pemborosan kuota moderasi saat tombol
           // "Upload semua" ditekan lagi. Part gagal/pending tetap dicoba ulang.
@@ -235,6 +261,32 @@ export default function ConvertPage() {
 
   function allParts() {
     return doneJobs.flatMap((job) => job.processed.parts.map((part) => ({ job, part })));
+  }
+
+  function toggleSelect(jobId, index, checked) {
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.delete(partKey(jobId, index));
+      else next.add(partKey(jobId, index));
+      return next;
+    });
+  }
+
+  // Salin semua rbxassetid yang sudah diterima Roblox sebagai potongan kode Lua
+  // siap-tempel ke script game.
+  function copyLuaIds() {
+    const items = [];
+    for (const { job, part } of allParts()) {
+      const st = job.partStatus[part.index];
+      if (st?.rbxassetid) {
+        items.push({ id: String(st.rbxassetid).replace(/^rbxassetid:\/\//i, ''), job, part });
+      }
+    }
+    if (!items.length) { notify('Belum ada asset yang diterima Roblox. Upload dulu part-nya.', 'error'); return; }
+    const lines = items.map(({ id, job, part }) => `    rbxassetid://${id}, -- ${(job.title || 'Audio').slice(0, 50)} · Part ${part.index}`);
+    const snippet = `-- LuciVoid Audio Studio · ${new Date().toLocaleString('id-ID')}\nlocal audioIds = {\n${lines.join('\n')}\n}\n`;
+    navigator.clipboard?.writeText(snippet);
+    notify(`${items.length} rbxassetid disalin sebagai kode Lua.`);
   }
 
   async function downloadAll() {
@@ -310,10 +362,18 @@ export default function ConvertPage() {
           const srcUrl = part.audioDataUrl || `${API_BASE}${part.audioUrl}`;
           return (
             <div key={part.index} className="list-item" style={{ flexWrap: 'wrap' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="li-title">Part {part.index} <span className="muted small">· {formatDuration(part.duration)} · {Math.round(part.sizeBytes / 1024)} KB</span></div>
-                {st?.rbxassetid && <div className="li-meta">{st.rbxassetid}</div>}
-                {st?.error && <div className="li-meta" style={{ color: 'var(--bad)' }}>{st.error}</div>}
+              <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
+                <input
+                  type="checkbox" className="part-check" aria-label={`Pilih Part ${part.index} untuk di-upload`}
+                  checked={!deselected.has(partKey(job.id, part.index))}
+                  disabled={Boolean(busy)}
+                  onChange={(e) => toggleSelect(job.id, part.index, e.target.checked)}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div className="li-title">Part {part.index} <span className="muted small">· {formatDuration(part.duration)} · {Math.round(part.sizeBytes / 1024)} KB</span></div>
+                  {st?.rbxassetid && <div className="li-meta">{st.rbxassetid}</div>}
+                  {st?.error && <div className="li-meta" style={{ color: 'var(--bad)' }}>{st.error}</div>}
+                </div>
               </div>
               <div className="li-actions">
                 {st?.status === 'uploading' && <span className="badge wait"><Loader2 className="spin" size={11} /> upload</span>}
@@ -520,22 +580,30 @@ export default function ConvertPage() {
                 </div>
               ))}
 
-              {doneJobs.length > 0 && (
-                <>
-                  <div className="divider" />
-                  <div className="chips" style={{ marginBottom: 12 }}>
-                    <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
-                    <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
-                    <span className="chip">Roblox play <b>{robloxPlaybackSpeed(settings.speed)}x</b></span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                    <button className="btn ghost" style={{ flex: 1 }} onClick={downloadZip} disabled={busy}>{busy === 'zip' ? <Loader2 className="spin" size={16} /> : <Download size={16} />} Download ZIP</button>
-                    <button className="btn ghost" style={{ flex: 1 }} onClick={downloadAll} disabled={busy}><Download size={16} /> Unduh satuan</button>
-                  </div>
-                  <MagneticButton className="primary block" disabled={busy} onClick={handleUploadAll}>
-                    {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
-                    {busy === 'upload' ? `Mengupload ${uploadLabel}...` : `Upload semua ke Roblox`}
-                  </MagneticButton>
+                  {doneJobs.length > 0 && (
+                    <>
+                      <div className="divider" />
+                      <div className="chips" style={{ marginBottom: 12 }}>
+                        <span className="chip">Target: <b>{roblox.mode === 'group' ? `Group ${cleanRobloxId(roblox.selectedGroupId || roblox.groupId) || '—'}` : `User ${cleanRobloxId(roblox.userId) || '—'}`}</b></span>
+                        <span className="chip">API key: <b>{roblox.apiKey ? 'tersimpan' : 'belum diisi'}</b></span>
+                        <span className="chip">Roblox play <b>{robloxPlaybackSpeed(settings.speed)}x</b></span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                        <button className="btn ghost sm" onClick={toggleSelectAll} disabled={Boolean(busy)}>
+                          {anyDeselected ? 'Pilih semua part' : 'Kosongkan pilihan'}
+                        </button>
+                        <button className="btn ghost sm" onClick={copyLuaIds} disabled={Boolean(busy)} title="Salin semua rbxassetid sebagai kode Lua siap tempel">
+                          <Code2 size={14} /> Salin ID (Lua)
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                        <button className="btn ghost" style={{ flex: 1 }} onClick={downloadZip} disabled={busy}>{busy === 'zip' ? <Loader2 className="spin" size={16} /> : <Download size={16} />} Download ZIP</button>
+                        <button className="btn ghost" style={{ flex: 1 }} onClick={downloadAll} disabled={busy}><Download size={16} /> Unduh satuan</button>
+                      </div>
+                      <MagneticButton className="primary block" disabled={Boolean(busy) || !selectedCount} onClick={handleUploadAll}>
+                        {busy === 'upload' ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />}
+                        {busy === 'upload' ? `Mengupload ${uploadLabel}...` : selectedCount ? `Upload ${selectedCount} part terpilih ke Roblox` : 'Centang part untuk di-upload'}
+                      </MagneticButton>
 
                   {busy === 'upload' && (
                     <button className="btn ghost block" style={{ marginTop: 10 }} onClick={() => uploadAbortRef.current?.abort()}>
