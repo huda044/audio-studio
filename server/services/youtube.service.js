@@ -114,29 +114,24 @@ function runYtDlp(args, { timeoutMs, signal } = {}) {
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      if (!settled) {
-        settled = true;
-        reject(new Error('Pengambilan audio dari YouTube melewati batas waktu server.'));
-      }
-    }, timeoutMs);
-
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } if (!settled) { settled = true; clearTimeout(timer); const err = new Error('Pengambilan audio dari YouTube melewati batas waktu server.'); err.status = 422; reject(err); } }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(mapToError(error, stderr));
-    });
+    let onAbort = null;
+    if (signal) {
+      onAbort = () => { try { child.kill('SIGKILL'); } catch { /* ignore */ } if (!settled) { settled = true; clearTimeout(timer); reject(clientAbortError()); } };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    child.on('error', (error) => { if (!settled) { settled = true; clearTimeout(timer); if (signal && onAbort) signal.removeEventListener('abort', onAbort); reject(mapToError(error, stderr)); } });
     child.on('close', (code, signalReceived) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
       if (signalReceived) return reject(clientAbortError('Import YouTube dibatalkan.'));
       if (code === 0) return resolve(stdout);
       const error = new Error(mapYtError(stderr));
+      error.status = 422; // error yt-dlp = permintaan user yang ditolak, bukan kegagalan server
       error.stderr = String(stderr).slice(-4000);
       reject(error);
     });
@@ -146,6 +141,7 @@ function runYtDlp(args, { timeoutMs, signal } = {}) {
 function mapToError(spawnError, stderr) {
   if (spawnError.name === 'AbortError') return clientAbortError('Import YouTube dibatalkan.');
   const error = new Error(mapYtError(`${stderr}\n${spawnError.message}`));
+  error.status = 422;
   error.cause = spawnError;
   return error;
 }
