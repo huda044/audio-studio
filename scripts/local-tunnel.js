@@ -6,11 +6,13 @@
 //   node scripts/local-tunnel.js                   → server + tunnel saja (URL dicetak)
 //   node scripts/local-tunnel.js --update-vercel   → + set VITE_API_BASE di Vercel & redeploy produksi
 //
-// Catatan:
-// - URL trycloudflare.com BERUBAH setiap kali tunnel dijalankan ulang. Bila memakai
-//   --update-vercel, frontend Vercel otomatis diarahkan ke URL terbaru.
-// - PC harus tetap menyala selama situs dipakai. Tekan Ctrl+C untuk mematikan semua.
-// - yt-dlp harus tersedia di PATH (atau server/bin/yt-dlp) agar import YouTube jalan.
+// Keamanan penting:
+// - URL Vercel HANYA diperbarui setelah tunnel terbukti melayani /health 200.
+//   Kegagalan quick-tunnel (mis. timeout api.trycloudflare.com) tidak akan pernah
+//   mengarahkan produksi ke URL mati.
+// - Quick tunnel di-retry beberapa kali bila permintaan awal gagal.
+// - URL trycloudflare berubah tiap restart; karena itu --update-vercel wajib
+//   dijalankan ulang setiap kali backend dinyalakan.
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -21,30 +23,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const UPDATE_VERCEL = process.argv.includes('--update-vercel');
 const PORT = process.env.PORT || 4000;
+const TUNNEL_RETRIES = Math.max(1, Number(process.env.TUNNEL_RETRIES || 4));
+const CLIENT_DIR = path.join(rootDir, 'client');
 const CLOUDFLARED = path.join(rootDir, 'tools', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
 
-function run(cmd, args, { cwd, capture = false } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: process.platform === 'win32', stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
-    let out = '';
-    let err = '';
-    if (capture) {
-      child.stdout.on('data', (d) => { out += d; });
-      child.stderr.on('data', (d) => { err += d; });
-    }
-    child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve({ out, err }) : reject(new Error(`${cmd} keluar dengan kode ${code}\n${err.slice(-800)}`))));
-  });
-}
+// Quick-tunnel host = beberapa slug kata yang dipisah tanda hubung, mis.
+// down-nut-tablets-held. Dikecualikan: api. (muncul di pesan error cloudflared).
+const TUNNEL_URL_RE = /https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com(?![a-z0-9./-])/i;
 
-function runStreaming(cmd, args, { cwd, onText, shell = false } = {}) {
-  // shell hanya untuk perintah .cmd (npx); exe langsung (node/cloudflared) TANPA shell —
-  // shell:true memotong path ber-spasi seperti "C:\Program Files\nodejs\node.exe".
-  const child = spawn(cmd, args, { cwd, shell });
-  const handle = (d) => onText(String(d));
-  child.stdout.on('data', handle);
-  child.stderr.on('data', handle);
-  return child;
+function runShell(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd: CLIENT_DIR, shell: true });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(' ')} keluar dengan kode ${code}`))));
+  });
 }
 
 const cleanupFns = [];
@@ -59,80 +51,162 @@ function shutdown(code = 0) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-async function main() {
-  // 1) Nyalakan backend lokal
-  console.log(`▶ Menjalankan backend lokal di port ${PORT}...`);
-  const server = runStreaming(process.execPath, ['server.js'], {
-    cwd: path.join(rootDir, 'server'),
-    onText: (t) => process.stdout.write(`[server] ${t}`)
-  });
-  cleanupFns.push(() => { try { server.kill(); } catch { /* ignore */ } });
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
-  // Tunggu /health siap
-  let up = false;
-  for (let i = 0; i < 30 && !up; i += 1) {
-    await new Promise((r) => setTimeout(r, 500));
+// Satu percobaan tunnel: spawn cloudflared, pantau outputnya.
+// - Jika URL valid muncul → resolve({ url, child }) TANPA membunuh child
+//   (child ini yang akan melayani trafik; dipertahankan hidup).
+// - Jika child berhenti sebelum URL muncul → resolve({ url: null }).
+// - Jika child gagal dibuat URL dalam timeout → child dibunuh, resolve({ url: null }).
+function tryTunnelOnce(attempt) {
+  return new Promise((resolve) => {
+    let url = '';
+    let settled = false;
+    const settle = (value) => { if (!settled) { settled = true; resolve(value); } };
+
+    console.log(`▶ [percobaan ${attempt}/${TUNNEL_RETRIES}] Meminta quick tunnel Cloudflare...`);
+    const child = spawn(CLOUDFLARED, ['tunnel', '--url', `http://127.0.0.1:${PORT}`, '--no-autoupdate'], { shell: false });
+
+    const onText = (d) => {
+      const t = String(d);
+      const m = t.match(TUNNEL_URL_RE);
+      if (m && !url) {
+        url = m[0];
+        settle({ url, child }); // child dibiarkan hidup
+        return;
+      }
+      if (!url && /failed to request quick tunnel|context deadline|error|unable to/i.test(t)) {
+        console.log(`[tunnel] ${t.trim().slice(0, 200)}`);
+      }
+    };
+    child.stdout.on('data', onText);
+    child.stderr.on('data', onText);
+    child.on('error', (e) => { console.log(`[tunnel] spawn error: ${e.message}`); settle({ url: null }); });
+
+    // Child berhenti sendiri: bila kita sudah punya URL (seharusnya tidak), jaga child;
+    // jika belum, ini kegagalan → caller akan retry & spawn baru.
+    child.on('close', () => {
+      if (!url) settle({ url: null });
+      // bila url sudah ter-set, settle sudah dipanggil; child mati di sini berarti
+      // tunnel putus — signal ke caller lewat event 'tunnelClosed' di main loop.
+    });
+
+    // Bila URL tidak muncul dalam 40 detik → bunuh child ini (belum berguna), retry.
+    const guard = setTimeout(() => {
+      if (!url) { try { child.kill(); } catch { /* ignore */ } settle({ url: null }); }
+    }, 40000);
+    child.once('close', () => clearTimeout(guard));
+    // Simpan kill-on-shutdown HANYA bila child ini akhirnya dibuang (gagal);
+    // child sukses dikelola oleh main loop (dibunuh saat shutdown lewat daftar global).
+    const killIfDiscarded = () => { if (!url) { try { child.kill(); } catch { /* ignore */ } } };
+    cleanupFns.push(killIfDiscarded);
+  });
+}
+
+// Verifikasi URL benar-benar melayani /health. Routing tunnel butuh beberapa detik,
+// dan saat Cloudflare lambat bisa lebih lama — kita beri ~60 detik + catat statusnya.
+async function verifyTunnelHealth(url) {
+  let lastStatus = '?';
+  for (let i = 0; i < 24; i += 1) {
+    try {
+      const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(8000), redirect: 'follow' });
+      lastStatus = String(res.status);
+      if (res.ok) {
+        try { const j = await res.json(); if (j && j.ok) return true; } catch { /* status 200 sudah cukup */ return true; }
+      }
+    } catch (e) {
+      lastStatus = e.name === 'TimeoutError' ? 'timeout' : 'err';
+    }
+    process.stdout.write(`\r   menunggu routing tunnel… [${i + 1}/24] status=${lastStatus}   `);
+    await sleep(2500);
+  }
+  process.stdout.write('\n');
+  return false;
+}
+
+async function startServer() {
+  console.log(`▶ Menjalankan backend lokal di port ${PORT}...`);
+  const child = spawn(process.execPath, ['server.js'], { cwd: path.join(rootDir, 'server') });
+  child.stdout.on('data', (d) => process.stdout.write(`[server] ${d}`));
+  child.stderr.on('data', (d) => process.stdout.write(`[server] ${d}`));
+  child.on('close', () => { if (!shuttingDown) { console.error('⚠ Backend berhenti tiba-tiba.'); shutdown(1); } });
+  cleanupFns.push(() => { try { child.kill(); } catch { /* ignore */ } });
+
+  for (let i = 0; i < 40; i += 1) {
+    await sleep(500);
     try {
       const res = await fetch(`http://127.0.0.1:${PORT}/health`);
-      up = res.ok;
+      if (res.ok) { console.log('✓ Backend siap.\n'); return; }
     } catch { /* belum siap */ }
   }
-  if (!up) {
-    console.error('✗ Backend tidak merespons /health. Periksa log di atas.');
-    return shutdown(1);
-  }
-  console.log('✓ Backend siap.\n');
+  throw new Error('Backend tidak merespons /health dalam 20 detik.');
+}
 
-  // 2) Nyalakan Cloudflare quick tunnel
-  console.log('▶ Menjalankan Cloudflare Tunnel (URL publik akan muncul)...');
-  let tunnelUrl = '';
-  const tunnel = runStreaming(CLOUDFLARED, ['tunnel', '--url', `http://127.0.0.1:${PORT}`, '--no-autoupdate'], {
-    shell: false,
-    onText: (t) => {
-      process.stdout.write(`[tunnel] ${t}`);
-      const match = t.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-      if (match && !tunnelUrl) {
-        tunnelUrl = match[0];
-        onTunnelReady(tunnelUrl);
-      }
-    }
-  });
-  cleanupFns.push(() => { try { tunnel.kill(); } catch { /* ignore */ } });
-
-  async function onTunnelReady(url) {
-    console.log(`\n==============================================`);
-    console.log(`✓ URL PUBLIK BACKEND: ${url}`);
-    console.log(`  Cek kesehatan: ${url}/health`);
-    console.log(`==============================================\n`);
-
-    if (!UPDATE_VERCEL) {
-      console.log('Tip: jalankan ulang dengan --update-vercel untuk mengarahkan situs Vercel ke URL ini otomatis.');
-      return;
-    }
-
-    // 3) Perbarui env Vercel + redeploy (VITE_ vars dibaca saat build)
-    console.log('▶ Memperbarui VITE_API_BASE di Vercel + redeploy produksi...');
-    try {
-      await run('npx', ['vercel', 'env', 'rm', 'VITE_API_BASE', 'production', '--yes'], { cwd: path.join(rootDir, 'client'), capture: true }).catch(() => {});
-      await new Promise((r) => setTimeout(r, 1500));
-      const child = spawn('npx', ['vercel', 'env', 'add', 'VITE_API_BASE', 'production'], {
-        cwd: path.join(rootDir, 'client'), shell: process.platform === 'win32', stdio: ['pipe', 'inherit', 'inherit']
-      });
+async function updateVercel(url) {
+  console.log('▶ Memperbarui VITE_API_BASE di Vercel + redeploy produksi...');
+  try {
+    // env rm dulu (abaikan error bila belum ada), lalu env add dengan nilai stdin.
+    const rm = spawn('npx', ['vercel', 'env', 'rm', 'VITE_API_BASE', 'production', '--yes'], { cwd: CLIENT_DIR, shell: true });
+    await new Promise((r) => rm.on('close', r));
+    await new Promise((resolve, reject) => {
+      const child = spawn('npx', ['vercel', 'env', 'add', 'VITE_API_BASE', 'production'], { cwd: CLIENT_DIR, shell: true, stdio: ['pipe', 'inherit', 'inherit'] });
       child.stdin.write(`${url}\n`);
       child.stdin.end();
-      await new Promise((resolve, reject) => { child.on('close', (c) => (c === 0 ? resolve() : reject(new Error('vercel env add gagal')))); child.on('error', reject); });
-      await run('npx', ['vercel', '--prod', '--yes'], { cwd: path.join(rootDir, 'client') });
-      console.log(`\n✓ SELESAI — https://lucivoid-audio-studio.vercel.app kini memakai backend: ${url}`);
-      console.log('  Biarkan jendela ini tetap terbuka selama situs dipakai (Ctrl+C untuk mematikan).');
-    } catch (error) {
-      console.error(`✗ Gagal update Vercel: ${error.message}`);
-      console.error('  URL tunnel tetap jalan — update manual: npx vercel env add VITE_API_BASE production');
+      child.on('close', (c) => (c === 0 ? resolve() : reject(new Error('vercel env add gagal'))));
+      child.on('error', reject);
+    });
+    await runShell('npx', ['vercel', '--prod', '--yes']);
+    console.log(`\n✓ SELESAI — https://lucivoid-audio-studio.vercel.app kini memakai backend: ${url}`);
+    console.log('  Biarkan jendela ini tetap terbuka selama situs dipakai (Ctrl+C untuk mematikan).');
+  } catch (error) {
+    console.error(`✗ Gagal update Vercel: ${error.message}`);
+    console.error(`  Tunnel tetap jalan di ${url} — update manual bila perlu:`);
+    console.error('  cd client && npx vercel env add VITE_API_BASE production');
+  }
+}
+
+async function main() {
+  await startServer();
+
+  let workingUrl = '';
+  for (let attempt = 1; attempt <= TUNNEL_RETRIES && !workingUrl; attempt += 1) {
+    const { url, child } = await tryTunnelOnce(attempt);
+    if (!url) {
+      console.log(`  percobaan ${attempt} gagal (quick-tunnel tidak terbentuk).`);
+      if (attempt < TUNNEL_RETRIES) { console.log('  menunggu 3 detik lalu coba lagi...'); await sleep(3000); }
+      continue;
     }
+    console.log(`\n🔗 URL kandidat: ${url} — memverifikasi kesehatan...`);
+    const healthy = await verifyTunnelHealth(url);
+    if (!healthy) {
+      console.log('  Tunnel tidak melayani /health, mencoba ulang...');
+      try { child.kill(); } catch { /* ignore */ }
+      continue;
+    }
+    // Sukses: child ini melayani trafik, pertahankan hidup.
+    workingUrl = url;
+    cleanupFns.push(() => { try { child.kill(); } catch { /* ignore */ } });
+    child.on('close', () => { if (!shuttingDown) { console.error('\n⚠ Koneksi tunnel terputus. Menutup — jalankan ulang skrip ini.'); shutdown(1); } });
+    console.log(`\n==============================================`);
+    console.log(`✓ BACKEND PUBLIK SEHAT: ${workingUrl}`);
+    console.log(`  Cek kesehatan: ${workingUrl}/health`);
+    console.log(`==============================================\n`);
   }
 
-  // Jaga proses tetap hidup
-  server.on('close', () => { if (!shuttingDown) { console.error('⚠ Backend berhenti tiba-tiba — mematikan tunnel juga.'); shutdown(1); } });
-  tunnel.on('close', () => { if (!shuttingDown) { console.error('⚠ Tunnel tertutup.'); shutdown(1); } });
+  if (!workingUrl) {
+    console.error('✗ Semua percobaan quick tunnel gagal (kemungkinan koneksi Cloudflare sementara bermasalah).');
+    console.error('  Backend lokal tetap jalan di http://127.0.0.1:' + PORT + ' — jalankan ulang skrip untuk tunnel.');
+    return shutdown(1);
+  }
+
+  if (UPDATE_VERCEL) {
+    await updateVercel(workingUrl);
+  } else {
+    console.log('Tip: tambahkan --update-vercel agar situs Vercel otomatis diarahkan ke URL ini.');
+  }
+  console.log('\nBackend & tunnel AKTIF. Jendela ini harus tetap terbuka. Tekan Ctrl+C untuk menghentikan.');
 }
 
 main().catch((error) => {
