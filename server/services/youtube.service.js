@@ -17,8 +17,8 @@ const require = createRequire(import.meta.url);
 // Lokasi binary dicari berurutan: env YTDL_PATH → server/bin/yt-dlp(.exe) → PATH.
 // Pola server/bin/yt-dlp* memang disiapkan di .gitignore untuk instalasi lokal dev.
 
-const DEFAULT_TIMEOUT_MS = 300000; // 5 menit per percobaan download
-const DEFAULT_META_TIMEOUT_MS = 90000; // metadata bisa lambat di IP datacenter (HF)
+const DEFAULT_TIMEOUT_MS = 900000; // 15 menit per percobaan download (sumber hingga 3 jam)
+const DEFAULT_META_TIMEOUT_MS = 120000; // metadata bisa lambat di IP datacenter (HF)
 const DEFAULT_SOCKET_TIMEOUT_S = 20;
 
 // Urutan percobaan client YouTube: default dulu, lalu kombinasi yang sering

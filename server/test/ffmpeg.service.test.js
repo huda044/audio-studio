@@ -112,6 +112,16 @@ describe('FFmpeg Service - Core Functions', () => {
       expect(result.effects).toContain('Pitch +3 semitone');
     });
 
+    it('memberi peringatan saat output dipotong plafon', () => {
+      const settings = {
+        speed: 1, amplify: 0, pitch: 0, bassBoost: false, reverb: false,
+        normalize: false, echo: false, fadeIn: 0, fadeOut: 0, trimStart: 0, trimEnd: 0
+      };
+      const result = buildFilters(settings, 7200, 3600); // sumber 2 jam, plafon output 1 jam
+      expect(result.effectiveDuration).toBeLessThanOrEqual(3600);
+      expect(result.warnings.join(' ')).toContain('dibatasi 1 jam');
+    });
+
     it('should add bass boost filter when enabled', () => {
       const settings = {
         speed: 1,

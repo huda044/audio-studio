@@ -61,9 +61,13 @@ ENV ROBLOX_AUDIO_MAX_BYTES=19922944
 ENV ROBLOX_UPLOAD_CONCURRENCY=1
 ENV ROBLOX_UPLOAD_QUEUE_LIMIT=15
 ENV SHUTDOWN_TIMEOUT_MS=10000
+# Batas durasi: output master hingga 4 jam, sumber YouTube hingga 3 jam,
+# encode ffmpeg diberi kelonggaran 30 menit (untuk sumber berjam-jam).
+ENV MAX_OUTPUT_SECONDS=14400
+ENV FFMPEG_TIMEOUT_MS=1800000
 # Import YouTube (yt-dlp): lokasi binary, batas durasi sumber, limit request per 30 menit.
 ENV YTDL_PATH=/app/bin/yt-dlp
-ENV YTDL_MAX_DURATION_SECONDS=3600
+ENV YTDL_MAX_DURATION_SECONDS=10800
 ENV YT_IMPORT_RATE_LIMIT=10
 # Smart split: potong di jeda hening (ffmpeg silencedetect). true = matikan.
 ENV DISABLE_SMART_SPLIT=false

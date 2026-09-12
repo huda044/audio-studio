@@ -223,14 +223,17 @@ sudo certbot --nginx -d yourdomain.com
 | `UPLOAD_RATE_LIMIT` | 60 | Upload requests per 30min |
 | `INFO_RATE_LIMIT` | 60 | Info requests per min |
 | `STATS_RATE_LIMIT` | 20 | Stats requests per min |
-| `FFMPEG_TIMEOUT_MS` | 600000 | FFmpeg timeout (ms) |
-| `MAX_OUTPUT_SECONDS` | 3600 | Max output duration (s) |
+| `FFMPEG_TIMEOUT_MS` | 1800000 | FFmpeg timeout (ms) — 30 mnt, akomodasi sumber berjam-jam |
+| `MAX_OUTPUT_SECONDS` | 14400 | Max output (master) duration (s) — 4 jam |
 | `APP_MAX_DURATION_SECONDS` | 200 | Max source duration (s) |
 | `ROBLOX_AUDIO_MAX_DURATION_SECONDS` | 420 | Roblox max audio duration (s) |
 | `ROBLOX_AUDIO_MAX_BYTES` | 19922944 | Roblox max audio size (bytes) |
 | `ROBLOX_UPLOAD_TIMEOUT_MS` | 60000 | Roblox upload timeout (ms) |
 | `ROBLOX_POLL_TIMEOUT_MS` | 240000 | Roblox poll timeout (ms) |
 | `ROBLOX_POLL_INTERVAL_MS` | 2500 | Roblox poll interval (ms) |
+| `YTDL_MAX_DURATION_SECONDS` | 10800 | Max YouTube source duration (s) — 3 jam |
+| `YTDL_TIMEOUT_MS` | 900000 | Per-attempt yt-dlp download timeout (ms) — 15 menit |
+| `SMART_SILENCE_TIMEOUT_MS` | 300000 | Smart-split silence detection timeout (ms) — 5 menit |
 | `SHUTDOWN_TIMEOUT_MS` | 10000 | Graceful shutdown timeout (ms) |
 | `AI_API_KEY` | - | AI provider API key |
 | `AI_MODEL` | - | AI model name |

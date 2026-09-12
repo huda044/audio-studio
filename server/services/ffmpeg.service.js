@@ -26,7 +26,8 @@ try {
 // Batas aman total durasi OUTPUT (setelah efek/speed, sebelum dipotong jadi part) supaya
 // tidak membebani server. BERBEDA dari APP_MAX_DURATION_SECONDS yang membatasi durasi SUMBER
 // per-request — keduanya independen. Ini di-pass sebagai maxOutputSeconds ke buildFilters.
-const MAX_OUTPUT_SECONDS = Math.min(Math.max(Number(process.env.MAX_OUTPUT_SECONDS || 3600), 60), 21600);
+// Default 4 jam (14400s): cukup untuk sumber YouTube 3 jam pada tempo normal.
+const MAX_OUTPUT_SECONDS = Math.min(Math.max(Number(process.env.MAX_OUTPUT_SECONDS || 14400), 60), 21600);
 const SEGMENT_MIN = 30;
 const SEGMENT_MAX = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
 
@@ -39,6 +40,12 @@ function clamp(value, min, max) {
 function round(value, digits = 2) {
   const factor = 10 ** digits;
   return Math.round(Number(value || 0) * factor) / factor;
+}
+
+// Format jam untuk pesan peringatan (mis. 14400 → "4 jam", 5400 → "1.5 jam").
+function formatHours(seconds) {
+  const hours = Number(seconds || 0) / 3600;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} jam`;
 }
 
 function httpError(message, status = 422, details = []) {
@@ -80,6 +87,14 @@ export function buildFilters(settings, sourceDuration = 0, maxOutputSeconds = MA
   const effectiveDuration = computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxOutputSeconds });
   const warnings = [];
   if (sourceDuration && trimEnd > sourceDuration) warnings.push('Trim end lebih panjang dari sumber, otomatis dipotong ke akhir audio.');
+  // Jujur: kalau plafon output memotong bagian akhir audio, beri tahu user.
+  const trimmedInput = trimEnd > trimStart
+    ? Math.max(0, Math.min(trimEnd, sourceDuration) - trimStart)
+    : Math.max(0, sourceDuration - trimStart);
+  const naturalOutput = trimmedInput / Math.max(speed, 0.01);
+  if (sourceDuration && naturalOutput > maxOutputSeconds + 1) {
+    warnings.push(`Audio sangat panjang: output dibatasi ${formatHours(maxOutputSeconds)} — bagian akhir terpotong.`);
+  }
 
   const appliedSettings = {
     speed: round(speed, 4), amplify, pitch,
@@ -228,7 +243,7 @@ async function detectSilences(inputPath, { signal } = {}) {
   if (String(process.env.DISABLE_SMART_SPLIT || '').toLowerCase() === 'true') return '';
   const noiseDb = Number(process.env.SMART_SILENCE_NOISE_DB || -35);
   const minDur = Number(process.env.SMART_SILENCE_MIN_D || 0.5);
-  const timeoutMs = Math.max(10000, Number(process.env.SMART_SILENCE_TIMEOUT_MS || 90000));
+  const timeoutMs = Math.max(10000, Number(process.env.SMART_SILENCE_TIMEOUT_MS || 300000));
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve('');
     let stderr = '';
@@ -263,7 +278,8 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
     let cmd = ffmpeg(inputPath);
     let stderr = '';
     let settled = false;
-    const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 600000);
+    // 30 menit: encode sumber multi-jam butuh headroom (sebelumnya 10 menit).
+    const timeoutMs = Number(process.env.FFMPEG_TIMEOUT_MS || 1800000);
     const settle = (error) => {
       if (settled) return;
       settled = true;

@@ -52,7 +52,7 @@ const youtubeImportLimit = rateLimit({
   max: Number(process.env.YT_IMPORT_RATE_LIMIT || 10),
   message: 'Limit import YouTube tercapai (10 per 30 menit). Coba lagi nanti.'
 });
-const ytdlMaxDurationSeconds = Math.min(Math.max(Number(process.env.YTDL_MAX_DURATION_SECONDS || 3600), 30), 21600);
+const ytdlMaxDurationSeconds = Math.min(Math.max(Number(process.env.YTDL_MAX_DURATION_SECONDS || 10800), 30), 21600);
 const infoLimit = rateLimit({
   windowMs: 1000 * 60,
   max: Number(process.env.INFO_RATE_LIMIT || 60),
