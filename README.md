@@ -104,7 +104,7 @@ cd client && npm run test:coverage
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
-| `POST` | `/api/process` | Upload audio + efek → OGG parts |
+| `POST` | `/api/process` | Upload audio + efek → MP3 parts |
 | `POST` | `/api/upload-roblox` | Upload part ke Roblox |
 | `POST` | `/api/roblox-test` | Test API key & creator |
 | `POST` | `/api/asset-status` | Cek status moderasi |

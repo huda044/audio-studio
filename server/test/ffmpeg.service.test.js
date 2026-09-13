@@ -88,7 +88,9 @@ describe('FFmpeg Service - Core Functions', () => {
         trimEnd: 0
       };
       const result = buildFilters(settings, 300);
-      expect(result.filters).toContain('atempo=2.0000');
+      // Engine time-stretch: rubberband (default, high-quality) atau atempo (fallback).
+      const joined = result.filters.join(' ');
+      expect(/rubberband=tempo=2\.0000|atempo=2\.0000/.test(joined)).toBe(true);
       expect(result.filters).toContain('volume=-4dB');
       expect(result.appliedSettings.speed).toBe(2);
     });

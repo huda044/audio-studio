@@ -447,7 +447,7 @@ export default function ConvertPage() {
     for (const { job, part } of allParts()) {
       const a = document.createElement('a');
       a.href = part.audioDataUrl || `${API_BASE}${part.audioUrl}`;
-      a.download = `${(job.title || 'audio').replace(/[^\w-]+/g, '_')}-part${part.index}.ogg`;
+      a.download = `${(job.title || 'audio').replace(/[^\w-]+/g, '_')}-part${part.index}.mp3`;
       document.body.appendChild(a); a.click(); a.remove();
       await new Promise((r) => setTimeout(r, 350));
     }
@@ -461,7 +461,7 @@ export default function ConvertPage() {
       for (const { job, part } of allParts()) {
         const base = (job.title || 'audio').replace(/[^\w-]+/g, '_');
         const blob = await fetchPartBlob(part);
-        files.push({ name: `${base}/part${String(part.index).padStart(2, '0')}.ogg`, data: new Uint8Array(await blob.arrayBuffer()) });
+        files.push({ name: `${base}/part${String(part.index).padStart(2, '0')}.mp3`, data: new Uint8Array(await blob.arrayBuffer()) });
       }
       if (!files.length) { notify('Belum ada part untuk di-zip.', 'error'); return; }
       const zip = makeZip(files);

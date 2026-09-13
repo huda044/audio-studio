@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import uploadsDir from '../lib/uploadsDir.js';
 import logger from '../lib/logger.js';
 import { setJobProgress, getJobProgress, deleteJobProgress } from '../lib/progressStore.js';
-import { processAudioSegmented, splitAudioIfNeeded, probeAudio } from '../services/ffmpeg.service.js';
+import { processAudioSegmented, splitAudioIfNeeded, probeAudio, OUTPUT_MIME, OUTPUT_EXT } from '../services/ffmpeg.service.js';
 import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl, cleanYouTubeTitle } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -234,7 +234,7 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
         if (result.partCount <= 4
           && part.sizeBytes <= inlineAudioLimitBytes
           && inlineBudgetUsed + part.sizeBytes <= inlineTotalLimitBytes) {
-          audioDataUrl = `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
+          audioDataUrl = `data:${OUTPUT_MIME};base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
           inlineBudgetUsed += part.sizeBytes;
         }
         parts.push({
@@ -361,7 +361,7 @@ router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), a
         if (result.partCount <= 4
           && part.sizeBytes <= inlineAudioLimitBytes
           && inlineBudgetUsed + part.sizeBytes <= inlineTotalLimitBytes) {
-          audioDataUrl = `data:audio/ogg;base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
+          audioDataUrl = `data:${OUTPUT_MIME};base64,${(await fs.readFile(path.join(uploadsDir, part.fileName))).toString('base64')}`;
           inlineBudgetUsed += part.sizeBytes;
         }
         parts.push({
@@ -420,7 +420,8 @@ function parseJobId(raw) {
 }
 router.delete('/files/:name', deleteLimit, async (req, res) => {
   const name = path.basename(String(req.params.name || ''));
-  if (!/\.ogg$/i.test(name) || name.includes('..') || name.includes('/') || name.includes('\\')) {
+  const validExt = new RegExp(`\\${OUTPUT_EXT}$`, 'i');
+  if (!validExt.test(name) || name.includes('..') || name.includes('/') || name.includes('\\')) {
     return res.status(400).json({ error: 'Nama file tidak valid.' });
   }
   const fullPath = path.join(uploadsDir, name);

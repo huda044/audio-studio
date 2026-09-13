@@ -35,7 +35,7 @@ async function fetchWithTimeout(url, { timeoutMs, signal, timeoutMessage, ...ini
   }
 }
 
-// Upload file audio + setting → kembalikan hasil konversi (beberapa part .ogg).
+// Upload file audio + setting → kembalikan hasil konversi (beberapa part .mp3).
 // Timeout + abort controller built-in untuk mencegah hang; kirim `signal` untuk
 // tombol Batal — server ikut menghentikan FFmpeg saat koneksi terputus.
 export async function processAudio({ file, settings, title, segmentSeconds, signal, jobId, onProgress }) {

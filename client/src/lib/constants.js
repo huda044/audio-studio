@@ -7,13 +7,17 @@ export const API_BASE = String(import.meta.env.VITE_API_BASE || window.location.
 
 export const MAX_AUDIO_DURATION_SECONDS = 200;
 
-// Preset konversi simpel tapi jelas. speed = kecepatan tempo audio.
+// Preset konversi. speed = kecepatan tempo (pitch TIDAK ikut naik — formant
+// dipertahankan server). Makin tinggi speed, makin banyak audio dimampatkan ke
+// tiap part, tapi artefak dengung makin terasa. Untuk hasil paling jernih di
+// Roblox, pilih speed paling rendah yang masih muat durasinya.
 export const PRESETS = [
+  { id: 'quality', label: 'Kualitas', speed: 1.0, desc: 'Paling jernih, tempo asli. Output lebih panjang → lebih banyak part.' },
   { id: 'slow', label: 'Lambat', speed: 2.1, desc: 'Lebih santai, durasi output lebih panjang.' },
   { id: 'default', label: 'Default', speed: 2.3, desc: 'Setelan seimbang, rekomendasi.' },
   { id: 'fast', label: 'Cepat', speed: 2.5, desc: 'Tempo naik, output lebih ringkas.' },
   { id: 'faster', label: 'Lebih Cepat', speed: 2.7, desc: 'Untuk audio yang ingin padat.' },
-  { id: 'ultra', label: 'Ultra', speed: 2.9, desc: 'Tempo maksimum.' }
+  { id: 'ultra', label: 'Ultra', speed: 2.9, desc: 'Tempo maksimum, paling banyak artefak.' }
 ];
 
 export const defaultSettings = {

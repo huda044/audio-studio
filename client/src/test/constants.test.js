@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { PRESETS, EQ_PRESETS, ACCEPTED_EXT, defaultSettings, MAX_AUDIO_DURATION_SECONDS } from '../lib/constants.js';
 
 describe('constants', () => {
-  it('PRESETS should have 5 entries', () => {
-    expect(PRESETS).toHaveLength(5);
-    expect(PRESETS[0].id).toBe('slow');
-    expect(PRESETS[4].id).toBe('ultra');
+  it('PRESETS should have 6 entries', () => {
+    expect(PRESETS).toHaveLength(6);
+    expect(PRESETS[0].id).toBe('quality');
+    expect(PRESETS[5].id).toBe('ultra');
   });
 
   it('EQ_PRESETS should include all presets', () => {

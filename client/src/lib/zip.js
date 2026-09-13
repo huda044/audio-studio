@@ -1,5 +1,5 @@
 // ZIP writer minimal (metode STORE, tanpa kompresi & tanpa dependency).
-// Cocok untuk file .ogg yang sudah terkompresi.
+// Cocok untuk file .mp3 yang sudah terkompresi.
 
 let CRC_TABLE = null;
 function crcTable() {

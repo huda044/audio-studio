@@ -54,9 +54,9 @@ Upload file audio dan proses dengan efek yang dikonfigurasi.
   "parts": [
     {
       "index": 1,
-      "fileName": "processed-abc123-001.ogg",
-      "audioUrl": "/api/files/processed-abc123-001.ogg",
-      "audioDataUrl": "data:audio/ogg;base64,...",
+      "fileName": "processed-abc123-001.mp3",
+      "audioUrl": "/api/files/processed-abc123-001.mp3",
+      "audioDataUrl": "data:audio/mpeg;base64,...",
       "duration": 180.5,
       "durationText": "3:00",
       "sizeBytes": 2880000
@@ -77,9 +77,9 @@ Upload file audio dan proses dengan efek yang dikonfigurasi.
   "appliedEffects": ["Tempo 2.3x", "Volume -4 dB"],
   "warnings": [],
   "output": {
-    "format": "ogg",
-    "codec": "libvorbis",
-    "bitrate": "128k"
+    "format": "mp3",
+    "codec": "libmp3lame",
+    "bitrate": "VBR ~V2"
   }
 }
 ```
@@ -405,5 +405,6 @@ CORS dikonfigurasi berdasarkan environment variable `ALLOWED_ORIGINS`. Jika tida
 
 - Audio hasil proses disimpan sementara di server (3 jam) sebelum dibersihkan otomatis
 - API key Roblox tidak pernah disimpan di server
-- Semua konversi menggunakan FFmpeg dengan libvorbis codec
-- Output format selalu OGG dengan bitrate 128k
+- Time-stretch memakai rubberband (formant dipertahankan) — fallback ke atempo bila tidak tersedia
+- Semua konversi menggunakan FFmpeg; encoder default libmp3lame (LAME)
+- Output format default MP3 (VBR ~V2, ±190 kbps, 44.1 kHz stereo) — set `AUDIO_FORMAT=ogg` untuk Vorbis 160k

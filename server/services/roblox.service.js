@@ -5,6 +5,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { clientAbortError } from './taskQueue.service.js';
+import { OUTPUT_MIME } from './ffmpeg.service.js';
 
 // Keep-alive agents: upload multi-part ke Roblox memakai satu koneksi TLS
 // berulang — menghemat handshake (~1 RTT) per part dibuat-buat ulang.
@@ -236,7 +237,7 @@ export async function uploadAudioParts({ parts, apiKey, creator, displayName, de
         form.append('request', JSON.stringify(request));
         form.append('fileContent', fs.createReadStream(part.path), {
           filename: path.basename(part.path),
-          contentType: 'audio/ogg'
+          contentType: OUTPUT_MIME
         });
         return axios.post(ASSET_URL, form, {
           headers: { ...form.getHeaders(), 'x-api-key': apiKey },

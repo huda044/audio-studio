@@ -4,7 +4,7 @@ import ffprobe from 'ffprobe-static';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import { clientAbortError } from './taskQueue.service.js';
 
@@ -30,6 +30,35 @@ try {
 const MAX_OUTPUT_SECONDS = Math.min(Math.max(Number(process.env.MAX_OUTPUT_SECONDS || 14400), 60), 21600);
 const SEGMENT_MIN = 30;
 const SEGMENT_MAX = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
+
+// Format output konversi. MP3 (libmp3lame VBR ~V2 ≈190kbps) dipilih karena:
+// 1) encoder LAME jauh lebih baik dari libvorbis ffmpeg di kualitas-dengung,
+// 2) kompatibel penuh dengan Roblox audio upload + semua pemutar.
+// Set AUDIO_FORMAT=ogg untuk kembali ke Vorbis (legacy).
+const AUDIO_FORMAT = String(process.env.AUDIO_FORMAT || 'mp3').toLowerCase() === 'ogg' ? 'ogg' : 'mp3';
+export const OUTPUT_EXT = AUDIO_FORMAT === 'ogg' ? '.ogg' : '.mp3';
+export const OUTPUT_MIME = AUDIO_FORMAT === 'ogg' ? 'audio/ogg' : 'audio/mpeg';
+
+// Pasang codec + kualitas output ke command ffmpeg sesuai AUDIO_FORMAT.
+// MP3 memakai VBR -q:a 2 (kualitas tinggi, ~190 kbps); OGG memakai libvorbis 160k.
+function applyOutputCodec(cmd) {
+  return AUDIO_FORMAT === 'ogg'
+    ? cmd.audioCodec('libvorbis').audioBitrate('160k')
+    : cmd.audioCodec('libmp3lame').outputOptions(['-q:a', '2']);
+}
+
+// Kualitas time-stretch adalah faktor terbesar "audio jadi rusak/serem" setelah
+// percepatan. Default pakai rubberband (R3 finer engine, formant dipertahankan
+// supaya vokal tidak jadi chipmunk/serak) — jauh lebih halus dari atempo bawaan.
+// Otomatis jatuh ke atempo bila binary tidak punya librubberband.
+const RUBBERBAND_OK = (() => {
+  try {
+    const out = execFileSync(ffmpegPath, ['-hide_banner', '-filters'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+    return /rubberband/.test(out);
+  } catch { return false; }
+})();
+const USE_RUBBERBAND = RUBBERBAND_OK && String(process.env.DISABLE_RUBBERBAND || '').toLowerCase() !== 'true';
+console.log(`[ffmpeg] time-stretch engine: ${USE_RUBBERBAND ? 'rubberband (high quality)' : 'atempo (fallback)'}`);
 
 function clamp(value, min, max) {
   const numeric = Number(value);
@@ -62,6 +91,15 @@ export function atempoChain(speed) {
   while (value < 0.5) { filters.push('atempo=0.5'); value /= 0.5; }
   filters.push(`atempo=${value.toFixed(4)}`);
   return filters;
+}
+
+// Chain time-stretch berkualitas. Rubberband menangani seluruh rentang speed
+// (0.5–3) dalam satu filter, jadi tidak perlu chaining seperti atempo.
+// formant=preserved menjaga karakter vokal saat dipercepat (anti-chipmunk).
+function tempoChain(speed) {
+  const value = clamp(speed, 0.5, 3);
+  if (USE_RUBBERBAND) return [`rubberband=tempo=${value.toFixed(4)}:formant=preserved`];
+  return atempoChain(value);
 }
 
 export function computeEffectiveDuration({ sourceDuration, trimStart, trimEnd, speed, maxOutputSeconds }) {
@@ -111,7 +149,7 @@ export function buildFilters(settings, sourceDuration = 0, maxOutputSeconds = MA
     filters.push(`asetrate=44100*${factor.toFixed(6)}`, 'aresample=44100');
     effects.push(`Pitch ${pitch > 0 ? '+' : ''}${pitch} semitone`);
   }
-  filters.push(...atempoChain(speed));
+  filters.push(...tempoChain(speed));
   filters.push(`volume=${amplify}dB`);
 
   const eqPresets = {
@@ -143,7 +181,7 @@ export function buildFilters(settings, sourceDuration = 0, maxOutputSeconds = MA
 function buildMinimalFilters(settings) {
   const speed = clamp(settings.speed ?? 2.3, 0.5, 3);
   const amplify = clamp(settings.amplify ?? -4, -20, 20);
-  return [...atempoChain(speed), `volume=${amplify}dB`, 'aresample=44100'];
+  return [...tempoChain(speed), `volume=${amplify}dB`, 'aresample=44100'];
 }
 
 export function probeAudio(inputPath) {
@@ -295,7 +333,7 @@ async function runFfmpegConversion({ inputPath, outputPath, filters, trimStart, 
       signal.addEventListener('abort', onAbort, { once: true });
     }
     if (trimStart > 0) cmd = cmd.seekInput(trimStart);
-    cmd.audioFilters(filters).audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100).format('ogg').outputOptions(['-vn']);
+    cmd = applyOutputCodec(cmd.audioFilters(filters).audioChannels(2).audioFrequency(44100).format(AUDIO_FORMAT).outputOptions(['-vn']));
     cmd.duration(effectiveDuration)
       .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', () => settle())
@@ -379,21 +417,22 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
 // -segment_times; kosong → perilaku lama (-segment_time berulang).
 async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress, signal, cutPoints }) {
   if (totalDuration <= segmentSeconds + 0.5) {
-    const single = path.join(outputDir, `processed-${nanoid(10)}.ogg`);
+    const single = path.join(outputDir, `processed-${nanoid(10)}${OUTPUT_EXT}`);
     await fs.copyFile(inputPath, single);
     const stat = await fs.stat(single);
     return [{ index: 1, path: single, fileName: path.basename(single), duration: round(totalDuration, 2), sizeBytes: stat.size }];
   }
   const stamp = nanoid(8);
-  const pattern = path.join(outputDir, `processed-${stamp}-%03d.ogg`);
+  const pattern = path.join(outputDir, `processed-${stamp}-%03d${OUTPUT_EXT}`);
   const cutOptions = Array.isArray(cutPoints) && cutPoints.length
     ? ['-segment_times', cutPoints.join(',')]
     : ['-segment_time', String(segmentSeconds)];
   await new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(clientAbortError());
-    const cmd = ffmpeg(inputPath)
-      .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
-      .outputOptions(['-vn', '-f', 'segment', ...cutOptions, '-reset_timestamps', '1'])
+    const cmd = applyOutputCodec(ffmpeg(inputPath)
+      .audioChannels(2).audioFrequency(44100)
+      .format(AUDIO_FORMAT)
+      .outputOptions(['-vn', '-f', 'segment', ...cutOptions, '-reset_timestamps', '1']))
       .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
       .on('end', resolve)
       .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
@@ -406,7 +445,7 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
   });
   if (signal?.aborted) throw clientAbortError();
   const files = (await fs.readdir(outputDir))
-    .filter((f) => f.startsWith(`processed-${stamp}-`) && f.endsWith('.ogg'))
+    .filter((f) => f.startsWith(`processed-${stamp}-`) && f.endsWith(OUTPUT_EXT))
     .sort();
   const parts = [];
   for (let i = 0; i < files.length; i += 1) {
@@ -424,7 +463,7 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
 // `signal` opsional: abort dari route saat client disconnect → FFmpeg dibunuh di tahap mana pun.
 export async function processAudioSegmented({ inputPath, outputDir, settings, segmentSeconds, sourceDuration = 0, onProgress, sourceProbe, signal }) {
   const segSec = clamp(segmentSeconds || 180, SEGMENT_MIN, SEGMENT_MAX);
-  const masterPath = path.join(outputDir, `master-${nanoid(10)}.ogg`);
+  const masterPath = path.join(outputDir, `master-${nanoid(10)}${OUTPUT_EXT}`);
   const emit = (pct) => { if (onProgress) onProgress(Math.max(0, Math.min(100, Math.round(pct)))); };
   try {
     if (signal?.aborted) throw clientAbortError();
@@ -475,9 +514,9 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
       effects: master.effects,
       warnings,
       source: master.source,
-      format: 'ogg',
-      codec: 'libvorbis',
-      bitrate: '128k'
+      format: AUDIO_FORMAT,
+      codec: AUDIO_FORMAT === 'ogg' ? 'libvorbis' : 'libmp3lame',
+      bitrate: AUDIO_FORMAT === 'ogg' ? '160k' : 'VBR ~V2'
     };
   } finally {
     await fs.unlink(masterPath).catch(() => {});
@@ -487,9 +526,9 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
 async function convertSegment({ inputPath, outputPath, start, duration, signal }) {
   await new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(clientAbortError());
-    const cmd = ffmpeg(inputPath).seekInput(start).duration(duration)
-      .audioCodec('libvorbis').audioBitrate('128k').audioChannels(2).audioFrequency(44100)
-      .format('ogg').outputOptions(['-vn'])
+    const cmd = applyOutputCodec(ffmpeg(inputPath).seekInput(start).duration(duration)
+      .audioChannels(2).audioFrequency(44100)
+      .format(AUDIO_FORMAT).outputOptions(['-vn']))
       .on('end', resolve)
       .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
     if (signal) signal.addEventListener('abort', () => cmd.kill('SIGKILL'), { once: true });
@@ -517,7 +556,7 @@ export async function splitAudioIfNeeded({ inputPath, uploadsDir, maxDuration = 
     if (signal?.aborted) throw clientAbortError();
     const start = i * partDuration;
     const segmentDuration = Math.min(partDuration, duration - start);
-    const outputPath = path.join(uploadsDir, `part-${i + 1}-${nanoid(8)}.ogg`);
+    const outputPath = path.join(uploadsDir, `part-${i + 1}-${nanoid(8)}${OUTPUT_EXT}`);
     await convertSegment({ inputPath, outputPath, start, duration: segmentDuration, signal });
     const partStat = await fs.stat(outputPath);
     parts.push({ path: outputPath, index: i + 1, duration: segmentDuration, sizeBytes: partStat.size });

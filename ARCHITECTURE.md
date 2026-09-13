@@ -103,7 +103,7 @@ sequenceDiagram
    - `loudnorm` (normalize)
    - `afade` (fade in/out)
    - `aresample=44100` (final sample rate)
-3. **Convert** — Run FFmpeg dengan filter chain + libvorbis codec
+3. **Convert** — Run FFmpeg dengan filter chain + encoder (default libmp3lame → MP3)
 4. **Fallback** — Jika gagal, coba tanpa efek berat, lalu minimal (tempo+volume)
 5. **Segment** — Potong output jadi parts dengan `-f segment`
 
@@ -178,10 +178,11 @@ graph LR
 - **Graceful shutdown** — Drain connections sebelum exit
 
 ### FFmpeg
-- **libvorbis 128k** — Balance quality vs size
+- **rubberband (formant preserved)** — Time-stretch berkualitas tinggi; fallback atempo
+- **libmp3lame VBR ~V2** — Encoder default (kualitas tinggi, kompatibel Roblox); `AUDIO_FORMAT=ogg` → libvorbis 160k
 - **44100 Hz** — Sample rate standar
 - **Segment filter** — Split cepat tanpa re-encode ulang
-- **Timeout** — 10 menit max per konversi (FFMPEG_TIMEOUT_MS)
+- **Timeout** — 30 menit max per konversi (FFMPEG_TIMEOUT_MS)
 
 ## Deployment
 

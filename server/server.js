@@ -103,9 +103,9 @@ app.use('/api/files', express.static(uploadsDir, {
     // yang sama untuk WaveBar, <audio>, upload blob, dan Download ZIP dari file identik.
     // Setelah file di-sweep (>3 jam), revalidasi menghasilkan 404 yang sudah ditangani client.
     res.setHeader('Cache-Control', 'no-cache');
-    if (!/\.ogg$/i.test(filePath)) {
-      res.setHeader('Content-Type', 'application/octet-stream');
-    }
+    if (/\.mp3$/i.test(filePath)) res.setHeader('Content-Type', 'audio/mpeg');
+    else if (/\.ogg$/i.test(filePath)) res.setHeader('Content-Type', 'audio/ogg');
+    else res.setHeader('Content-Type', 'application/octet-stream');
   }
 }));
 
