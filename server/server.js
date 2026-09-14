@@ -37,8 +37,8 @@ app.use((req, res, next) => {
   // script-src TANPA 'unsafe-inline': satu-satunya inline script di build Vite adalah
   // module-preload polyfill — sudah dimatikan lewat build.modulePreload.polyfill=false
   // (lihat client/vite.config.js), jadi semua script bertanda src eksternal.
-  // style-src masih butuh 'unsafe-inline' karena framer-motion menyuntikkan <style>
-  // runtime untuk keyframe/animasi.
+  // style-src masih butuh 'unsafe-inline' karena React memasang style attribute inline
+  // (progress bar, skeleton, ErrorBoundary, dsb.) — CSP memblokir style attribute tanpa itu.
   if (clientDist) {
     res.setHeader(
       'Content-Security-Policy',

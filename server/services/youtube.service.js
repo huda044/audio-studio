@@ -56,7 +56,7 @@ export function isYouTubeUrl(url) {
 // Buang bracket berisi kata kunci junk tersebut (berulang, dari belakang) supaya judul
 // — dan displayName asset Roblox — bersih. Bracket berisi info penting seperti
 // "(feat. X)" tidak ikut terbuang karena tidak mengandung kata kunci junk.
-const TITLE_JUNK_RE = /[\(\[][^)\]]*(official|video|audio|lyrics?|mv|hd|4k|8k|remaster\w*|visualizer|full\s?album\s?stream|hq|m\/v)[^)\]]*[\)\]]/gi;
+const TITLE_JUNK_RE = /[([][^)\]]*(official|video|audio|lyrics?|mv|hd|4k|8k|remaster\w*|visualizer|full\s?album\s?stream|hq|m\/v)[^)\]]*[)\]]/gi;
 export function cleanYouTubeTitle(raw) {
   const original = String(raw || '').trim();
   let title = original;

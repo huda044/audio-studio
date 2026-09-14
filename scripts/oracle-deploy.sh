@@ -15,6 +15,6 @@ echo "Deploy complete."
 echo "Health:"
 curl -fsS http://127.0.0.1:7860/health || true
 echo
-echo "YouTube runtime:"
-curl -fsS http://127.0.0.1:7860/api/youtube-runtime-status || true
+echo "Backend aktif di http://<IP-VPS>:7860 (health: /health)."
+echo "Arahkan frontend ke URL ini lewat VITE_API_BASE, atau pasang reverse proxy untuk HTTPS."
 echo

@@ -88,6 +88,68 @@ Upload file audio dan proses dengan efek yang dikonfigurasi.
 - `400`: File tidak valid atau settings tidak valid
 - `408`: Konversi melebihi batas waktu
 - `422`: Konversi FFmpeg gagal
+- `503`: Antrean konversi penuh (respons menyertakan header `Retry-After`)
+
+---
+
+#### POST /api/import-youtube
+
+Ambil audio langsung dari link YouTube (via yt-dlp, tanpa API key), lalu jalankan pipeline
+konversi yang sama dengan `/api/process`. Metadata video diambil lebih dulu supaya video live
+atau terlalu panjang ditolak sebelum bandwidth terpakai.
+
+**Request (application/json):**
+```json
+{
+  "url": "https://www.youtube.com/watch?v=...",
+  "settings": { "speed": 2.3, "amplify": -4 },
+  "segmentSeconds": 180,
+  "title": "Judul opsional",
+  "jobId": "opsional-untuk-polling-progres"
+}
+```
+
+Format link yang diterima: `youtube.com/watch?v=...`, `youtu.be/...`, `youtube.com/shorts/...`.
+
+**Response:** struktur sama dengan `/api/process` (`parts`, `appliedEffects`, `warnings`, `output`),
+ditambah `source` berisi judul asli YouTube.
+
+**Errors:**
+- `400`: URL YouTube tidak valid
+- `422`: Video live, durasi tidak terbaca, melebihi `YTDL_MAX_DURATION_SECONDS`, atau YouTube menolak request (bot-check dari IP datacenter)
+- `503`: Antrean konversi penuh
+
+---
+
+#### GET /api/progress/:jobId
+
+Persen progres konversi untuk polling dari client. Nilai disimpan sementara
+(`PROGRESS_TTL_MS`, default 15 menit) dan dihapus setelah konversi selesai.
+
+**Response (200 OK):**
+```json
+{ "percent": 42 }
+```
+
+**Errors:**
+- `404`: Progres tidak ditemukan (jobId salah, sudah selesai, atau kedaluwarsa)
+
+---
+
+#### DELETE /api/files/:name
+
+Hapus satu file hasil konversi dari server. Dipakai tombol hapus hasil di UI.
+
+**Response (200 OK):**
+```json
+{ "ok": true, "deleted": "processed-abc123-001.mp3" }
+```
+
+Bila file memang sudah tidak ada (mis. tersapu auto-cleanup 3 jam), respons tetap `200`
+dengan `alreadyGone: true` supaya client tidak perlu menangani kasus ini sebagai error.
+
+**Errors:**
+- `400`: Nama file tidak valid (bukan hasil konversi / ada karakter traversal)
 
 ---
 
@@ -299,6 +361,30 @@ Kirim chat ke AI model yang dikonfigurasi.
 
 ---
 
+#### POST /api/ai/chat/stream
+
+Sama seperti `/api/ai/chat`, tetapi jawaban dialirkan sebagai **Server-Sent Events**
+(`Content-Type: text/event-stream`) supaya teks muncul bertahap.
+
+**Request:** body identik dengan `/api/ai/chat`.
+
+**Response (200 OK)** — rangkaian event:
+```text
+data: {"content":"Untuk"}
+
+data: {"content":" mengoptimalkan"}
+
+data: {"done":true,"fullContent":"Untuk mengoptimalkan ..."}
+```
+
+Bila terjadi error setelah header terkirim, server mengirim `event: error` lalu menutup stream:
+```text
+event: error
+data: {"message":"..."}
+```
+
+---
+
 ### System
 
 #### GET /health
@@ -315,6 +401,27 @@ Health check endpoint.
   "uploads": true
 }
 ```
+
+---
+
+#### GET /metrics
+
+Metrik format **Prometheus text** (`text/plain; version=0.0.4`) untuk monitoring: total
+request per kelas status, jumlah konversi, durasi konversi, jumlah upload Roblox
+(accepted/failed), uptime, dan memori proses. Berbeda dari `/api/stats` yang mengembalikan JSON.
+
+Bila env `METRICS_TOKEN` diisi, endpoint ini **dan** `/api/stats` menuntut header
+`X-Metrics-Token: <token>` (atau `Authorization: Bearer <token>`).
+
+**Response (200 OK):**
+```text
+# HELP audio_conversions_total Total audio conversions
+# TYPE audio_conversions_total counter
+audio_conversions_total 12
+```
+
+**Errors:**
+- `401`: Token tidak ada / tidak cocok (hanya saat `METRICS_TOKEN` diisi)
 
 ---
 
@@ -355,13 +462,23 @@ Monitoring endpoint untuk observability.
 
 ## Rate Limiting
 
-Semua endpoints memiliki rate limiting:
+Hampir semua endpoint memiliki rate limiting (per IP):
 
-- `/api/process`: 30 requests per 30 menit
-- `/api/upload-roblox`: 60 requests per 30 menit
-- `/api/roblox-test`: 60 requests per 1 menit
-- `/api/asset-status`: 60 requests per 1 menit
-- `/api/stats`: 20 requests per 1 menit
+| Endpoint | Limit | Jendela |
+|---|---|---|
+| `POST /api/process` | 30 | 30 menit |
+| `POST /api/import-youtube` | 10 | 30 menit |
+| `POST /api/upload-roblox` | 60 | 30 menit |
+| `POST /api/roblox-test` | 60 | 1 menit |
+| `POST /api/asset-status` | 60 | 1 menit |
+| `DELETE /api/files/:name` | 60 | 1 menit |
+| `GET /api/stats` | 20 | 1 menit |
+| `GET /api/progress/:jobId` | 300 | 1 menit |
+| `POST /api/ai/chat`, `/api/ai/chat/stream` | 20 | 1 menit |
+
+Semua limit bisa diubah lewat env (`PROCESS_RATE_LIMIT`, `YT_IMPORT_RATE_LIMIT`,
+`UPLOAD_RATE_LIMIT`, `INFO_RATE_LIMIT`, `DELETE_RATE_LIMIT`, `STATS_RATE_LIMIT`,
+`PROGRESS_RATE_LIMIT`, `AI_RATE_LIMIT`) — lihat `server/.env.example`.
 
 Response ketika rate limit tercapai:
 ```json

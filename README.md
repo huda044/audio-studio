@@ -105,12 +105,17 @@ cd client && npm run test:coverage
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
 | `POST` | `/api/process` | Upload audio + efek → MP3 parts |
+| `POST` | `/api/import-youtube` | Ambil audio dari link YouTube (yt-dlp) |
+| `GET` | `/api/progress/:jobId` | Persen progres konversi (polling) |
+| `DELETE` | `/api/files/:name` | Hapus file hasil konversi |
 | `POST` | `/api/upload-roblox` | Upload part ke Roblox |
 | `POST` | `/api/roblox-test` | Test API key & creator |
 | `POST` | `/api/asset-status` | Cek status moderasi |
 | `GET` | `/api/ai/status` | Cek konfigurasi AI |
 | `POST` | `/api/ai/chat` | Chat dengan AI |
-| `GET` | `/api/stats` | Monitoring server |
+| `POST` | `/api/ai/chat/stream` | Chat dengan AI (streaming SSE) |
+| `GET` | `/api/stats` | Monitoring server (JSON) |
+| `GET` | `/metrics` | Metrik Prometheus |
 | `GET` | `/health` | Health check |
 
 Lihat [API.md](API.md) untuk dokumentasi lengkap.

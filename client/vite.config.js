@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 
 // Sebelumnya pakai viteSingleFile (semua JS+CSS di-inline ke index.html). Sekarang
 // dilepas agar kode bisa di-split per-chunk → initial load jauh lebih ringan, vendor
-// (React/framer-motion/lucide) di-cache terpisah 1 tahun oleh browser, dan pages bisa
+// (React/lucide) di-cache terpisah 1 tahun oleh browser, dan pages bisa
 // di-lazy-load. Express static handler di server sudah melayani multi-file dengan benar.
 export default defineConfig({
   plugins: [react()],

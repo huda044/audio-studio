@@ -36,13 +36,17 @@ graph TB
 
 ### Client (Frontend)
 
-**Stack:** React 18, Vite, Framer Motion, TailwindCSS
+**Stack:** React 18, Vite, lucide-react (ikon), CSS biasa (`src/styles.css`) — tanpa Tailwind/framer-motion
 
 **Structure:**
-- `App.jsx` — Root component dengan Context Provider
-- `pages/` — Page-level components (Dashboard, ConvertPage, dll)
-- `components/` — Reusable UI components
-- `lib/` — Utility functions (api, storage, format, utils)
+- `main.jsx` — Bootstrap React ke `#root` + registrasi service worker (PWA)
+- `App.jsx` — Root component, Context Provider, routing antar halaman, banner kesehatan backend
+- `pages/` — Halaman (Dashboard, ConvertPage, LibraryPage, HistoryPage, SettingsPage)
+- `components/` — Komponen UI reusable (`ui.jsx`, Hero, Skeleton)
+- `lib/` — Helper murni: `api.js` (fetch + retry/timeout), `storage.js`, `jobsPersist.js`,
+  `format.js`, `utils.js`, `zip.js` (ZIP writer tanpa dependency), `doneChime.js`, `constants.js`
+- `ErrorBoundary.jsx` — Graceful error handling di level React
+- `test/` — Unit test Vitest (31 test) untuk helper murni
 
 **State Management:**
 - React Context API untuk global state
@@ -50,20 +54,22 @@ graph TB
 - No external state library (Context + hooks cukup untuk skala ini)
 
 **Key Design Decisions:**
-- Lazy loading pages berat (ConvertPage ~22KB) untuk initial load cepat
-- IntersectionObserver untuk active section detection (efficient)
+- Lazy loading pages berat (chunk ConvertPage ~30KB) untuk initial load cepat
+- Navigasi antar seksi memakai `scrollIntoView` (smooth) dari nav — tanpa scroll-spy observer
 - API key Roblox di-obfuscate sederhana di localStorage (defense-in-depth)
 - ErrorBoundary untuk graceful error handling
 
 ### Server (Backend)
 
-**Stack:** Express, FFmpeg, Multer, Axios
+**Stack:** Express, FFmpeg (`fluent-ffmpeg` + `ffmpeg-static`), Multer, Axios, yt-dlp (opsional)
 
 **Structure:**
-- `server.js` — Entry point, middleware setup, graceful shutdown
-- `routes/` — API endpoints (audio, ai)
-- `services/` — Business logic (ffmpeg, roblox, ai, taskQueue)
-- `middleware/` — Rate limiting, security headers
+- `server.js` — Entry point, middleware, security headers, auto-cleanup, graceful shutdown
+- `routes/` — API endpoints (`audio.routes.js`, `ai.routes.js`)
+- `services/` — Business logic (`ffmpeg`, `roblox`, `youtube`, `ai`, `taskQueue`)
+- `lib/` — `logger.js`, `progressStore.js` (persen progres), `uploadsDir.js`
+- `middleware/` — `rateLimit.js`, `observability.js` (request log, metrik, token guard)
+- `test/` — Unit + integration test Vitest (92 test)
 
 **Request Flow:**
 ```mermaid
@@ -96,7 +102,7 @@ sequenceDiagram
 1. **Probe** — Baca metadata sumber (duration, codec, streams)
 2. **Build Filters** — Susun FFmpeg audio filter chain:
    - `asetrate` + `aresample` (pitch shift)
-   - `atempo` chain (speed change, chained untuk >2x)
+   - `rubberband` (speed change berkualitas, formant dipertahankan; fallback `atempo` bila binary tidak mendukung)
    - `volume` (amplify/attenuate)
    - `equalizer` (EQ presets, bass boost)
    - `aecho` (reverb, echo)
