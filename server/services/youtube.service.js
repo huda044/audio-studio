@@ -152,10 +152,20 @@ function baseArgs({ ffmpegDir, socketTimeoutS }) {
     '--no-warnings',
     '--no-progress',
     `--socket-timeout=${socketTimeoutS}`,
-    '--retries', '2'
+    '--retries', '3',
+    // Retry di level fragmen: koneksi yang putus di tengah unduhan panjang
+    // (penyebab umum "gagal" di tengah jalan) tidak membatalkan seluruh proses.
+    '--fragment-retries', '5'
   ];
   if (ffmpegDir && fs.existsSync(ffmpegDir)) args.push(`--ffmpeg-location=${ffmpegDir}`);
   return args;
+}
+
+// Jumlah fragmen yang diunduh paralel. yt-dlp default 1 → unduhan audio DASH
+// (banyak fragmen kecil) jadi lambat. 8 aman untuk koneksi rumah; bisa diubah
+// lewat YTDL_CONCURRENT_FRAGMENTS.
+function concurrentFragments() {
+  return Math.min(Math.max(Number(process.env.YTDL_CONCURRENT_FRAGMENTS || 8), 1), 16);
 }
 
 // Ambil metadata (judul, durasi, live?) TANPA mengunduh — untuk validasi cepat
@@ -220,6 +230,7 @@ export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutM
       ...baseArgs({ ffmpegDir: ffmpegDirForMeta(), socketTimeoutS: DEFAULT_SOCKET_TIMEOUT_S }),
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
       '--no-part',
+      `--concurrent-fragments=${concurrentFragments()}`,
       '-o', `${outputBase}.%(ext)s`
     ];
     if (attempts[i]) args.push('--extractor-args', attempts[i]);

@@ -412,9 +412,36 @@ async function processFull({ inputPath, outputPath, settings, sourceDuration = 0
   };
 }
 
+// Menjalankan pemotongan dengan mode tertentu: 'copy' (stream copy, tanpa
+// decode/encode) atau 'encode' (re-encode penuh).
+function runSegmentOnce({ inputPath, pattern, cutOptions, mode, onProgress, signal }) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(clientAbortError());
+    const segmentOptions = ['-vn', '-f', 'segment', ...cutOptions, '-reset_timestamps', '1'];
+    let cmd = ffmpeg(inputPath);
+    cmd = mode === 'copy'
+      ? cmd.outputOptions([...segmentOptions, '-c', 'copy', '-segment_format', AUDIO_FORMAT])
+      : applyOutputCodec(cmd.audioChannels(2).audioFrequency(44100)
+        .format(AUDIO_FORMAT).outputOptions(segmentOptions));
+    cmd
+      .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
+      .on('end', resolve)
+      .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
+    if (signal) signal.addEventListener('abort', () => cmd.kill('SIGKILL'), { once: true });
+    cmd.save(pattern);
+  });
+}
+
 // Potong file (sudah berisi efek) menjadi beberapa part berdurasi segmentSeconds.
 // `cutPoints` opsional (smart split): daftar detik eksplisit → dipakai lewat
 // -segment_times; kosong → perilaku lama (-segment_time berulang).
+//
+// Mode default = STREAM COPY: source sudah berformat final, jadi memotongnya tidak
+// perlu decode+encode lagi (dulu di-encode ulang → membuang sekitar setengah waktu
+// konversi untuk file panjang, dan menambah generasi artefak). Potongan copy jatuh
+// di batas frame (MP3 ±26 ms) — tidak terasa, dan kualitasnya justru lebih baik.
+// Bila copy gagal (mis. format tidak mendukung pemotongan copy), otomatis fallback
+// ke re-encode seperti perilaku lama.
 async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration, onProgress, signal, cutPoints }) {
   if (totalDuration <= segmentSeconds + 0.5) {
     const single = path.join(outputDir, `processed-${nanoid(10)}${OUTPUT_EXT}`);
@@ -427,22 +454,21 @@ async function segmentFile({ inputPath, outputDir, segmentSeconds, totalDuration
   const cutOptions = Array.isArray(cutPoints) && cutPoints.length
     ? ['-segment_times', cutPoints.join(',')]
     : ['-segment_time', String(segmentSeconds)];
-  await new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(clientAbortError());
-    const cmd = applyOutputCodec(ffmpeg(inputPath)
-      .audioChannels(2).audioFrequency(44100)
-      .format(AUDIO_FORMAT)
-      .outputOptions(['-vn', '-f', 'segment', ...cutOptions, '-reset_timestamps', '1']))
-      .on('progress', (p) => { if (onProgress && Number.isFinite(p?.percent)) onProgress(Math.max(0, Math.min(100, p.percent))); })
-      .on('end', resolve)
-      .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
-    let onAbort = null;
-    if (signal) {
-      onAbort = () => cmd.kill('SIGKILL');
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-    cmd.save(pattern);
-  });
+  const discardPartial = async () => {
+    const partials = (await fs.readdir(outputDir).catch(() => []))
+      .filter((f) => f.startsWith(`processed-${stamp}-`) && f.endsWith(OUTPUT_EXT));
+    await Promise.all(partials.map((f) => fs.unlink(path.join(outputDir, f)).catch(() => {})));
+  };
+
+  try {
+    await runSegmentOnce({ inputPath, pattern, cutOptions, mode: 'copy', onProgress, signal });
+  } catch (error) {
+    if (signal?.aborted || error.code === 'client_abort') throw clientAbortError();
+    // Buang potongan yang mungkin sudah tertulis sebelum fallback, supaya daftar
+    // part tidak bercampur hasil dua percobaan.
+    await discardPartial();
+    await runSegmentOnce({ inputPath, pattern, cutOptions, mode: 'encode', onProgress, signal });
+  }
   if (signal?.aborted) throw clientAbortError();
   const files = (await fs.readdir(outputDir))
     .filter((f) => f.startsWith(`processed-${stamp}-`) && f.endsWith(OUTPUT_EXT))
@@ -523,17 +549,30 @@ export async function processAudioSegmented({ inputPath, outputDir, settings, se
   }
 }
 
+// Potong satu bagian dari file yang sudah berformat final (dipakai saat part masih
+// melebihi limit Roblox). Sama seperti segmentFile: coba stream copy dulu (cepat,
+// tanpa generasi artefak baru), fallback ke re-encode bila copy tidak didukung.
 async function convertSegment({ inputPath, outputPath, start, duration, signal }) {
-  await new Promise((resolve, reject) => {
+  const runOnce = (mode) => new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(clientAbortError());
-    const cmd = applyOutputCodec(ffmpeg(inputPath).seekInput(start).duration(duration)
-      .audioChannels(2).audioFrequency(44100)
-      .format(AUDIO_FORMAT).outputOptions(['-vn']))
+    let cmd = ffmpeg(inputPath).seekInput(start).duration(duration).outputOptions(['-vn']);
+    cmd = mode === 'copy'
+      ? cmd.outputOptions(['-c', 'copy', '-f', AUDIO_FORMAT])
+      : applyOutputCodec(cmd.audioChannels(2).audioFrequency(44100).format(AUDIO_FORMAT));
+    cmd
       .on('end', resolve)
       .on('error', (error) => reject(signal?.aborted ? clientAbortError() : error));
     if (signal) signal.addEventListener('abort', () => cmd.kill('SIGKILL'), { once: true });
     cmd.save(outputPath);
   });
+
+  try {
+    await runOnce('copy');
+  } catch (error) {
+    if (signal?.aborted || error.code === 'client_abort') throw clientAbortError();
+    await fs.unlink(outputPath).catch(() => {});
+    await runOnce('encode');
+  }
 }
 
 // Dipakai saat upload Roblox untuk jaga-jaga jika part masih melebihi limit Roblox.
