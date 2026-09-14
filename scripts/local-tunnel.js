@@ -14,7 +14,7 @@
 // - URL trycloudflare berubah tiap restart; karena itu --update-vercel wajib
 //   dijalankan ulang setiap kali backend dinyalakan.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -23,7 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const UPDATE_VERCEL = process.argv.includes('--update-vercel');
 const PORT = process.env.PORT || 4000;
-const TUNNEL_RETRIES = Math.max(1, Number(process.env.TUNNEL_RETRIES || 4));
+const TUNNEL_RETRIES = Math.max(1, Number(process.env.TUNNEL_RETRIES || 6));
 const CLIENT_DIR = path.join(rootDir, 'client');
 const CLOUDFLARED = path.join(rootDir, 'tools', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
 
@@ -105,21 +105,35 @@ function tryTunnelOnce(attempt) {
   });
 }
 
-// Verifikasi URL benar-benar melayani /health. Routing tunnel butuh beberapa detik,
-// dan saat Cloudflare lambat bisa lebih lama — kita beri ~60 detik + catat statusnya.
+// Verifikasi URL benar-benar melayani /health.
+// PENTING — jeda awal 10 detik: record DNS hostname quick-tunnel baru butuh
+// beberapa detik untuk tayang. Poll terlalu cepat justru men-cache NXDOMAIN
+// (negative cache) di resolver Windows/ISP, lalu SEMUA poll berikutnya gagal
+// ENOTFOUND padahal tunnel-nya sehat — inilah penyebab kegagalan beruntun
+// sebelumnya. Kalau ENOTFOUND tetap beruntun, flush DNS lokal sekali (Windows).
 async function verifyTunnelHealth(url) {
   let lastStatus = '?';
-  for (let i = 0; i < 24; i += 1) {
+  let lastCause = '';
+  let flushed = false;
+  process.stdout.write('   menunggu DNS hostname baru tayang (±10 detik)...');
+  await sleep(10000);
+  for (let i = 0; i < 40; i += 1) {
     try {
       const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(8000), redirect: 'follow' });
       lastStatus = String(res.status);
+      lastCause = '';
       if (res.ok) {
         try { const j = await res.json(); if (j && j.ok) return true; } catch { /* status 200 sudah cukup */ return true; }
       }
     } catch (e) {
       lastStatus = e.name === 'TimeoutError' ? 'timeout' : 'err';
+      lastCause = e.cause?.code || e.cause?.message || e.message || '';
+      if (/ENOTFOUND|EAI_AGAIN/.test(lastCause) && !flushed && i >= 3 && process.platform === 'win32') {
+        flushed = true;
+        try { spawnSync('ipconfig', ['/flushdns'], { stdio: 'ignore', windowsHide: true }); } catch { /* ignore */ }
+      }
     }
-    process.stdout.write(`\r   menunggu routing tunnel… [${i + 1}/24] status=${lastStatus}   `);
+    process.stdout.write(`\r   menunggu routing tunnel… [${i + 1}/40] status=${lastStatus}${lastCause ? ` (${lastCause.slice(0, 40)})` : ''}   `);
     await sleep(2500);
   }
   process.stdout.write('\n');
@@ -196,8 +210,10 @@ async function main() {
   }
 
   if (!workingUrl) {
-    console.error('✗ Semua percobaan quick tunnel gagal (kemungkinan koneksi Cloudflare sementara bermasalah).');
-    console.error('  Backend lokal tetap jalan di http://127.0.0.1:' + PORT + ' — jalankan ulang skrip untuk tunnel.');
+    console.error('✗ Semua percobaan quick tunnel gagal (kemungkinan koneksi/DNS Cloudflare sementara bermasalah).');
+    console.error('  Backend lokal tetap jalan di http://127.0.0.1:' + PORT + ' — TUTUP jendela ini lalu');
+    console.error('  jalankan ulang JALANKAN-BACKEND.bat (biasanya langsung berhasil saat jaringan pulih).');
+    console.error('  Bila terus gagal dengan status=err (ENOTFOUND): coba ganti DNS Windows ke 1.1.1.1 / 8.8.8.8.');
     return shutdown(1);
   }
 
