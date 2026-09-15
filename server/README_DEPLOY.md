@@ -20,6 +20,15 @@ sendiri lewat `CLIENT_DIST`).
 JALANKAN-BACKEND.bat
 ```
 
+Kalau import YouTube mulai sering gagal, kemungkinan besar extractor-nya yang usang — jalankan:
+
+```bat
+PERBARUI-YT-DLP.bat
+```
+
+Skrip ini mengunduh yt-dlp terbaru dari GitHub (resmi), mem-backup yang lama sebagai
+`yt-dlp.exe.bak-<versi>` di `server/bin/`, lalu pulih otomatis bila unduhan gagal.
+
 Skrip `scripts/local-tunnel.js` akan:
 
 1. Menyalakan backend di `http://127.0.0.1:4000`.
