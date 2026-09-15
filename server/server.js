@@ -150,12 +150,18 @@ if (clientDist) {
       }
     }
   }));
-  app.get('*', (_req, res, next) => {
+  // Catch-all SPA: semua rute non-API mengembalikan index.html.
+  // Express 5 menuntut wildcard bernama ('/*splat'); pola lama '*' menimbulkan
+  // PathError saat boot, dan '/*splat' saja TIDAK mencocokkan root '/' (terbukti
+  // 404 pada uji pertama) — karena itu rute '/' didaftarkan eksplisit di bawah.
+  const sendSpa = (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(clientDist, 'index.html'), (error) => {
       if (error) next(error);
     });
-  });
+  };
+  app.get('/', sendSpa);
+  app.get('/*splat', sendSpa);
 }
 
 app.use((err, _req, res, _next) => {
@@ -177,21 +183,53 @@ app.use((err, _req, res, _next) => {
   res.status(status).json(body);
 });
 
-const cleanupTimer = setInterval(async () => {
-  const maxAgeMs = 1000 * 60 * 60 * 3;
+// Sweep file sementara di uploads/. Tiga kelas file menumpuk di sini:
+//   1. upload mentah user (nama hex multer, tanpa ekstensi)
+//   2. sumber YouTube hasil unduhan (yt-*.mp4) — dihapus di finally route, tapi
+//      tetap tertinggal bila proses mati paksa di tengah jalan
+//   3. master-* (file kerja internal sebelum dipotong jadi part)
+// Semuanya cukup dihapus berdasarkan umur. Dijalankan SEKALI SAAT BOOT lalu berkala:
+// tanpa sapuan saat boot, file yang tertinggal dari sesi sebelumnya (mis. .bat
+// ditutup di tengah konversi) menumpuk tanpa batas — pernah kejadian 1.2 GB.
+const UPLOAD_TTL_MS = Math.max(60 * 1000, Number(process.env.UPLOAD_TTL_MS || 1000 * 60 * 60 * 3));
+const CLEANUP_INTERVAL_MS = Math.max(60 * 1000, Number(process.env.CLEANUP_INTERVAL_MS || 1000 * 60 * 10));
+
+async function sweepUploads(reason = 'berkala') {
   const now = Date.now();
+  let removed = 0;
+  let freedBytes = 0;
   try {
     const files = await fs.readdir(uploadsDir);
     await Promise.all(files.map(async (file) => {
       if (file === '.gitkeep') return;
       const fullPath = path.join(uploadsDir, file);
-      const stat = await fs.stat(fullPath);
-      if (now - stat.mtimeMs > maxAgeMs) await fs.unlink(fullPath);
+      try {
+        const stat = await fs.stat(fullPath);
+        if (now - stat.mtimeMs > UPLOAD_TTL_MS) {
+          await fs.unlink(fullPath);
+          removed += 1;
+          freedBytes += stat.size;
+        }
+      } catch (error) {
+        // File bisa hilang di antara readdir & stat (race dengan request lain) — abaikan.
+        if (error.code !== 'ENOENT') throw error;
+      }
     }));
+    // Catat hanya bila ada yang dibersihkan, supaya log tidak banjir tiap 10 menit.
+    if (removed) {
+      logger.info('sweep uploads', {
+        reason,
+        removed,
+        freedMb: Math.round(freedBytes / 1024 / 1024)
+      });
+    }
   } catch (error) {
-    logger.error('cleanup failed', { error: error.message });
+    logger.error('cleanup failed', { reason, error: error.message });
   }
-}, 1000 * 60 * 30);
+}
+
+sweepUploads('saat boot');
+const cleanupTimer = setInterval(() => sweepUploads(), CLEANUP_INTERVAL_MS);
 cleanupTimer.unref?.();
 
 const server = app.listen(port, () => {
@@ -238,11 +276,16 @@ function shutdown(signal) {
   shuttingDown = true;
   logger.info('shutdown received', { signal });
   clearInterval(cleanupTimer);
-  // Beri waktu singkat bagi request in-flight sebelum menutup socket.
-  server.close((err) => {
-    if (err) logger.error('shutdown close error', { error: err.message });
-    else logger.info('shutdown clean');
-    process.exit(err ? 1 : 0);
+  // Sapu file kerja yang tersisa saat mati normal (Ctrl+C di jendela .bat). File
+  // ber-umur pendek ini (master-*, sumber yt-*, upload mentah) tidak berguna setelah
+  // proses berhenti, dan menumpuk bila tiap sesi meninggalkan sisa.
+  sweepUploads('saat shutdown').finally(() => {
+    // Beri waktu singkat bagi request in-flight sebelum menutup socket.
+    server.close((err) => {
+      if (err) logger.error('shutdown close error', { error: err.message });
+      else logger.info('shutdown clean');
+      process.exit(err ? 1 : 0);
+    });
   });
   // Hard stop bila setelah batas waktu masih ada koneksi nge-hang.
   setTimeout(() => {

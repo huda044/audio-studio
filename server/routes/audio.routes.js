@@ -79,6 +79,20 @@ const upload = multer({
   }
 });
 
+// Bungkus multer: file ditulis ke disk SEBELUM handler kita jalan, jadi bila multer
+// menolak (format salah, melebihi limit) atau client memutus koneksi di tengah upload,
+// file setengah jadi itu akan tertinggal di uploads/ tanpa pemilik — dulu menumpuk
+// diam-diam sampai ratusan MB per file. Di sini file yang gagal selalu dihapus.
+function uploadSingle(field) {
+  const middleware = upload.single(field);
+  return (req, res, next) => {
+    middleware(req, res, (error) => {
+      if (!error) return next();
+      removeQuiet(req.file?.path).finally(() => next(error));
+    });
+  };
+}
+
 // Tolak request SEBELUM multer menyentuh body — tanpa ini file (sampai 250 MB) sudah
 // ter-stream ke disk dulu, baru ditolak 503 oleh queue. Praktisnya user di koneksi
 // lambat membuang bandwidth & waktu untuk hasil yang pasti ditampik.
@@ -209,7 +223,7 @@ router.get('/progress/:jobId', progressLimit, (req, res) => {
 });
 
 // POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
-router.post('/process', processLimit, diskGuard, queueGate(conversionQueue), upload.single('audio'), async (req, res, next) => {
+router.post('/process', processLimit, diskGuard, queueGate(conversionQueue), uploadSingle('audio'), async (req, res, next) => {
   // Bila client memutus koneksi (tab ditutup / tombol Batal): task yang masih mengantri
   // dibuang dan proses FFmpeg yang sedang jalan dibunuh, supaya slot queue (concurrency 2)
   // tidak terbuang mengerjakan hasil yang tidak akan pernah terkirim.
@@ -547,7 +561,7 @@ router.get('/stats', statsLimit, internalEndpointGuard, (_req, res) => {
 });
 
 // POST /api/upload-roblox — terima audio hasil proses + API key (sekali pakai), upload ke Roblox.
-router.post('/upload-roblox', uploadLimit, queueGate(robloxQueue), upload.single('audio'), async (req, res, next) => {
+router.post('/upload-roblox', uploadLimit, queueGate(robloxQueue), uploadSingle('audio'), async (req, res, next) => {
   let splitParts = [];
   // Sama seperti /process: batal otomatis saat client memutus koneksi —
   // upload axios ke Roblox & polling moderasi ikut di-abort lewat signal.
