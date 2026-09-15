@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -247,11 +247,14 @@ export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutM
 
     try {
       await runYtDlp(args, { timeoutMs: effectiveTimeout, signal });
-      const produced = fs.readdirSync(downloadsDir).find((f) => f.startsWith(path.basename(outputBase)) && !f.endsWith('.part'));
+      const produced = findProducedFile(downloadsDir, outputBase);
       if (!produced) throw new Error('Download selesai tetapi file audio tidak ditemukan.');
-      return path.join(downloadsDir, produced);
+      return produced;
     } catch (error) {
       lastError = error;
+      // Buang sisa file percobaan yang gagal: tanpa ini, file setengah jadi
+      // menumpuk di uploads/ DAN percobaan berikutnya bisa menemukan file lama.
+      removeAttemptFiles(downloadsDir, outputBase);
       // Abort: jangan dicoba ulang.
       if (error.code === 'client_abort' || signal?.aborted) throw error;
       // Percobaan terakhir: lempar apa adanya (pesan sudah dipetakan).
@@ -259,4 +262,78 @@ export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutM
     }
   }
   throw lastError || new Error('Gagal mengambil audio dari YouTube.');
+}
+
+// Cari file hasil unduhan berdasarkan prefix output yt-dlp.
+// .part dikecualikan: itu file yang masih ditulis (hanya muncul bila --no-part dilepas).
+function findProducedFile(downloadsDir, outputBase) {
+  const base = path.basename(outputBase);
+  const name = fs.readdirSync(downloadsDir)
+    .find((f) => f.startsWith(base) && !f.endsWith('.part'));
+  return name ? path.join(downloadsDir, name) : '';
+}
+
+// Hapus semua artefak satu percobaan unduhan (file jadi maupun .part).
+function removeAttemptFiles(downloadsDir, outputBase) {
+  const base = path.basename(outputBase);
+  try {
+    for (const f of fs.readdirSync(downloadsDir)) {
+      if (!f.startsWith(base)) continue;
+      try { fs.unlinkSync(path.join(downloadsDir, f)); } catch { /* abaikan */ }
+    }
+  } catch { /* abaikan */ }
+}
+
+// Verifikasi integritas hasil unduhan SEBELUM dipakai konversi.
+//
+// Kenapa perlu: kita memakai --no-part, jadi unduhan yang terputus di tengah
+// meninggalkan file dengan NAMA FINAL yang isinya tidak lengkap. ffprobe tetap
+// melaporkan durasinya (mis. lagu 5 menit yang putus di detik 8 terbaca "8 detik")
+// sehingga file rusak LOLOS ke pipeline dan user menerima potongan lagu tanpa
+// pesan error apa pun. Di sini durasi nyata dibandingkan dengan durasi yang
+// dilaporkan YouTube: selisih >15% dianggap unduhan tidak lengkap → picu retry.
+export function assertDownloadComplete(filePath, expectedDuration, tolerance = 0.15) {
+  const expected = Number(expectedDuration) || 0;
+  if (!expected) return { ok: true, actual: 0, expected: 0 };
+  let actual = 0;
+  try {
+    actual = probeDurationSync(filePath);
+  } catch {
+    actual = 0;
+  }
+  if (!actual) {
+    return { ok: false, actual: 0, expected, reason: 'Durasi file hasil unduhan tidak terbaca (file kemungkinan rusak).' };
+  }
+  // Toleransi 15%: yt-dlp kadang memotong trailing silence, dan kontainer
+  // melaporkan durasi sedikit berbeda dari metadata YouTube.
+  const minimum = expected * (1 - tolerance);
+  if (actual < minimum) {
+    return {
+      ok: false,
+      actual,
+      expected,
+      reason: `Unduhan tidak lengkap: hanya ${Math.round(actual)} detik dari ${Math.round(expected)} detik.`
+    };
+  }
+  return { ok: true, actual, expected };
+}
+
+// Baca durasi via ffprobe sinkron (dipakai di jalur verifikasi unduhan).
+function probeDurationSync(filePath) {
+  const probePath = resolveFfprobePath();
+  const out = execFileSync(probePath, [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    filePath
+  ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  return Number(String(out).trim()) || 0;
+}
+
+function resolveFfprobePath() {
+  try {
+    return require('ffprobe-static').path;
+  } catch {
+    return 'ffprobe';
+  }
 }

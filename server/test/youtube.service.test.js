@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { isYouTubeUrl, mapYtError, cleanYouTubeTitle } from '../services/youtube.service.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { isYouTubeUrl, mapYtError, cleanYouTubeTitle, assertDownloadComplete } from '../services/youtube.service.js';
 
 describe('isYouTubeUrl', () => {
   it('menerima format link YouTube yang umum', () => {
@@ -81,5 +85,52 @@ describe('cleanYouTubeTitle — pangkas junk bracket dari judul', () => {
   it('judul isinya junk semua → kembalikan original, jangan kosong', () => {
     expect(cleanYouTubeTitle('(Official Video)')).toBe('(Official Video)');
     expect(cleanYouTubeTitle('')).toBe('');
+  });
+});
+
+// Cek integritas unduhan: file yang terputus harus tertangkap. Tanpa ini, lagu
+// terpotong lolos ke konversi dan user menerima lagu pendek tanpa pesan error.
+describe('assertDownloadComplete — deteksi unduhan tidak lengkap', () => {
+  let dir = '';
+  let utuh = '';
+  let terpotong = '';
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ytdl-integ-'));
+    const ffmpeg = require('ffmpeg-static');
+    // 20 detik audio utuh, lalu versi 5 detik yang meniru unduhan terputus.
+    execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+      '-i', 'sine=frequency=440:duration=20', '-ar', '44100', '-ac', '2',
+      path.join(dir, 'utuh.mp3')], { timeout: 60000 });
+    execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', path.join(dir, 'utuh.mp3'),
+      '-t', '5', '-c', 'copy', path.join(dir, 'terpotong.mp3')], { timeout: 60000 });
+    utuh = path.join(dir, 'utuh.mp3');
+    terpotong = path.join(dir, 'terpotong.mp3');
+  });
+
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('menerima file yang lengkap', () => {
+    const hasil = assertDownloadComplete(utuh, 20);
+    expect(hasil.ok).toBe(true);
+    expect(hasil.actual).toBeGreaterThan(18);
+  });
+
+  it('menolak file terpotong (kasus yang dulu lolos diam-diam)', () => {
+    const hasil = assertDownloadComplete(terpotong, 20);
+    expect(hasil.ok).toBe(false);
+    expect(hasil.reason).toContain('tidak lengkap');
+  });
+
+  it('memberi toleransi wajar terhadap selisih kecil durasi', () => {
+    // Kontainer sering melaporkan durasi sedikit berbeda dari metadata YouTube.
+    expect(assertDownloadComplete(utuh, 22).ok).toBe(true);
+  });
+
+  it('tidak memblokir bila durasi harapan tidak diketahui', () => {
+    expect(assertDownloadComplete(utuh, 0).ok).toBe(true);
+    expect(assertDownloadComplete(utuh, undefined).ok).toBe(true);
   });
 });

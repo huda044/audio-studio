@@ -7,7 +7,7 @@ import uploadsDir from '../lib/uploadsDir.js';
 import logger from '../lib/logger.js';
 import { setJobProgress, getJobProgress, deleteJobProgress } from '../lib/progressStore.js';
 import { processAudioSegmented, splitAudioIfNeeded, probeAudio, OUTPUT_MIME, OUTPUT_EXT } from '../services/ffmpeg.service.js';
-import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl, cleanYouTubeTitle } from '../services/youtube.service.js';
+import { fetchYouTubeMeta, downloadYouTubeAudio, isYouTubeUrl, cleanYouTubeTitle, assertDownloadComplete } from '../services/youtube.service.js';
 import { uploadAudioParts, checkAssetStatus } from '../services/roblox.service.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { createTaskQueue } from '../services/taskQueue.service.js';
@@ -367,10 +367,39 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
         throw error;
       });
 
+      // Verifikasi integritas: unduhan yang terputus meninggalkan file dengan nama
+      // final yang isinya tidak lengkap, dan ffprobe tetap melaporkan durasi pendek
+      // tanpa error — tanpa cek ini user menerima potongan lagu seolah berhasil.
+      // Bila terbukti tidak lengkap, unduh ULANG otomatis (sekali) sebelum menyerah:
+      // gangguan koneksi bersifat sementara, jadi percobaan kedua umumnya berhasil.
+      const downloadWarnings = [];
+      let integrity = assertDownloadComplete(downloadedPath, meta.duration);
+      if (!integrity.ok) {
+        logger.warn('unduhan youtube tidak lengkap — mengulang', {
+          requestId: req.requestId, url, harapan: integrity.expected, nyata: integrity.actual
+        });
+        await fs.unlink(downloadedPath).catch(() => {});
+        downloadedPath = '';
+        try {
+          downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal });
+          integrity = assertDownloadComplete(downloadedPath, meta.duration);
+        } catch (retryError) {
+          if (retryError.code === 'client_abort') throw retryError;
+          integrity = { ok: false, reason: retryError.message, actual: 0, expected: meta.duration || 0 };
+        }
+        if (!integrity.ok) {
+          const error = new Error(`${integrity.reason} Sudah dicoba dua kali; kemungkinan koneksi ke YouTube sedang tidak stabil. Coba beberapa menit lagi atau pakai upload file.`);
+          error.status = 422;
+          throw error;
+        }
+        downloadWarnings.push('Unduhan pertama tidak lengkap, percobaan kedua berhasil.');
+      }
+
       const settings = parseSettings(req.body?.settings);
       const segmentSeconds = cleanNumber(req.body?.segmentSeconds ?? 180, 180, 30, robloxAudioMaxDuration);
       const title = String(req.body?.title || cleanYouTubeTitle(meta.title) || 'YouTube Audio').trim().slice(0, 180);
       const warnings = [`Sumber: YouTube (${meta.title})`];
+      warnings.push(...downloadWarnings);
 
       let sourceProbe = null;
       let sourceDuration = 0;
