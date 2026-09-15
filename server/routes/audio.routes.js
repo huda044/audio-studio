@@ -18,11 +18,17 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 250);
-const inlineAudioLimitBytes = Number(process.env.INLINE_AUDIO_LIMIT_MB || 8) * 1024 * 1024;
-// Batas TOTAL semua part yang di-inline sebagai base64 dalam SATU respons. Tanpa ini,
-// 4 part × 8 MB ≈ 43 MB JSON string di memori per request — berbahaya saat concurrency 2
-// di container gratisan (HF) yang RAM-nya kecil.
-const inlineTotalLimitBytes = Number(process.env.INLINE_AUDIO_TOTAL_LIMIT_MB || 16) * 1024 * 1024;
+// Audio hasil konversi bisa dikirim dua cara ke client:
+//   1. audioUrl  → client mengambil file lewat /api/files/<name> (HEMAT, andal)
+//   2. base64 inline di dalam JSON respons (boros: +33% ukuran, dan respons besar
+//      rawan terputus di tengah lewat tunnel/proxy — gejalanya "Failed to fetch")
+// Default kini 0 = base64 dimatikan sepenuhnya; client memakai audioUrl. Ini
+// menghilangkan kelas kegagalan "konversi selesai tapi browser gagal menerima hasil".
+// Set angka >0 untuk mengaktifkan kembali inline bagi file kecil (mis. pemakaian
+// offline/PWA yang butuh data tertanam).
+const inlineTotalLimitBytes = Math.max(0, Number(process.env.INLINE_AUDIO_TOTAL_LIMIT_MB ?? 0)) * 1024 * 1024;
+// Batas per-part hanya relevan bila total budget di atas > 0.
+const inlineAudioLimitBytes = Math.max(0, Number(process.env.INLINE_AUDIO_LIMIT_MB ?? 0)) * 1024 * 1024;
 const robloxAudioMaxDuration = Number(process.env.ROBLOX_AUDIO_MAX_DURATION_SECONDS || 420);
 const robloxAudioMaxBytes = Number(process.env.ROBLOX_AUDIO_MAX_BYTES || 19 * 1024 * 1024);
 const appMaxDurationSeconds = Math.min(Math.max(Number(process.env.APP_MAX_DURATION_SECONDS || 200), 30), 14400);
