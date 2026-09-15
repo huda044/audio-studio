@@ -29,6 +29,17 @@ describe('mapYtError — pesan error YouTube dalam bahasa Indonesia', () => {
     expect(msg).toContain('memblokir akses dari server');
   });
 
+  it('memisahkan gangguan jaringan dari blokir bot (tidak boleh tertukar)', () => {
+    // "unable to download" dulu masuk bucket blokir-bot dan menyesatkan diagnosa.
+    const network = mapYtError('ERROR: unable to download video data: HTTP Error 500');
+    expect(network).toContain('terputus di tengah proses');
+    expect(network).not.toContain('memblokir');
+    expect(mapYtError('Connection reset by peer')).toContain('terputus di tengah proses');
+    expect(mapYtError('socket timed out')).toContain('terputus di tengah proses');
+    // Blokir bot tetap terdeteksi sebagai blokir bot.
+    expect(mapYtError('ERROR: Sign in to confirm you are not a bot')).toContain('memblokir');
+  });
+
   it('mendeteksi video privat, member-only, dan dihapus', () => {
     expect(mapYtError('Private video. Sign in')).toContain('privat');
     expect(mapYtError('Join this channel to get members-only access')).toContain('member');

@@ -70,11 +70,20 @@ export function cleanYouTubeTitle(raw) {
 }
 
 // Petakan stderr yt-dlp ke pesan Indonesia yang bisa dipahami user + saran solusi.
+// URUTAN PENTING: gangguan jaringan dicek DULU — kalau tidak, error koneksi biasa
+// ("unable to download") ikut terlanjur dilabeli "diblokir bot" dan menyesatkan
+// diagnosa (saran yang benar berbeda: ini coba lagi, bukan tunggu blokir lewat).
 export function mapYtError(stderr = '') {
   const text = String(stderr).toLowerCase();
+  if (text.includes('unable to download') || text.includes('connection reset')
+    || text.includes('connection refused') || text.includes('timed out') || text.includes('timeout')
+    || text.includes('temporary failure') || text.includes('incomplete read')
+    || text.includes('read error') || text.includes('failed to resolve')) {
+    return 'Koneksi ke YouTube terputus di tengah proses (gangguan jaringan), bukan blokir. Coba lagi — unduhan sekarang otomatis mencoba ulang fragmen yang gagal.';
+  }
   if (text.includes('sign in to confirm') || text.includes('not a bot')
-    || text.includes('http error 403') || text.includes('unable to download')
-    || text.includes('nsig extraction') || text.includes('request was blocked')) {
+    || text.includes('http error 403') || text.includes('nsig extraction')
+    || text.includes('request was blocked')) {
     return 'YouTube memblokir akses dari server (verifikasi bot). Ini terjadi berkala pada server gratis — coba lagi beberapa menit, atau gunakan upload file.';
   }
   if (text.includes('members-only') || text.includes('members only')) {

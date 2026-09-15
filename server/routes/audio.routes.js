@@ -101,6 +101,33 @@ function cleanNumber(value, fallback, min, max) {
   return Math.min(Math.max(numeric, min), max);
 }
 
+// Guard disk penuh: kegagalan ENOSPC saat menulis upload/output muncul sebagai
+// error konversi yang samar dan sulit didiagnosis. Lebih baik tolak sejak awal
+// dengan pesan yang jelas — SEBELUM file besar di-stream ke disk.
+// 0 = matikan pengecekan. Bila statfs tidak didukung, jangan pernah memblokir.
+const minFreeSpaceBytes = Math.max(0, Number(process.env.MIN_FREE_SPACE_MB === undefined ? 1024 : process.env.MIN_FREE_SPACE_MB)) * 1024 * 1024;
+
+async function freeDiskBytes() {
+  try {
+    const stats = await fs.statfs(uploadsDir);
+    return Number(stats.bsize || 0) * Number(stats.bavail || 0);
+  } catch {
+    return Infinity;
+  }
+}
+
+async function diskGuard(_req, _res, next) {
+  if (!minFreeSpaceBytes) return next();
+  const free = await freeDiskBytes();
+  if (free < minFreeSpaceBytes) {
+    const error = new Error(`Ruang disk server hampir habis (${Math.round(free / 1024 / 1024)} MB tersisa, minimum ${Math.round(minFreeSpaceBytes / 1024 / 1024)} MB). Bersihkan disk lalu coba lagi.`);
+    error.status = 503;
+    error.retryAfter = 120;
+    return next(error);
+  }
+  next();
+}
+
 export function parseSettings(raw = '{}') {
   let parsed;
   try {
@@ -182,7 +209,7 @@ router.get('/progress/:jobId', progressLimit, (req, res) => {
 });
 
 // POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
-router.post('/process', processLimit, queueGate(conversionQueue), upload.single('audio'), async (req, res, next) => {
+router.post('/process', processLimit, diskGuard, queueGate(conversionQueue), upload.single('audio'), async (req, res, next) => {
   // Bila client memutus koneksi (tab ditutup / tombol Batal): task yang masih mengantri
   // dibuang dan proses FFmpeg yang sedang jalan dibunuh, supaya slot queue (concurrency 2)
   // tidak terbuang mengerjakan hasil yang tidak akan pernah terkirim.
@@ -279,7 +306,7 @@ router.post('/process', processLimit, queueGate(conversionQueue), upload.single(
 // POST /api/import-youtube — ambil audio dari link YouTube (yt-dlp, gratis),
 // lalu alirkan ke pipeline konversi yang sama dengan /api/process.
 // Body JSON: { url, settings?, segmentSeconds?, title? }
-router.post('/import-youtube', youtubeImportLimit, queueGate(conversionQueue), async (req, res, next) => {
+router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversionQueue), async (req, res, next) => {
   // Body JSON kecil — jadi boleh lewat queueGate dulu (tidak ada upload besar yang sia-sia).
   const abortController = new AbortController();
   res.on('close', () => { if (!res.writableEnded) abortController.abort(); });

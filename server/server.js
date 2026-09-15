@@ -6,10 +6,12 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import audioRoutes from './routes/audio.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import uploadsDir from './lib/uploadsDir.js';
 import logger from './lib/logger.js';
+import { resolveYtDlpPath } from './services/youtube.service.js';
 import { requestLogger, metricsEndpoint, internalEndpointGuard } from './middleware/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -194,6 +196,37 @@ cleanupTimer.unref?.();
 
 const server = app.listen(port, () => {
   logger.info('server started', { port, mode: 'upload-only', uploadsDir: Boolean(uploadsDir) });
+});
+
+// Tahan crash satu-error: backend ini berjalan tanpa process manager (jendela .bat),
+// jadi satu promise yang gagal atau error async tak terduga TIDAK boleh mematikan
+// seluruh server — itu membuat seluruh situs mati sampai user sadar dan menjalankan
+// ulang .bat. Trade-off yang disengaja: proses tetap hidup, errornya dicatat penuh
+// di jendela .bat supaya bisa didiagnosis.
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled rejection (server tetap hidup)', {
+    error: reason?.message || String(reason),
+    stack: reason?.stack?.split('\n').slice(0, 4).join(' | ')
+  });
+});
+process.on('uncaughtException', (error) => {
+  logger.error('uncaught exception (server tetap hidup)', {
+    error: error?.message,
+    stack: error?.stack?.split('\n').slice(0, 4).join(' | ')
+  });
+});
+
+// Versi yt-dlp tercatat saat boot: binary yang tua adalah penyebab gagal import
+// YouTube yang paling umum (extractor YouTube berubah terus) — dengan ini
+// keusangannya langsung terlihat di jendela .bat, tidak perlu menduga-duga.
+execFile(resolveYtDlpPath(), ['--version'], { timeout: 15000, windowsHide: true }, (error, stdout) => {
+  if (error) {
+    logger.warn('yt-dlp tidak ditemukan — fitur import YouTube nonaktif', {
+      hint: 'letakkan binary di server/bin/yt-dlp.exe atau set env YTDL_PATH'
+    });
+  } else {
+    logger.info('yt-dlp siap', { version: String(stdout).trim(), path: resolveYtDlpPath() });
+  }
 });
 
 // Graceful shutdown: berhenti menerima koneksi baru, beri waktu drain queue, lalu tutup.
