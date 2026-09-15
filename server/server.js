@@ -208,7 +208,13 @@ async function sweepUploads(reason = 'berkala') {
       const fullPath = path.join(uploadsDir, file);
       try {
         const stat = await fs.stat(fullPath);
-        if (now - stat.mtimeMs > UPLOAD_TTL_MS) {
+        // File kerja internal (master-* dan sumber yt-*) TIDAK berguna begitu prosesnya
+        // berhenti — konversi yang terputus (koneksi putus, .bat ditutup) meninggalkan
+        // file ini tanpa pemilik. Saat boot, semuanya pasti yatim, jadi disapu tanpa
+        // menunggu TTL; saat berkala, ambang yang lebih pendek dari TTL juga cukup.
+        const isWorkFile = /^(master-|yt-)/.test(file);
+        const maxAge = isWorkFile && reason === 'saat boot' ? 0 : UPLOAD_TTL_MS;
+        if (now - stat.mtimeMs > maxAge) {
           await fs.unlink(fullPath);
           removed += 1;
           freedBytes += stat.size;
