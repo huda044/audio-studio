@@ -179,6 +179,9 @@ app.use((err, _req, res, _next) => {
   if (status >= 500) logger.error('server error', { requestId: _req.requestId, error: err.message, stack: err.stack });
 
   const body = { error: message, status, requestId: _req.requestId };
+  // Kode terstruktur ikut dikirim bila ada (mis. youtube_blocked) supaya client bisa
+  // bereaksi berbeda — menawarkan jalur upload file, bukan sekadar menampilkan teks.
+  if (typeof err.code === 'string' && err.code) body.code = err.code;
   if (err.details && (status < 500 || process.env.EXPOSE_ERROR_DETAILS === 'true')) body.details = err.details;
   res.status(status).json(body);
 });

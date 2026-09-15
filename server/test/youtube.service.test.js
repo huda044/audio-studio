@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isYouTubeUrl, mapYtError, cleanYouTubeTitle, assertDownloadComplete } from '../services/youtube.service.js';
+import { isYouTubeUrl, mapYtError, cleanYouTubeTitle, assertDownloadComplete, parseDownloadPercent, classifyYtError, YT_ERROR_KINDS } from '../services/youtube.service.js';
 
 describe('isYouTubeUrl', () => {
   it('menerima format link YouTube yang umum', () => {
@@ -28,20 +28,21 @@ describe('isYouTubeUrl', () => {
 });
 
 describe('mapYtError — pesan error YouTube dalam bahasa Indonesia', () => {
-  it('mendeteksi blokir bot', () => {
+  it('mendeteksi blokir bot dan menyarankan jalur upload file', () => {
     const msg = mapYtError('ERROR: Sign in to confirm you are not a bot');
-    expect(msg).toContain('memblokir akses dari server');
+    expect(msg).toContain('verifikasi bot');
+    expect(msg).toContain('Dari File'); // saran konkret, bukan sekadar "coba lagi"
   });
 
   it('memisahkan gangguan jaringan dari blokir bot (tidak boleh tertukar)', () => {
     // "unable to download" dulu masuk bucket blokir-bot dan menyesatkan diagnosa.
     const network = mapYtError('ERROR: unable to download video data: HTTP Error 500');
     expect(network).toContain('terputus di tengah proses');
-    expect(network).not.toContain('memblokir');
+    expect(network).not.toContain('verifikasi bot');
     expect(mapYtError('Connection reset by peer')).toContain('terputus di tengah proses');
     expect(mapYtError('socket timed out')).toContain('terputus di tengah proses');
     // Blokir bot tetap terdeteksi sebagai blokir bot.
-    expect(mapYtError('ERROR: Sign in to confirm you are not a bot')).toContain('memblokir');
+    expect(mapYtError('ERROR: Sign in to confirm you are not a bot')).toContain('verifikasi bot');
   });
 
   it('mendeteksi video privat, member-only, dan dihapus', () => {
@@ -132,5 +133,49 @@ describe('assertDownloadComplete — deteksi unduhan tidak lengkap', () => {
   it('tidak memblokir bila durasi harapan tidak diketahui', () => {
     expect(assertDownloadComplete(utuh, 0).ok).toBe(true);
     expect(assertDownloadComplete(utuh, undefined).ok).toBe(true);
+  });
+});
+
+// Parser persen unduhan: sumber data bilah progres tahap unduh. yt-dlp mencetak
+// baris progres ke stdout, jadi parser harus tahan terhadap variasi format.
+describe('parseDownloadPercent — persen unduhan dari yt-dlp', () => {
+  it('membaca baris progres normal', () => {
+    expect(parseDownloadPercent('[download]  42.3% of ~4.20MiB at 1.20MiB/s ETA 00:03')).toBe(42);
+    expect(parseDownloadPercent('[download] 100% of 4.20MiB in 00:05')).toBe(100);
+    expect(parseDownloadPercent('[download]   7.8% of 1.00MiB')).toBe(8);
+  });
+
+  it('mengembalikan null untuk baris yang bukan progres', () => {
+    expect(parseDownloadPercent('[info] Downloading 1 format(s)')).toBeNull();
+    expect(parseDownloadPercent('')).toBeNull();
+    expect(parseDownloadPercent(undefined)).toBeNull();
+  });
+
+  it('menjepit nilai di luar 0-100', () => {
+    expect(parseDownloadPercent('[download] 150% of x')).toBe(100);
+  });
+});
+
+// Classifier: kode terstruktur inilah yang membuat UI bisa menawarkan tombol
+// "pakai upload file" saat YouTube menahan, bukan sekadar menampilkan teks error.
+describe('classifyYtError — kode error terstruktur', () => {
+  it('menandai blokir bot', () => {
+    expect(classifyYtError('Sign in to confirm you are not a bot')).toBe(YT_ERROR_KINDS.BLOCKED);
+    expect(classifyYtError('HTTP Error 403: Forbidden')).toBe(YT_ERROR_KINDS.BLOCKED);
+  });
+
+  it('menandai gangguan jaringan', () => {
+    expect(classifyYtError('unable to download video data')).toBe(YT_ERROR_KINDS.NETWORK);
+    expect(classifyYtError('Connection reset by peer')).toBe(YT_ERROR_KINDS.NETWORK);
+  });
+
+  it('menandai video yang tidak bisa diambil', () => {
+    expect(classifyYtError('Private video')).toBe(YT_ERROR_KINDS.UNAVAILABLE);
+    expect(classifyYtError('Video unavailable')).toBe(YT_ERROR_KINDS.UNAVAILABLE);
+  });
+
+  it('jatuh ke unknown bila tidak dikenali', () => {
+    expect(classifyYtError('sesuatu yang aneh')).toBe(YT_ERROR_KINDS.UNKNOWN);
+    expect(classifyYtError('')).toBe(YT_ERROR_KINDS.UNKNOWN);
   });
 });

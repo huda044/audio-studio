@@ -21,6 +21,9 @@ export function cleanRobloxId(value) {
 
 export function apiError(data, fallback) {
   const error = new Error(data?.error || fallback);
+  // Kode terstruktur dari server (mis. youtube_blocked) supaya UI bisa bereaksi
+  // berbeda — menawarkan jalur upload file, bukan sekadar menampilkan teks.
+  if (typeof data?.code === 'string' && data.code) error.code = data.code;
   error.details = Array.isArray(data?.details)
     ? data.details.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5)
     : [];

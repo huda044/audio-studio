@@ -144,11 +144,12 @@ export default function ConvertPage() {
   function update(patch) { setSettings((s) => ({ ...s, ...patch })); }
 
   // Polling progres konversi: server menyimpan persen ffmpeg asli per jobId.
+  // `onPercent` menerima objek { percent, stage, stagePercent }.
   function startProgressPolling(jobId, onPercent) {
     const timer = setInterval(async () => {
       try {
-        const pct = await fetchProgress(jobId);
-        if (pct !== null) onPercent(pct);
+        const info = await fetchProgress(jobId);
+        if (info !== null) onPercent(info);
       } catch { /* polling gagal sekali bukan masalah */ }
     }, 2000);
     return () => clearInterval(timer);
@@ -188,10 +189,27 @@ export default function ConvertPage() {
   function updateJob(id, patch) { setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...patch } : j))); }
   function setJobPart(id, index, val) { setJobs((js) => js.map((j) => (j.id === id ? { ...j, partStatus: { ...j.partStatus, [index]: val } } : j))); }
 
+  // Terima file dari input/drag. Memberi umpan balik eksplisit: berapa yang masuk,
+  // mana yang ditolak dan kenapa — sebelumnya file yang tidak didukung hilang diam-diam
+  // sehingga user mengira drag-nya gagal.
   function addFiles(list) {
-    const accepted = Array.from(list || []).filter((f) => ACCEPT_RE.test(f.name) || (f.type || '').startsWith('audio'));
-    if (!accepted.length) { notify('Pilih file audio yang didukung (mp3, wav, ogg, m4a, aac, flac).', 'error'); return; }
+    const all = Array.from(list || []);
+    const accepted = all.filter((f) => ACCEPT_RE.test(f.name) || (f.type || '').startsWith('audio'));
+    const rejected = all.filter((f) => !accepted.includes(f));
+    const kosong = accepted.filter((f) => !f.size);
+
+    if (!accepted.length) {
+      const contoh = rejected.slice(0, 3).map((f) => f.name).join(', ');
+      notify(`Tidak ada file audio yang didukung${contoh ? ` (ditolak: ${contoh})` : ''}. Format: mp3, wav, ogg, m4a, aac, flac.`, 'error');
+      return;
+    }
+
     setJobs((js) => [...js, ...accepted.map(newJob)]);
+
+    const bagian = [`${accepted.length} file ditambahkan ke daftar.`];
+    if (kosong.length) bagian.push(`${kosong.length} file kosong akan dilewati saat konversi.`);
+    if (rejected.length) bagian.push(`${rejected.length} file bukan audio dilewati: ${rejected.slice(0, 3).map((f) => f.name).join(', ')}${rejected.length > 3 ? ', …' : ''}`);
+    notify(bagian.join(' '), rejected.length || kosong.length ? 'info' : 'success');
   }
   function removeJob(id) { setJobs((js) => js.filter((j) => j.id !== id)); }
 
@@ -209,40 +227,57 @@ export default function ConvertPage() {
     try {
       let okCount = 0;
       let failCount = 0;
-      for (const job of pendingJobs) {
-        updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'convert', message: 'Memproses & memotong audio...' }, error: '' });
-        const jobId = uid('job');
-        const stopPolling = startProgressPolling(jobId, (pct) => updateJob(job.id, { progress: { percent: pct, stage: 'convert', message: 'Memproses & memotong audio...' } }));
-        try {
-          const result = await processAudio({
-            file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds,
-            signal: controller.signal, jobId
-          });
-          okCount += 1;
-          updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
-          (result.warnings || []).forEach((w) => notify(`${job.title}: ${w}`, 'info'));
-        } catch (e) {
-          // Dibatalkan user: kembalikan job ini ke antrian dan hentikan sisa loop.
-          if (e.name === 'AbortError' || controller.signal.aborted) {
-            updateJob(job.id, { status: 'queued', progress: { percent: 0, stage: '', message: '' }, error: '' });
-            break;
+      // Dikirim dalam batch kecil yang berjalan paralel, bukan satu per satu:
+      // server punya antrean sendiri (CONVERSION_CONCURRENCY = 4), jadi batch membuat
+      // 4 lagu diproses sekaligus. Batas batch menjaga agar antrean server
+      // (CONVERSION_QUEUE_LIMIT = 20) tidak penuh — kalau penuh, sisanya ditolak 503.
+      const KIRIM_BERSAMAAN = 4;
+      const hasil = [];
+      for (let i = 0; i < pendingJobs.length; i += KIRIM_BERSAMAAN) {
+        if (controller.signal.aborted) break;
+        const batch = pendingJobs.slice(i, i + KIRIM_BERSAMAAN);
+        const hasilBatch = await Promise.all(batch.map(async (job) => {
+          updateJob(job.id, { status: 'converting', progress: { percent: 0, stage: 'convert', message: 'Memproses & memotong audio...' }, error: '' });
+          const jobId = uid('job');
+          const stopPolling = startProgressPolling(jobId, (info) => updateJob(job.id, { progress: { percent: info.percent, stage: 'convert', message: 'Memproses & memotong audio...' } }));
+          try {
+            const result = await processAudio({
+              file: job.file, settings, title: job.title || job.file.name, segmentSeconds: settings.segmentSeconds,
+              signal: controller.signal, jobId
+            });
+            updateJob(job.id, { status: 'done', processed: result, progress: { percent: 100, stage: '', message: '' } });
+            (result.warnings || []).forEach((w) => notify(`${job.title}: ${w}`, 'info'));
+            return { ok: true };
+          } catch (e) {
+            // Dibatalkan user: kembalikan job ini ke antrean.
+            if (e.name === 'AbortError' || controller.signal.aborted) {
+              updateJob(job.id, { status: 'queued', progress: { percent: 0, stage: '', message: '' }, error: '' });
+              return { ok: false, cancelled: true };
+            }
+            const msg = formatApiError(e);
+            updateJob(job.id, { status: 'error', error: msg });
+            notify(`${job.title}: ${msg}`, 'error');
+            return { ok: false };
+          } finally {
+            stopPolling();
           }
-          failCount += 1;
-          const msg = formatApiError(e);
-          updateJob(job.id, { status: 'error', error: msg });
-          notify(`${job.title}: ${msg}`, 'error');
-        } finally {
-          stopPolling();
-        }
+        }));
+        hasil.push(...hasilBatch);
       }
+
+      for (const r of hasil) {
+        if (r.ok) okCount += 1;
+        else if (!r.cancelled) failCount += 1;
+      }
+      const sisa = pendingJobs.length - hasil.length;
       const cancelled = controller.signal.aborted;
-      if (cancelled) notify('Konversi dibatalkan. File yang belum diproses kembali mengantre.', 'info');
+      if (cancelled) notify(`Konversi dibatalkan${sisa > 0 ? ` (${sisa} file belum diproses, kembali mengantre)` : ''}.`, 'info');
       else if (failCount) {
         playDoneChime(); flashTabTitle(`⚠ ${failCount} gagal`);
         notify(`Konversi selesai: ${okCount} berhasil, ${failCount} gagal.`, okCount ? 'info' : 'error');
       } else {
         playDoneChime(); flashTabTitle('✓ Konversi selesai');
-        notify('Semua konversi selesai.', 'success');
+        notify(`${okCount} lagu selesai dikonversi.`, 'success');
       }
     } finally {
       convertAbortRef.current = null;
@@ -265,7 +300,20 @@ export default function ConvertPage() {
       processed: null, partStatus: {}, error: ''
     }]);
     const jobId = uid('job');
-    const stopPolling = startProgressPolling(jobId, (pct) => updateJob(tempId, { progress: { percent: pct, stage: 'convert', message: 'Mengonversi audio...' } }));
+    // Progres dua tahap dari server: unduh (dengan persen nyata dari yt-dlp) lalu
+    // konversi. Sebelumnya keduanya tampil sebagai satu angka sehingga bilah tampak
+    // "mundur" saat tahap berganti dan user mengira prosesnya bermasalah.
+    const stopPolling = startProgressPolling(jobId, (info) => {
+      const isDownload = info.stage === 'download';
+      const percent = isDownload && info.stagePercent !== null ? info.stagePercent : info.percent;
+      updateJob(tempId, {
+        progress: {
+          percent,
+          stage: isDownload ? 'download' : 'convert',
+          message: isDownload ? 'Mengunduh audio dari YouTube...' : 'Mengonversi & memotong audio...'
+        }
+      });
+    });
     try {
       const result = await importYouTube({
         url, settings, segmentSeconds: settings.segmentSeconds, signal: controller.signal, jobId
@@ -284,7 +332,11 @@ export default function ConvertPage() {
         notify('Import YouTube dibatalkan.', 'info');
       } else {
         const msg = formatApiError(e);
-        updateJob(tempId, { status: 'error', error: msg });
+        // YouTube menahan permintaan dari server ini: bukan kerusakan, dan jalur
+        // yang pasti berhasil adalah upload file. Karena itu job ditandai agar UI
+        // menampilkan tombol pintas ke tab "Dari File" — bukan sekadar pesan error.
+        const blocked = e.code === 'youtube_blocked';
+        updateJob(tempId, { status: 'error', error: msg, blocked });
         notify(msg, 'error');
       }
     } finally {
@@ -748,7 +800,21 @@ export default function ConvertPage() {
                       <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>Lagu panjang butuh waktu lebih lama di server gratis. Kamu bisa membatalkan kapan saja — menutup tab juga menghentikan proses di server.</p>
                     </div>
                   )}
-                  {job.status === 'error' && <p className="small" style={{ color: 'var(--bad)' }}>{job.error}</p>}
+                  {job.status === 'error' && (
+                    <div>
+                      <p className="small" style={{ color: 'var(--bad)' }}>{job.error}</p>
+                      {job.blocked && (
+                        <button
+                          type="button"
+                          className="btn ghost sm"
+                          style={{ marginTop: 8 }}
+                          onClick={() => { setSourceMode('file'); notify('Pilih file audio untuk diupload — jalur ini tidak pernah diblokir.'); }}
+                        >
+                          <UploadCloud size={13} /> Pakai upload file saja
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {job.status === 'done' && renderParts(job)}
                 </div>
               ))}

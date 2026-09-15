@@ -65,7 +65,14 @@ export async function fetchProgress(jobId, signal) {
   });
   if (!res.ok) return null;
   const data = await res.json().catch(() => ({}));
-  return Number.isFinite(data.percent) ? data.percent : null;
+  if (!Number.isFinite(data.percent)) return null;
+  // Tahap (unduh/konversi) hanya ada pada import YouTube. Bentuk balikan tetap
+  // objek agar pemanggil bisa memakai stage/stagePercent bila tersedia.
+  return {
+    percent: data.percent,
+    stage: typeof data.stage === 'string' ? data.stage : '',
+    stagePercent: Number.isFinite(data.stagePercent) ? data.stagePercent : null
+  };
 }
 
 // Cek kesehatan backend (GET /health, tanpa parse JSON berat).

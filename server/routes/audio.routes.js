@@ -215,11 +215,13 @@ export function resolveApiKey(body = {}) {
   return String(body.apiKey || '').trim();
 }
 
-// GET /api/progress/:jobId — persen konversi 0-100 untuk polling client.
+// GET /api/progress/:jobId — progres konversi untuk polling client.
+// Mengembalikan { percent, stage?, stagePercent? }. `stage` membedakan tahap
+// unduh vs konversi pada import YouTube supaya bilah progres tidak "mundur".
 router.get('/progress/:jobId', progressLimit, (req, res) => {
-  const percent = getJobProgress(req.params.jobId);
-  if (percent === null) return res.status(404).json({ error: 'Progres tidak ditemukan.' });
-  return res.json({ percent });
+  const progress = getJobProgress(req.params.jobId);
+  if (progress === null) return res.status(404).json({ error: 'Progres tidak ditemukan.' });
+  return res.json(progress);
 });
 
 // POST /api/process — terima file audio + setting, proses penuh lalu potong jadi beberapa part.
@@ -362,7 +364,12 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
         throw error;
       }
 
-      downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal }).catch((error) => {
+      // Tahap unduh: persen nyata dari yt-dlp (0-45% dari total), ditandai
+      // stage='download' agar UI bisa menampilkan "Mengunduh 62%".
+      const reportDownload = ytJobId
+        ? (pct) => setJobProgress(ytJobId, pct * 0.45, { stage: 'download', stagePercent: pct })
+        : undefined;
+      downloadedPath = await downloadYouTubeAudio(url, uploadsDir, { signal: abortController.signal, onProgress: reportDownload }).catch((error) => {
         if (error.code !== 'client_abort' && error.stderr) logger.warn('youtube download gagal', { requestId: req.requestId, url, stderr: error.stderr.slice(-600) });
         throw error;
       });
@@ -410,6 +417,11 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
         warnings.push(`Durasi sumber tidak terbaca sempurna: ${error.message}`);
       }
 
+      // Tahap konversi: sisa rentang 45-100% dari total, ditandai stage='convert'.
+      const reportConvert = ytJobId
+        ? (pct) => setJobProgress(ytJobId, 45 + pct * 0.55, { stage: 'convert', stagePercent: pct })
+        : undefined;
+
       const result = await processAudioSegmented({
         inputPath: downloadedPath,
         outputDir: uploadsDir,
@@ -418,7 +430,7 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
         sourceDuration,
         sourceProbe,
         signal: abortController.signal,
-        onProgress: ytJobId ? (pct) => setJobProgress(ytJobId, pct) : undefined
+        onProgress: reportConvert
       });
       trackConversion(result.totalDuration);
       warnings.push(...(result.warnings || []));

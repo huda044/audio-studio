@@ -69,6 +69,38 @@ export function cleanYouTubeTitle(raw) {
   return title || original;
 }
 
+// Klasifikasi jenis kegagalan YouTube. Dipakai route untuk mengirim kode
+// terstruktur ke client, sehingga UI bisa bereaksi (mis. menawarkan tombol
+// "pakai upload file" saat YouTube membatasi) alih-alih hanya menampilkan teks.
+export const YT_ERROR_KINDS = {
+  BLOCKED: 'youtube_blocked',
+  NETWORK: 'youtube_network',
+  UNAVAILABLE: 'youtube_unavailable',
+  UNKNOWN: 'youtube_unknown'
+};
+
+export function classifyYtError(stderr = '') {
+  const text = String(stderr).toLowerCase();
+  if (text.includes('unable to download') || text.includes('connection reset')
+    || text.includes('connection refused') || text.includes('timed out') || text.includes('timeout')
+    || text.includes('temporary failure') || text.includes('incomplete read')
+    || text.includes('read error') || text.includes('failed to resolve')) {
+    return YT_ERROR_KINDS.NETWORK;
+  }
+  if (text.includes('sign in to confirm') || text.includes('not a bot')
+    || text.includes('http error 403') || text.includes('nsig extraction')
+    || text.includes('request was blocked')) {
+    return YT_ERROR_KINDS.BLOCKED;
+  }
+  if (text.includes('members-only') || text.includes('members only') || text.includes('private video')
+    || text.includes('confirm your age') || text.includes('age-restricted')
+    || text.includes('video unavailable') || text.includes('has been removed')
+    || text.includes('removed by the uploader') || text.includes('copyright')) {
+    return YT_ERROR_KINDS.UNAVAILABLE;
+  }
+  return YT_ERROR_KINDS.UNKNOWN;
+}
+
 // Petakan stderr yt-dlp ke pesan Indonesia yang bisa dipahami user + saran solusi.
 // URUTAN PENTING: gangguan jaringan dicek DULU — kalau tidak, error koneksi biasa
 // ("unable to download") ikut terlanjur dilabeli "diblokir bot" dan menyesatkan
@@ -84,7 +116,7 @@ export function mapYtError(stderr = '') {
   if (text.includes('sign in to confirm') || text.includes('not a bot')
     || text.includes('http error 403') || text.includes('nsig extraction')
     || text.includes('request was blocked')) {
-    return 'YouTube memblokir akses dari server (verifikasi bot). Ini terjadi berkala pada server gratis — coba lagi beberapa menit, atau gunakan upload file.';
+    return 'YouTube sedang menahan permintaan dari server ini (verifikasi bot) — sifatnya sementara, bukan kerusakan. Tunggu 5-10 menit lalu coba lagi, atau langsung pakai tab "Dari File" (unduh lagunya manual, lalu upload) yang tidak pernah diblokir.';
   }
   if (text.includes('members-only') || text.includes('members only')) {
     return 'Video ini khusus member channel — tidak bisa diambil.';
@@ -116,7 +148,20 @@ export function mapYtError(stderr = '') {
   return 'Gagal mengambil audio dari YouTube. Coba lagi atau gunakan upload file.';
 }
 
-function runYtDlp(args, { timeoutMs, signal } = {}) {
+// yt-dlp mencetak baris progres ke stdout seperti:
+//   [download]  42.3% of ~4.20MiB at  1.20MiB/s ETA 00:03
+// Kita pakai ini untuk melaporkan persen unduhan nyata ke client — tanpa itu,
+// tahap unduh hanya tampak sebagai spinner tanpa kabar selama puluhan detik.
+const DOWNLOAD_PROGRESS_RE = /\[download\]\s+(\d{1,3}(?:\.\d+)?)%/;
+
+export function parseDownloadPercent(line) {
+  const match = String(line || '').match(DOWNLOAD_PROGRESS_RE);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
+}
+
+function runYtDlp(args, { timeoutMs, signal, onProgress } = {}) {
   return new Promise((resolve, reject) => {
     const bin = resolveYtDlpPath();
     const child = spawn(bin, args, { signal, windowsHide: true });
@@ -124,7 +169,20 @@ function runYtDlp(args, { timeoutMs, signal } = {}) {
     let stderr = '';
     let settled = false;
     const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } if (!settled) { settled = true; clearTimeout(timer); const err = new Error('Pengambilan audio dari YouTube melewati batas waktu server.'); err.status = 422; reject(err); } }, timeoutMs);
-    child.stdout.on('data', (d) => { stdout += d; });
+    let lastReported = -1;
+    child.stdout.on('data', (d) => {
+      const text = String(d);
+      stdout += text;
+      // Baris progres dipisah agar persen terbaca walau beberapa baris datang sekaligus.
+      if (onProgress) {
+        for (const line of text.split(/\r?\n|\r/)) {
+          const percent = parseDownloadPercent(line);
+          if (percent === null || percent === lastReported) continue;
+          lastReported = percent;
+          onProgress(percent);
+        }
+      }
+    });
     child.stderr.on('data', (d) => { stderr += d; });
     let onAbort = null;
     if (signal) {
@@ -141,6 +199,7 @@ function runYtDlp(args, { timeoutMs, signal } = {}) {
       if (code === 0) return resolve(stdout);
       const error = new Error(mapYtError(stderr));
       error.status = 422; // error yt-dlp = permintaan user yang ditolak, bukan kegagalan server
+      error.code = classifyYtError(stderr); // kode terstruktur → client bisa bereaksi
       error.stderr = String(stderr).slice(-4000);
       reject(error);
     });
@@ -155,17 +214,25 @@ function mapToError(spawnError, stderr) {
   return error;
 }
 
-function baseArgs({ ffmpegDir, socketTimeoutS }) {
+// `reportProgress` = biarkan yt-dlp mencetak baris progres (dipakai tahap unduhan
+// supaya client dapat persen nyata; dimatikan untuk metadata agar output JSON bersih).
+function baseArgs({ ffmpegDir, socketTimeoutS, reportProgress = false }) {
   const args = [
     '--no-playlist',
     '--no-warnings',
-    '--no-progress',
     `--socket-timeout=${socketTimeoutS}`,
     '--retries', '3',
     // Retry di level fragmen: koneksi yang putus di tengah unduhan panjang
     // (penyebab umum "gagal" di tengah jalan) tidak membatalkan seluruh proses.
     '--fragment-retries', '5'
   ];
+  if (reportProgress) {
+    // Baris progres per-pembaruan (bukan satu baris panjang yang ditimpa) supaya
+    // mudah diparse; --newline memisahkan tiap pembaruan dengan baris baru.
+    args.push('--newline', '--progress');
+  } else {
+    args.push('--no-progress');
+  }
   if (ffmpegDir && fs.existsSync(ffmpegDir)) args.push(`--ffmpeg-location=${ffmpegDir}`);
   return args;
 }
@@ -227,7 +294,7 @@ function ffmpegDirForMeta() {
 
 // Unduh audio kualitas terbaik ke downloadsDir. Kembalikan path file hasil.
 // Dua percobaan: client default → android,ios (mengatasi blokir bot YouTube).
-export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutMs } = {}) {
+export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutMs, onProgress } = {}) {
   const effectiveTimeout = Math.max(30000, Number(timeoutMs || process.env.YTDL_TIMEOUT_MS || DEFAULT_TIMEOUT_MS));
   const attempts = PLAYER_CLIENT_ATTEMPTS;
   let lastError = null;
@@ -236,7 +303,7 @@ export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutM
     if (signal?.aborted) throw clientAbortError('Import YouTube dibatalkan.');
     const outputBase = path.join(downloadsDir, `yt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     const args = [
-      ...baseArgs({ ffmpegDir: ffmpegDirForMeta(), socketTimeoutS: DEFAULT_SOCKET_TIMEOUT_S }),
+      ...baseArgs({ ffmpegDir: ffmpegDirForMeta(), socketTimeoutS: DEFAULT_SOCKET_TIMEOUT_S, reportProgress: true }),
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
       '--no-part',
       `--concurrent-fragments=${concurrentFragments()}`,
@@ -246,7 +313,7 @@ export async function downloadYouTubeAudio(url, downloadsDir, { signal, timeoutM
     args.push(String(url).trim());
 
     try {
-      await runYtDlp(args, { timeoutMs: effectiveTimeout, signal });
+      await runYtDlp(args, { timeoutMs: effectiveTimeout, signal, onProgress });
       const produced = findProducedFile(downloadsDir, outputBase);
       if (!produced) throw new Error('Download selesai tetapi file audio tidak ditemukan.');
       return produced;
