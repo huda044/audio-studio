@@ -91,14 +91,28 @@ export async function pingHealth(signal) {
 // dengan pipeline yang sama seperti /api/process. Bisa memakan waktu lama
 // (download + konversi), makanya timeout-nya paling panjang.
 export async function importYouTube({ url, settings, segmentSeconds, title, signal, jobId, onProgress }) {
-  const response = await fetchWithTimeout(`${API_BASE}/api/import-youtube`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, settings, segmentSeconds, title, jobId }),
-    timeoutMs: 900000,
-    timeoutMessage: 'Import YouTube melewati batas waktu (15 menit).',
-    signal
-  });
+  let response;
+  try {
+    response = await fetchWithTimeout(`${API_BASE}/api/import-youtube`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, settings, segmentSeconds, title, jobId }),
+      timeoutMs: 900000,
+      timeoutMessage: 'Import YouTube melewati batas waktu (15 menit).',
+      signal
+    });
+  } catch (error) {
+    // "Failed to fetch" dari browser tidak menjelaskan apa pun. Penyebab paling
+    // sering di sini: koneksi ke server terputus saat proses panjang berjalan
+    // (proxy/tunnel memutus koneksi yang lama menganggur), bukan YouTube menolak.
+    // Konversi di server kemungkinan tetap berjalan/selesai — sampaikan itu.
+    if (error.name === 'TypeError' || /failed to fetch|networkerror|load failed/i.test(error.message || '')) {
+      const friendly = new Error('Koneksi ke server terputus saat proses berjalan. Proses di server mungkin masih lanjut — tunggu sebentar lalu cek daftar hasil, atau coba lagi. Bila berulang, coba lagu yang lebih pendek atau pakai tab "Dari File".');
+      friendly.code = 'connection_lost';
+      throw friendly;
+    }
+    throw error;
+  }
   if (jobId && onProgress) onProgress(100);
   return parseJson(response);
 }

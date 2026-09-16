@@ -325,6 +325,31 @@ router.post('/process', processLimit, diskGuard, queueGate(conversionQueue), upl
   }
 });
 
+// Kirim sinyal hidup (spasi) selama proses panjang supaya koneksi tidak diputus
+// karena dianggap menganggur. Cloudflare (dan banyak proxy) memutus koneksi yang
+// tidak mengirim data sekitar 100 detik — sementara import video panjang bisa
+// berjalan lebih lama TANPA mengirim apa pun, sehingga browser melaporkan
+// "Failed to fetch" di tengah proses (gejala khas: gagal konsisten di persentase
+// yang sama, saat tahap konversi sedang berjalan).
+//
+// Spasi di awal body JSON sah menurut spesifikasi JSON (whitespace diabaikan parser),
+// jadi JSON.parse di client tetap berhasil. heartbeat dihentikan sebelum body akhir.
+function startHeartbeat(res, { intervalMs = 15000 } = {}) {
+  if (res.writableEnded || res.headersSent) return () => {};
+  // X-No-Compression harus dipasang SEBELUM header dikirim: setelah flushHeaders,
+  // setHeader melempar ERR_HTTP_HEADERS_SENT (pernah terjadi dan tertangkap uji).
+  res.setHeader('X-No-Compression', '1');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const timer = setInterval(() => {
+    if (res.writableEnded) { clearInterval(timer); return; }
+    try { res.write(' '); } catch { clearInterval(timer); }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 // POST /api/import-youtube — ambil audio dari link YouTube (yt-dlp, gratis),
 // lalu alirkan ke pipeline konversi yang sama dengan /api/process.
 // Body JSON: { url, settings?, segmentSeconds?, title? }
@@ -334,6 +359,7 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
   res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
   let downloadedPath = '';
   const ytJobId = parseJobId(req.body?.jobId);
+  const stopHeartbeat = startHeartbeat(res);
   try {
     const responseBody = await conversionQueue.push(async () => {
       const url = String(req.body?.url || '').trim();
@@ -482,11 +508,24 @@ router.post('/import-youtube', youtubeImportLimit, diskGuard, queueGate(conversi
         queue: conversionQueue.stats()
       };
     }, { signal: abortController.signal });
-    res.setHeader('X-No-Compression', '1');
-    res.json(responseBody);
+    // Header (termasuk X-No-Compression) sudah dipasang oleh startHeartbeat karena
+    // header terkirim lebih awal; res.json() tidak bisa dipakai lagi — pakai end()
+    // dengan JSON yang di-stringify sendiri. Spasi heartbeat di awal body diabaikan
+    // JSON.parse sehingga client tetap menerima objek yang sama.
+    res.end(JSON.stringify(responseBody));
   } catch (error) {
+    // Bila header sudah terkirim (heartbeat jalan), next(error) tidak bisa mengirim
+    // status code baru — tutup respons dengan JSON error agar client tetap bisa
+    // membaca pesan alih-alih melihat kegagalan jaringan yang tidak jelas.
+    if (res.headersSent) {
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({ error: error.message || 'Gagal mengambil audio dari YouTube.', status: error.status || 500, code: error.code || undefined }));
+      }
+      return;
+    }
     if (error.status !== 499) next(error);
   } finally {
+    stopHeartbeat();
     if (ytJobId) deleteJobProgress(ytJobId);
     if (downloadedPath) await fs.unlink(downloadedPath).catch(() => {});
   }
